@@ -142,6 +142,22 @@ export function computeElevation(layout, epIn = {}, overrides = {}, pinsIn = [])
   const noise = routes.map((r, k) => hillNoise(grids[k].s, r.L, r.closed, r.kind === 'alt', ep, rand));
   const mask = routes.map((r, k) => (k === 0 ? flatMask(r, grids[k].s, ep) : new Float64Array(grids[k].n).fill(1)));
   const prof = profileTargets(main, grids[0].s, ep.profileZones);
+  // tramos planos estrictos (entre puntos seguidos con la misma altura fijada): peso alto en cada nodo del tramo y un
+  // nodo más a cada lado, para que la interpolación cúbica también quede plana justo hasta los puntos
+  const flatT = routes.map((r, k) => {
+    const sp = (ep.pinFlats || []).filter((f) => f.route === k && isFinite(f.z) && f.s1 > f.s0);
+    if (!sp.length) return null;
+    const gr = grids[k], w = new Uint8Array(gr.n), z = new Float64Array(gr.n);
+    for (const f of sp) {
+      const i0 = Math.floor(f.s0 / gr.ds) - 1, i1 = Math.ceil(f.s1 / gr.ds) + 1;
+      for (let ii = i0; ii <= i1; ii++) {
+        const i = r.closed ? ((ii % gr.n) + gr.n) % gr.n : ii;
+        if (i < 0 || i >= gr.n) continue;
+        w[i] = 1; z[i] = f.z;
+      }
+    }
+    return { w, z };
+  });
 
   // --- cruces: pares en rejilla gruesa y orientación
   const crossings = layout.crossings.map((c) => {
@@ -239,6 +255,7 @@ export function computeElevation(layout, epIn = {}, overrides = {}, pinsIn = [])
       for (let i = 0; i < z[k].length; i++) z[k][i] += base[k][i];
       applyPins(z[k], r, grids[k], pinsBy[k], g);
     });
+    flatT.forEach((F, k) => { if (F) for (let i = 0; i < F.w.length; i++) if (F.w[i]) z[k][i] = F.z[i]; });
     return z;
   };
   let zObj = composeZ();
@@ -273,7 +290,7 @@ export function computeElevation(layout, epIn = {}, overrides = {}, pinsIn = [])
     const gr = grids[k], o = offs[k], n = gr.n, ds = gr.ds;
     const idx = (i) => o + (r.closed ? ((i % n) + n) % n : i);
     for (let i = 0; i < n; i++) {
-      const muI = 1 + (k === 0 ? 30 * (1 - mask[0][i]) + (prof ? 400 * prof.w[i] : 0) : 0);
+      const muI = 1 + (k === 0 ? 30 * (1 - mask[0][i]) + (prof ? 400 * prof.w[i] : 0) : 0) + (flatT[k] && flatT[k].w[i] ? 8000 : 0);
       diag[o + i] = 2 * muI;
       q[o + i] = -2 * muI * zObj[k][i];
       x0[o + i] = zObj[k][i];
@@ -288,6 +305,8 @@ export function computeElevation(layout, epIn = {}, overrides = {}, pinsIn = [])
     }
     const j1 = r.closed ? n : n - 1;
     for (let i = 0; i < j1; i++) cons.push({ idx: [idx(i), idx(i + 1)], coef: [-1, 1], l: -g * ds * 0.98, u: g * ds * 0.98 });
+    // tramo plano estricto: altura exacta en cada nodo (restricción de igualdad)
+    if (flatT[k]) for (let i = 0; i < n; i++) if (flatT[k].w[i]) cons.push({ idx: [o + i], coef: [1], l: flatT[k].z[i], u: flatT[k].z[i] });
     if (r.kind === 'alt') {
       // continuidad de altura y pendiente con la principal en ambos extremos
       const gm = grids[0];

@@ -180,8 +180,8 @@
         <div class="field"><label>Plano a cada lado de la meta <span class="val" id="startFlatVal"></span></label><input type="range" id="startFlat" min="0" max="150" step="5"></div>
         <p class="hint">Usa la herramienta «Zona plana» para aplanar otros tramos.</p>
         <div id="flatZoneList" class="list"></div>
-        <h3 class="subhead" id="profileZonesHead">Perfiles dibujados</h3>
-        <p class="hint">Con <b>Perfil de tramo</b> (en la barra del gráfico de perfil): arrastra sobre la pista en el mapa (o con Shift en el gráfico de perfil) para elegir un tramo y dibuja en el gráfico de perfil la forma de la elevación. Sin tramo elegido, el trazo define su propio tramo. Con <b>Editar puntos</b>, <b>Aplanar</b> (barra del gráfico de perfil) deja los puntos seleccionados a su altura promedio una sola vez: después puedes volver a editarlos.</p>
+        <h3 class="subhead" id="profileZonesHead">Perfil de tramo y aplanar</h3>
+        <p class="hint">Con <b>Perfil de tramo</b> (en la barra del gráfico de perfil): arrastra sobre la pista en el mapa (o con Shift en el gráfico de perfil) para elegir un tramo y dibuja en el gráfico de perfil la forma de la elevación: los puntos del tramo quedan a esa altura (el perfil no se guarda) y después se editan a mano libremente. Con <b>Editar puntos</b>, <b>Aplanar</b> (barra del gráfico de perfil) deja los puntos seleccionados a su altura promedio, plano estricto entre el primero y el último; después puedes volver a editarlos.</p>
         <div id="profileZoneList" class="list"></div>
 
       <section class="panel" data-panel="cross">
@@ -663,7 +663,7 @@
             <button id="btnLineChord" title="Recta entre el primer y el último punto seleccionado (esos dos no se mueven)">Entre extremos</button>
             <button id="btnLineX" title="Recta paralela al eje X, centrada entre el primer y el último punto">Eje X</button>
             <button id="btnLineY" title="Recta paralela al eje Y, centrada entre el primer y el último punto">Eje Y</button>
-            <label class="small" title="Ángulo de la recta en planta, en grados desde el eje X (antihorario)">Ángulo <input type="number" id="lineAngle" value="45" step="1" min="-360" max="360" style="width:58px"> °</label>
+            <label class="small" title="Ángulo de la recta en planta, en grados desde el eje X (antihorario). Al mover la barra la selección gira en vivo">Ángulo <input type="range" id="lineAngle" value="45" step="1" min="0" max="360" style="width:140px"> <span class="val" id="lineAngleVal"></span></label>
             <button id="btnLineAngle" title="Alinea la selección con el ángulo indicado, centrada entre el primer y el último punto">Aplicar ángulo</button>
             <span class="small muted" id="lineInfo"></span>
           </span>
@@ -741,8 +741,8 @@
       <div class="view viewProfile">
         <div class="toolbar">
           <span class="label">Perfil de elevación z(s)</span>
-          <button id="btnFlatten" title="Aplana los puntos seleccionados (Editar puntos) a su elevación promedio. Es una sola vez: después puedes volver a editarlos">Aplanar</button>
-          <button data-tool="profile" id="btnProfileTool" title="Elige un tramo (arrastrando sobre la pista en el mapa, o con Shift en el gráfico de perfil) y dibuja en el gráfico de perfil cómo varía su elevación">Perfil de tramo</button>
+          <button id="btnFlatten" title="Aplana los puntos seleccionados (Editar puntos) a su elevación promedio: plano estricto entre el primero y el último. Es una sola vez: después puedes volver a editarlos">Aplanar</button>
+          <button data-tool="profile" id="btnProfileTool" title="Elige un tramo (arrastrando sobre la pista en el mapa, o con Shift en el gráfico de perfil) y dibuja en el gráfico de perfil cómo varía su elevación: sus puntos quedan a esa altura (se pueden seguir editando)">Perfil de tramo</button>
           <label class="check small"><input type="checkbox" id="pinLocal" checked> Editar solo este punto</label>
           <span class="stats" id="stats"></span>
         </div>

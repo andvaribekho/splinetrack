@@ -92,7 +92,7 @@ const state = {
 const undoStack = [];
 function snapshot() {
   const ref = state.ref ? { x: state.ref.x, y: state.ref.y, scale: state.ref.scale, opacity: state.ref.opacity } : null;
-  return JSON.stringify({ project: state.project, flatZones: state.flatZones, profileZones: state.profileZones, suspZones: state.suspZones, cutZones: state.cutZones, overrides: state.overrides, ref, refCanvas: !!state.ref, densityPaint: state.densityPaint, terrainSculpt: state.terrainSculpt, sculptCurves: state.sculptCurves, decoSets: state.decoSets, hills: state.hills, selHill: state.selHill, rivers: state.rivers, items: state.items });
+  return JSON.stringify({ project: state.project, flatZones: state.flatZones, suspZones: state.suspZones, cutZones: state.cutZones, overrides: state.overrides, ref, refCanvas: !!state.ref, densityPaint: state.densityPaint, terrainSculpt: state.terrainSculpt, sculptCurves: state.sculptCurves, decoSets: state.decoSets, hills: state.hills, selHill: state.selHill, rivers: state.rivers, items: state.items });
 }
 function pushUndo() {
   undoStack.push(snapshot());
@@ -105,7 +105,6 @@ function undo() {
   const o = JSON.parse(s);
   state.project = o.project;
   state.flatZones = o.flatZones;
-  if (o.profileZones) state.profileZones = o.profileZones;
   if (o.suspZones) state.suspZones = o.suspZones;
   if (o.cutZones) state.cutZones = o.cutZones;
   state.overrides = o.overrides;
@@ -569,7 +568,7 @@ const app = {
   /** Perfiles dibujados en s de la ruta principal: [{s0, s1, pts}] (t crece en el sentido de marcha). */
   profileZonesS() {
     const L = state.layout;
-    if (!L) return [];
+    if (!L || !state.profileZones.length) return [];
     return state.profileZones.map((Z, idx) => {
       const s0 = app.nearestMainS(Z.a, Infinity), s1 = app.nearestMainS(Z.b, Infinity);
       if (s0 === null || s1 === null) return null;
@@ -691,13 +690,18 @@ const app = {
     let zs = [];
     for (let k = 0; k <= N; k++) zs.push(zAt(a + ((b - a) * k) / N));
     for (let pass = 0; pass < 2; pass++) zs = zs.map((z, k) => (k === 0 || k === N ? z : (zs[k - 1] + 2 * z + zs[k + 1]) / 4)); // suaviza el trazo a mano
-    const pts = zs.map((z, k) => [+(k / N).toFixed(4), +z.toFixed(3)]);
+    // el perfil es solo una guía temporal: deja los puntos de control del tramo a la altura dibujada (fijados) y se
+    // descarta; esos puntos se pueden seguir editando a mano como cualquier otro
+    const zProf = (sv) => { const f = Math.max(0, Math.min(N, ((sv - a) / (b - a)) * N)), k = Math.min(N - 1, Math.floor(f)), t = f - k; return zs[k] * (1 - t) + zs[k + 1] * t; };
     pushUndo();
-    const cur = app.profileZonesS();
-    state.profileZones = state.profileZones.filter((Z, i) => { const c = cur.find((q) => q.idx === i); return !c || c.s1 < a || c.s0 > b; });
-    state.profileZones.push({ a: app.mainLayoutAt(a), b: app.mainLayoutAt(b), pts });
-    scheduleElev();
-    toast(`Perfil aplicado entre s=${a.toFixed(0)} y ${b.toFixed(0)} m.`);
+    if (!hasCtrl()) { ensureCtrl(); computeCtrlS(); }
+    const za = zArray('main');
+    const list = za ? app.ctrlPoints().filter((q) => q.key === 'main' && q.s >= a - 0.5 && q.s <= b + 0.5) : [];
+    if (!list.length) { undoStack.pop(); $('btnUndo').disabled = undoStack.length === 0; toast('No hay puntos de control en ese tramo: agrega puntos (Editar puntos) o dibuja un tramo más largo.'); return false; }
+    for (const q of list) za[q.idx] = makePin(zProf(q.s));
+    state.profileZones = [];
+    scheduleBuild();
+    toast(`${list.length} punto${list.length > 1 ? 's' : ''} entre s=${a.toFixed(0)} y ${b.toFixed(0)} m a la altura del perfil dibujado (quedan fijados y se pueden seguir editando).`);
     return true;
   },
   /** Deja los puntos de control seleccionados a la elevación promedio que tenían. */
@@ -1777,7 +1781,7 @@ function lineRun() {
   if (!arr) return null;
   const run = contiguousRun(sel.key);
   const idxs = run && run.length === sel.idxs.size ? run : [...sel.idxs].filter((i) => i >= 0 && i < arr.length).sort((a, b) => a - b);
-  return idxs.length >= 2 ? { key: sel.key, arr, idxs } : null;
+  return idxs.length >= 2 ? { key: sel.key, arr, idxs, contig: idxs === run } : null;
 }
 /**
  * Alinea en planta los puntos seleccionados sobre una recta. mode: 'chord' = entre el primer y el último punto (no se
@@ -1785,7 +1789,7 @@ function lineRun() {
  * Los puntos interiores se reparten en la recta conservando sus distancias relativas. Las alturas (fijadas o
  * automáticas) no se tocan: siguen el perfil de elevación.
  */
-function alignSelection(mode = 'chord', angleDeg = 0) {
+function alignSelection(mode = 'chord', angleDeg = 0, quiet = false, noUndo = false) {
   const R = lineRun(), L = state.layout;
   if (!R || !L) { toast('Selecciona 2 o más puntos (Shift o arrastrando un recuadro) para alinearlos en una recta.'); return false; }
   const W = R.idxs.map((i) => L.toWorld(R.arr[i][0], R.arr[i][1]));
@@ -1805,18 +1809,60 @@ function alignSelection(mode = 'chord', angleDeg = 0) {
     P0 = [M[0] - (ux * len) / 2, M[1] - (uy * len) / 2];
     P1 = [M[0] + (ux * len) / 2, M[1] + (uy * len) / 2];
   }
-  pushUndo();
+  if (!noUndo) pushUndo();
+  const newW = [];
   R.idxs.forEach((i, k) => {
     const w = tot > 1e-9 ? cum[k] / tot : k / (n - 1);
-    const [lx, ly] = L.toLayout(P0[0] + (P1[0] - P0[0]) * w, P0[1] + (P1[1] - P0[1]) * w);
+    newW.push([P0[0] + (P1[0] - P0[0]) * w, P0[1] + (P1[1] - P0[1]) * w]);
+    const [lx, ly] = L.toLayout(newW[k][0], newW[k][1]);
     R.arr[i][0] = +lx.toFixed(4); R.arr[i][1] = +ly.toFixed(4);
   });
+  if (R.contig) addLineGuards(R, newW);
   scheduleBuild();
   editor.draw();
   const ang = (Math.atan2(P1[1] - P0[1], P1[0] - P0[0]) * 180) / Math.PI;
-  toast(`${n} puntos alineados en una recta de ${Math.hypot(P1[0] - P0[0], P1[1] - P0[1]).toFixed(1)} m a ${ang.toFixed(1)}°. Las alturas siguen el perfil.`);
+  if (!quiet) toast(`${n} puntos alineados en una recta de ${Math.hypot(P1[0] - P0[0], P1[1] - P0[1]).toFixed(1)} m a ${ang.toFixed(1)}°. Las alturas siguen el perfil.`);
   refreshLineInfo();
   return true;
+}
+/**
+ * El spline (Catmull-Rom) solo es recto en un tramo si los puntos vecinos también están en la recta: el primer y el
+ * último tramo se curvan por los puntos de afuera. Para que la recta sea estricta de punta a punta se agrega un punto
+ * guía en la recta muy cerca de cada extremo (si no hay ya uno), así la curva de empalme queda en esos pocos metros.
+ */
+function addLineGuards(R, W) {
+  const L = state.layout, za = zArray(R.key);
+  if (!za) return;
+  const m = R.idxs.length, A = W[0], B = W[m - 1];
+  const D = Math.hypot(B[0] - A[0], B[1] - A[1]);
+  if (D < 1e-6) return;
+  const ux = (B[0] - A[0]) / D, uy = (B[1] - A[1]) / D;
+  const gapA = Math.hypot(W[1][0] - A[0], W[1][1] - A[1]), gapB = Math.hypot(B[0] - W[m - 2][0], B[1] - W[m - 2][1]);
+  const guard = (P, dir, gap, iEnd, iNext) => {
+    if (gap <= 3.2) return null; // ya hay un punto guía cerca
+    const d = Math.min(2, gap * 0.25);
+    const [lx, ly] = L.toLayout(P[0] + dir * ux * d, P[1] + dir * uy * d);
+    const q = R.arr[iEnd].slice(); q[0] = +lx.toFixed(4); q[1] = +ly.toFixed(4);
+    const zE = za[iEnd], zN = za[iNext];
+    const z = zE !== null && zE !== undefined && zN !== null && zN !== undefined ? (typeof zE === 'object' ? { ...zE } : zE) : null;
+    return { q, z };
+  };
+  const gA = guard(A, 1, gapA, R.idxs[0], R.idxs[1]);
+  const gB = guard(B, -1, m === 2 ? D : gapB, R.idxs[m - 1], R.idxs[m - 2]);
+  if (!gA && !gB) return;
+  const arr = R.arr, n = arr.length, nA = [], nZ = [], map = new Map();
+  const afterA = R.idxs[0], beforeB = R.idxs[m - 2];
+  const added = [];
+  for (let i = 0; i < n; i++) {
+    map.set(i, nA.length); nA.push(arr[i]); nZ.push(za[i] ?? null);
+    if (i === afterA && gA) { added.push(nA.length); nA.push(gA.q); nZ.push(gA.z); }
+    if (i === beforeB && gB) { added.push(nA.length); nA.push(gB.q); nZ.push(gB.z); }
+  }
+  arr.length = 0; arr.push(...nA);
+  za.length = 0; za.push(...nZ);
+  const idxs = new Set([...state.selSet.idxs].map((i) => map.get(i)).concat(added));
+  state.selSet = { key: R.key, idxs };
+  if (state.sel && state.sel.key === R.key) state.sel = { key: R.key, idx: map.get(state.sel.idx) };
 }
 function refreshLineInfo() {
   const el = document.getElementById('lineInfo');
@@ -2371,6 +2417,28 @@ function collectPins() {
   return pins;
 }
 
+/**
+ * Tramos planos estrictos: entre dos puntos de control seguidos, ambos con altura fijada y exactamente la misma altura
+ * (lo que deja «Aplanar»), la pista queda plana en todo el tramo, no solo en los puntos. [{route, s0, s1, z}]
+ */
+function collectPinFlats() {
+  const L = state.layout, out = [];
+  if (!L || !state.ctrlS) return out;
+  L.routes.forEach((r, k) => {
+    const za = zArray(k === 0 ? 'main' : r.altIndex), sArr = state.ctrlS[k];
+    if (!za || !sArr) return;
+    const n = sArr.length, m = r.closed ? n : n - 1;
+    for (let i = 0; i < m; i++) {
+      const j = (i + 1) % n, a = pinVal(za[i]), b = pinVal(za[j]);
+      if (a === null || b === null || Math.abs(a - b) > 1e-4) continue;
+      let s0 = sArr[i], s1 = sArr[j];
+      if (r.closed && s1 < s0) s1 += r.L;
+      if (!(s1 > s0) || s1 - s0 > r.L * 0.9) continue;
+      out.push({ route: k, s0, s1, z: a });
+    }
+  });
+  return out;
+}
 /** Crea puntos de control editables para las rutas que aún no los tienen. Devuelve true si cambió algo. */
 function ensureCtrl() {
   const L = state.layout, p = state.project;
@@ -2526,7 +2594,8 @@ function tick() {
       if (state.layout) {
         try {
           state.elev.flatZones = app.flatZonesS();
-          state.elev.profileZones = app.profileZonesS();
+          state.elev.profileZones = [];
+          state.elev.pinFlats = collectPinFlats();
           state.scene.suspRanges = app.suspZonesS();
           state.scene.cutRanges = app.cutZonesS();
           state.result = computeElevation(state.layout, state.elev, overridesMap(state.layout), collectPins());
@@ -3169,8 +3238,18 @@ function bindControls() {
   $('btnLineChord').addEventListener('click', () => alignSelection('chord'));
   $('btnLineX').addEventListener('click', () => alignSelection('x'));
   $('btnLineY').addEventListener('click', () => alignSelection('y'));
+  // ángulo: barra de 0 a 360°; mientras se arrastra, la selección gira en vivo (un solo paso de Ctrl+Z por gesto)
+  const angLbl = () => { $('lineAngleVal').textContent = `${$('lineAngle').value}°`; };
+  let angGesture = false;
+  $('lineAngle').addEventListener('input', () => {
+    angLbl();
+    if (!lineRun()) return;
+    const ok = alignSelection('angle', parseFloat($('lineAngle').value) || 0, true, angGesture); // el gesto entero es un solo paso de deshacer
+    if (ok) angGesture = true;
+  });
+  $('lineAngle').addEventListener('change', () => { angGesture = false; });
   $('btnLineAngle').addEventListener('click', () => alignSelection('angle', parseFloat($('lineAngle').value) || 0));
-  $('lineAngle').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); alignSelection('angle', parseFloat($('lineAngle').value) || 0); } });
+  angLbl();
   // helix: igual que el rizo (botón de la barra con sus parámetros)
   $('btnHelix').addEventListener('click', () => {
     const box = $('helixBox');
@@ -3527,8 +3606,8 @@ function saveProject() {
     savedAt: new Date().toISOString(),
     stats: state.layout ? { length: Math.round(state.layout.routes[0].L), routes: state.layout.routes.length, crossings: state.result ? state.result.crossings.length : 0, hills: state.hills.length } : null,
     project: state.project, geom: state.geom, closed: state.closed,
-    elev: { ...state.elev, flatZones: undefined, profileZones: undefined }, exp: state.exp, trace: state.trace,
-    overrides: state.overrides, flatZones: state.flatZones, profileZones: state.profileZones, suspZones: state.suspZones, cutZones: state.cutZones,
+    elev: { ...state.elev, flatZones: undefined, profileZones: undefined, pinFlats: undefined }, exp: state.exp, trace: state.trace,
+    overrides: state.overrides, flatZones: state.flatZones, suspZones: state.suspZones, cutZones: state.cutZones,
     image: state.image ? state.image.canvas.toDataURL('image/png') : null,
     scene: state.scene,
     densityPaint: state.densityPaint,
@@ -3682,13 +3761,13 @@ async function openProject(text) {
   pushUndo();
   state.project = d.project;
   if (d.geom) Object.assign(state.geom, d.geom);
-  if (d.elev) Object.assign(state.elev, d.elev, { flatZones: [], profileZones: [] });
+  if (d.elev) Object.assign(state.elev, d.elev, { flatZones: [], profileZones: [], pinFlats: [] });
   if (d.exp) Object.assign(state.exp, d.exp);
   if (d.trace) Object.assign(state.trace, d.trace);
   state.closed = d.closed ?? (d.project.main ? d.project.main.closed !== false : true);
   state.overrides = d.overrides || [];
   state.flatZones = d.flatZones || [];
-  state.profileZones = d.profileZones || []; state.profileSel = null;
+  state.profileZones = []; state.profileSel = null; // los perfiles dibujados ya no se guardan (solo ubican los puntos)
   state.suspZones = d.suspZones || [];
   state.cutZones = d.cutZones || [];
   state.imageOpacity = d.imageOpacity ?? 0.35;

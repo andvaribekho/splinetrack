@@ -767,6 +767,25 @@ for (const [key, s] of Object.entries(SAMPLES)) {
   }
 }
 
+// ---- aplanado estricto entre puntos seguidos con la misma altura fijada ----
+{
+  const L = buildLayout(SAMPLES.oval.build(), { lapLength: 1000 });
+  const pins = [300, 340, 380, 420].map((sv) => ({ route: 0, s: sv, z: 6, local: false }));
+  const E = computeElevation(L, { hills: 1, seed: 3, pinFlats: [{ route: 0, s0: 300, s1: 340, z: 6 }, { route: 0, s0: 340, s1: 380, z: 6 }, { route: 0, s0: 380, s1: 420, z: 6 }] }, {}, pins);
+  const r = L.routes[0], z = E.routes[0].z;
+  let mn = Infinity, mx = -Infinity, gmax = 0;
+  for (let i = 0; i < r.n; i++) {
+    if (r.s[i] >= 300 && r.s[i] <= 420) { mn = Math.min(mn, z[i]); mx = Math.max(mx, z[i]); }
+    const j = (i + 1) % r.n; gmax = Math.max(gmax, Math.abs(z[j] - z[i]) / r.ds);
+  }
+  check(mx - mn < 0.02 && Math.abs(mn - 6) < 0.02, `tramo aplanado estricto: z ${mn.toFixed(3)}–${mx.toFixed(3)}`);
+  check(gmax * 100 <= 10.6, `tramo aplanado: la pendiente fuera sigue en el máximo (${(gmax * 100).toFixed(2)} %)`);
+  const E2 = computeElevation(L, { hills: 1, seed: 3 }, {}, pins);
+  let m2 = Infinity, x2 = -Infinity;
+  for (let i = 0; i < r.n; i++) if (r.s[i] >= 300 && r.s[i] <= 420) { m2 = Math.min(m2, E2.routes[0].z[i]); x2 = Math.max(x2, E2.routes[0].z[i]); }
+  check(x2 - m2 > 0.05, `sin tramo plano los pines solo fijan los puntos (${(x2 - m2).toFixed(2)} m de variación)`);
+}
+
 // ---- curva del pincel de relieve ----
 {
   const ev = curveEval(SCULPT_PRESETS.bell.pts);
