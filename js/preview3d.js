@@ -154,12 +154,25 @@ export class Preview3D {
       this.needsFrame = true;
     };
     this.el.addEventListener('pointermove', (e) => {
-      if (!this.paintMode || (this.game && this.game.active)) { if (this.brushRing.visible) { this.brushRing.visible = false; this.needsFrame = true; } return; }
+      // con Shift se navega (el aro del pincel se oculta mientras tanto)
+      if (!this.paintMode || e.shiftKey || this.navPaint || (this.game && this.game.active)) { if (this.brushRing.visible) { this.brushRing.visible = false; this.needsFrame = true; } return; }
       const pt = paintHit(e);
       if (pt) moveRing(pt);
     });
     this.el.addEventListener('pointerdown', (e) => {
-      if (!this.paintMode || (e.button !== 0 && e.button !== 2) || (e.shiftKey && this.paintMode !== 'hill') || (this.game && this.game.active)) return;
+      if (this.paintMode && e.shiftKey && !(this.game && this.game.active)) {
+        // pintando, Shift = navegar como siempre: izquierdo gira, derecho desplaza, rueda / medio acercan. OrbitControls
+        // invierte girar y desplazar con Shift, así que se invierten los botones mientras dura el arrastre
+        const mb = this.controls.mouseButtons, keep = { LEFT: mb.LEFT, RIGHT: mb.RIGHT };
+        mb.LEFT = THREE.MOUSE.PAN; mb.RIGHT = THREE.MOUSE.ROTATE;
+        this.navPaint = true;
+        this.controls.enabled = true;
+        const up = () => { window.removeEventListener('pointerup', up, true); window.removeEventListener('pointercancel', up, true); setTimeout(() => { mb.LEFT = keep.LEFT; mb.RIGHT = keep.RIGHT; this.navPaint = false; }, 0); };
+        window.addEventListener('pointerup', up, true);
+        window.addEventListener('pointercancel', up, true);
+        return;
+      }
+      if (!this.paintMode || (e.button !== 0 && e.button !== 2) || (this.game && this.game.active)) return;
       e.stopPropagation(); e.preventDefault();
       this.controls.enabled = false;
       const L = this.app.state.layout;

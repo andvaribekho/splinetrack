@@ -97,6 +97,11 @@ export class Editor2D {
       const tool = this.app.state.tool;
       // auto de la cámara de juego: se arrastra a lo largo de la pista
       if (e.button === 0 && this.hitCar(sx, sy)) { this.carDrag = true; this.app.beginCarDrag(); cv.style.cursor = 'grabbing'; return; }
+      if ((tool === 'paint' || tool === 'hill' || tool === 'itemPaint' || tool === 'sculpt' || tool === 'river') && e.shiftKey) {
+        // pintando, Shift + arrastrar desplaza el mapa (la rueda acerca / aleja)
+        this.panning = { sx, sy, ox: this.view.ox, oy: this.view.oy };
+        return;
+      }
       if ((tool === 'paint' || tool === 'hill' || tool === 'itemPaint' || tool === 'sculpt' || tool === 'river') && (e.button === 0 || e.button === 2)) {
         this.painting = { kind: tool, erase: e.button === 2 || e.altKey || (tool !== 'sculpt' && this.app.state.paintErase), ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey, last: null };
         const p0 = this.toLayout(sx, sy);

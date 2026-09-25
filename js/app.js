@@ -1168,11 +1168,11 @@ const app = {
     if (kind !== 'hill' || !ses) { pushUndo(); if (kind === 'itemPaint') { const g = itemGroup(state.itemPaintTarget); if (g && g.mode !== 'painted') { g.mode = 'painted'; if (state.itemPaintTarget.type === 'deco') renderDecoPanel(); else renderItemsPanel(); } } return; }
     // el cerro bajo el pincel: por su huella pintada y, si no, por la malla que tocó el rayo (vista 3D)
     const hit = (p ? hillAt(p) : null) || (hitHill != null ? state.hills.find((h) => h.id === hitHill) : null);
-    if (ses.erase) { pushUndo(); ses.pushed = true; if (ses.shift && hit) ses.eraseOnly = hit.id; return; } // Shift: solo el cerro original
+    if (ses.erase) { pushUndo(); ses.pushed = true; if (ses.ctrl && hit) ses.eraseOnly = hit.id; return; } // Ctrl: solo el cerro original
     if (hit) {
-      // sobre un cerro: un clic lo selecciona; al arrastrar, sin Shift se pinta un cerro nuevo encima (se apoya en los
-      // de abajo) y con Shift se agranda el cerro original
-      ses.target = hit.id; ses.pending = true; ses.start = p; ses.stackNew = !ses.shift;
+      // sobre un cerro: un clic lo selecciona; al arrastrar, sin Ctrl se pinta un cerro nuevo encima (se apoya en los
+      // de abajo) y con Ctrl se agranda el cerro original (Shift queda para navegar)
+      ses.target = hit.id; ses.pending = true; ses.start = p; ses.stackNew = !ses.ctrl;
       selectHill(hit.id);
     } else {
       pushUndo(); ses.pushed = true;
@@ -4173,7 +4173,7 @@ function refreshHillPanel() {
   const info = state.hillInfo || [];
   if (t.hill) {
     const hi = info.find((x) => x.id === t.hill.id);
-    $('hillInfo').textContent = hi ? `${hi.tris.toLocaleString('es')} triángulos · celda de ${hi.cell.toFixed(1)} m. Shift + pintar encima lo agranda (sin Shift se pinta un cerro nuevo encima); Supr lo elimina.` : 'Calculando…';
+    $('hillInfo').textContent = hi ? `${hi.tris.toLocaleString('es')} triángulos · celda de ${hi.cell.toFixed(1)} m. Ctrl + pintar encima lo agranda (sin Ctrl se pinta un cerro nuevo encima); Supr lo elimina.` : 'Calculando…';
   } else {
     const tot = info.reduce((a, x) => a + x.tris, 0);
     $('hillInfo').textContent = state.hills.length
