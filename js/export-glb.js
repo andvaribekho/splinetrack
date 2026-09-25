@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { GLTFExporter } from '../vendor/exporters/GLTFExporter.js';
 import { buildRivers } from './rivers.js';
-import { buildTrackMesh, coveredRanges, terrainTint, buildTerrain, buildTrees, buildHills, buildStartGate, buildGrass, makeGround, bridgePillars } from './scene.js';
+import { buildTrackMesh, coveredRanges, terrainTint, buildTerrain, buildTrees, buildHills, buildStartGate, buildGrass, makeGround, bridgePillars, suspPillars } from './scene.js';
 import { pillarGeometry } from './tunnels.js';
 import { buildEdgeMeshes } from './edges.js';
 import { assetObject, builtinAsset } from './assets.js';
@@ -57,15 +57,23 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
   let tm = null, covAll = [];
   let terrain = null, HS = null;
   const tt = tex(textures.terrain);
+  // paredes socavadas de ríos y cascadas: textura propia (textures.riverWall / fallWall) o roca por defecto
+  const wallMats = {};
+  const wallMat = (kind) => wallMats[kind] || (wallMats[kind] = (() => {
+    const t = tex(kind === 'fall' ? textures.fallWall : textures.riverWall);
+    if (t) t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    return new THREE.MeshStandardMaterial({ name: kind === 'fall' ? 'cauce_cascada' : 'cauce_rio', color: t ? 0xffffff : kind === 'fall' ? 0x7b7670 : 0x6d6258, map: t, roughness: 1, metalness: 0 });
+  })());
   const riverList = [...((paint && !Array.isArray(paint) && paint.rivers) || []), ...(hills || []).flatMap((h) => h.falls || [])];
   if (sp.terrain || (hills && hills.length) || riverList.length) {
     terrain = buildTerrain(layout, elev, sp, paint);
     if (sp.terrain) {
       const cols = terrainTint(terrain, !!tt);
-      const tm = mesh('terreno', terrain.positions, terrain.indices, terrain.uvs,
+      const tm = mesh('terreno', terrain.positions, terrain.wall ? terrain.baseIndices : terrain.indices, terrain.uvs,
         new THREE.MeshStandardMaterial({ name: 'terreno', color: tt || cols ? 0xffffff : 0x4f7d3a, map: tt, roughness: 1, metalness: 0, vertexColors: !!cols }));
       if (cols) tm.geometry.setAttribute('color', new THREE.BufferAttribute(cols, 3)); // pasto, arena y roca
       root.add(tm);
+      if (terrain.wall) root.add(mesh('terreno_cauces', terrain.wall.positions, terrain.wall.indices, terrain.wall.uvs, wallMat('river'))); // lecho y paredes de los ríos
       // agua (playa / montaña): plano al nivel del mar
       if (terrain.waterLevel != null) {
         const b = terrain.bounds, mg = 400;
@@ -81,7 +89,10 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
       hg.name = 'cerros';
       root.add(hg);
       const hillMat = new THREE.MeshStandardMaterial({ name: 'cerro', color: tt ? 0xffffff : 0x6f7d45, map: tt, roughness: 1, metalness: 0 });
-      for (const h of HS.hills) if (h.indices.length) hg.add(mesh(h.name, h.positions, h.indices, h.uvs, hillMat));
+      for (const h of HS.hills) {
+        if (h.indices.length) hg.add(mesh(h.name, h.positions, h.wall ? h.baseIndices : h.indices, h.uvs, hillMat));
+        if (h.wall) hg.add(mesh(`${h.name}_cauce`, h.wall.positions, h.wall.indices, h.wall.uvs, wallMat('fall'))); // paredes de sus cascadas
+      }
     }
     // ríos y cascadas: un objeto por cada uno (rio_NN / cascada_NN), con materiales distintos
     if (riverList.length) {
@@ -153,6 +164,9 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
     };
     for (const p of tm.parts) if (p.indices.length) trackGroup.add(mesh(p.name, p.positions, p.indices, p.uvs, matFor(p)));
     for (const p of tm.coveredParts) trackGroup.add(mesh(p.name, p.positions, p.indices, p.uvs, covMat));
+    // tramos suspendidos: textura propia (pista_suspendida) o el material de la pista
+    const suspMat = textures.susp ? M('pista_suspendida', tex(textures.susp), 0x55585e) : null;
+    for (const p of tm.suspParts || []) trackGroup.add(mesh(p.name, p.positions, p.indices, p.uvs, suspMat || matFor(p)));
   }
   // puentes creados a mano: tablero (textura propia, café por defecto) y un objeto por pilar, pivote en la base
   {
@@ -193,7 +207,10 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
       const dirtAlt = DM('camino_tierra_atajo', tex(textures.altDirt || textures.dirt)), barAlt = BM('barrera_atajo', tex(textures.altBarrier || textures.barrier));
       // cada atajo con textura propia de barrera / camino tiene su material (barrera_<atajo>, camino_tierra_<atajo>)
       const own = new Map();
+      const suspDirt = textures.suspDirt ? DM('camino_tierra_suspendido', tex(textures.suspDirt)) : null;
+      const suspBar = textures.suspBarrier ? BM('barrera_suspendida', tex(textures.suspBarrier)) : null;
       const edgeMat = (m, kind) => {
+        if (m.susp && (kind === 'dirt' ? suspDirt : suspBar)) return kind === 'dirt' ? suspDirt : suspBar; // bordes del tramo suspendido
         if (!m.alt) return kind === 'dirt' ? dirtMat : barMat;
         const r = layout.routes[m.k];
         const t = r && textures.altFor ? textures.altFor(r)[kind] : null;
@@ -224,6 +241,23 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
   // árboles: un objeto por árbol, con el pivote en el centro de la base
   let treeCount = 0;
   const ground = makeGround(terrain, HS);
+  // pilares de los tramos suspendidos: suspendido_NN_pilar_MM, pivote en la base
+  {
+    const sp2 = sp.suspRanges && sp.suspRanges.length ? sp : null;
+    const pls = sp2 ? suspPillars(layout, elev, sp2, ground) : [];
+    if (pls.length) {
+      const grp = new THREE.Group();
+      grp.name = 'suspendidos';
+      root.add(grp);
+      const mat = new THREE.MeshStandardMaterial({ name: 'suspendido_pilar', color: 0x8a8f99, roughness: 0.85 });
+      for (const pl of pls) {
+        const pg = pillarGeometry({ size: pl.size, h: pl.zTop - pl.zBot, angle: pl.angle });
+        const m = mesh(`suspendido_${String(pl.zone + 1).padStart(2, '0')}_pilar_${String(pl.n).padStart(2, '0')}`, pg.positions, pg.indices, null, mat);
+        m.position.set(pl.x, pl.y, pl.zBot);
+        grp.add(m);
+      }
+    }
+  }
   // decoración (textures.deco = {assetById, sets, paintFor}): modelos de la biblioteca para árboles, hierba y sets
   const DC = textures.deco || null;
   const byId = (id) => (DC && DC.assetById ? DC.assetById(id) : null);

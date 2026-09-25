@@ -319,3 +319,7 @@ button.small svg.bi { width: 11px; height: 11px; }
 /* ríos y cascadas */
 .river-card .rcarved.disabled { opacity: 0.45; pointer-events: none; }
 #riverList .item.sel { border-color: rgba(63, 167, 255, 0.7); background: rgba(63, 167, 255, 0.05); }
+.river-card.collapsed .rbody { display: none; }
+#loopInfo.warn { color: #ffb86b; }
+/* rizo: sus parámetros ocupan su propia línea y se acomodan en varias si no caben */
+#loopBox { flex-basis: 100%; flex-wrap: wrap; gap: 6px 10px; }

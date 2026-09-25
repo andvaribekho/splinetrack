@@ -25,6 +25,7 @@ export const DEFAULT_SCENE = {
   terrainTexRepX: 20,
   terrainTexRepY: 20,
   paintFactor: 4, // multiplicador de densidad de las pinceladas antiguas (sin valor propio)
+  riverWallTile: 4, // metros por repetición de la textura de las paredes socavadas
   riverBrush: 6, riverMode: 'carved', riverDepth: 2, riverWalls: 'smooth', riverWallSubdiv: 2, // ríos y cascadas nuevos
   paintSubdiv: 1, // subdivisiones extra del pincel de densidad: cada pincelada nueva guarda f = (n + 1)²
   terrainType: 'forest', // 'forest' (bosque) | 'beach' (playa: costa hacia el agua) | 'mountain' (acantilado y pared de roca)
@@ -55,6 +56,7 @@ export const DEFAULT_SCENE = {
   tunnelType: 'artificial', // 'artificial' | 'natural'
   caveSize: 0.3, // 0..1
   tunnelOpen: 'none', // 'none' | 'left' | 'right' (valor general; cada túnel puede tener el suyo)
+  caveRocks: true, // cavernas con rocas y estalactitas
   tunnelOverrides: [], // [{k, s, open, pillars}] ajustes propios por túnel
   tunnelPillars: 8,
   tunnelMeshMode: 'uniform', // 'uniform' | 'optimized' (secciones repartidas según la curvatura)
@@ -126,8 +128,9 @@ function trackSamples(layout, elev, sp = {}) {
       const low = e.z[i] - Math.abs(Math.sin(e.roll[i])) * r.w[i] / 2;
       const bridge = !!(r.bridges && r.bridges.some((b) => { const d = r.closed ? (((r.s[i] - b.s0) % r.L) + r.L) % r.L : r.s[i] - b.s0; return d >= 0 && d <= b.s1 - b.s0; }));
       const X = XR[k];
+      const susp = !!(sp.suspRanges && isCovered(layout, k, r.s[i], sp.suspRanges)); // tramo suspendido: el terreno no se adapta
       const uL = r.w[i] / 2 + X.left, uR = r.w[i] / 2 + X.right; // calzada + camino de tierra + barrera
-      out.push({ x: r.x[i], y: r.y[i], z: low, zc: e.z[i], sr: Math.sin(e.roll[i]), tx: r.tx[i], ty: r.ty[i], w: r.w[i], uL, uR, ew: 2 * Math.max(uL, uR), k, i, s: r.s[i], j: out.length, bridge });
+      out.push({ x: r.x[i], y: r.y[i], z: low, zc: e.z[i], sr: Math.sin(e.roll[i]), tx: r.tx[i], ty: r.ty[i], w: r.w[i], uL, uR, ew: 2 * Math.max(uL, uR), k, i, s: r.s[i], j: out.length, bridge, susp });
     }
   });
   return out;
@@ -207,10 +210,11 @@ export function trackRows(layout, elev, spIn = {}) {
     // filas obligatorias: extremos y bordes de los tableros de puente
     const must = new Set([0, nq]);
     // bordes de los tramos cubiertos (túneles, bajo cruces): siempre una sección, para cortar el material justo ahí
-    if (sp.coveredRanges && sp.coveredRanges.some((c) => c.k === k)) {
-      let prev = isCovered(layout, k, r.s[0], sp.coveredRanges);
+    for (const R of [sp.coveredRanges, sp.suspRanges]) { // también los bordes de los tramos suspendidos
+      if (!R || !R.some((c) => c.k === k)) continue;
+      let prev = isCovered(layout, k, r.s[0], R);
       for (let q = 0; q < nq; q++) {
-        const cur = isCovered(layout, k, q + 1 === n ? r.L : r.s[at(q + 1)], sp.coveredRanges);
+        const cur = isCovered(layout, k, q + 1 === n ? r.L : r.s[at(q + 1)], R);
         if (cur !== prev) { must.add(q); must.add(q + 1); }
         prev = cur;
       }
@@ -306,6 +310,7 @@ export function buildTrackMesh(layout, elev, spIn = {}) {
     // tablero de cada puente (tramo con el ancho del puente, sin las transiciones): índices aparte, con su propia textura
     const bIdx = (r.bridges || []).map(() => []);
     const cIdx = []; // tramos cubiertos
+    const sIdx = []; // tramos suspendidos
     const bridgeOf = (sv) => {
       if (!r.bridges) return -1;
       for (let bi = 0; bi < r.bridges.length; bi++) {
@@ -320,18 +325,18 @@ export function buildTrackMesh(layout, elev, spIn = {}) {
       const sa = r.s[qa % n], sb = qb === n ? r.L : r.s[qb % n];
       const ba = bridgeOf(sa), bb = bridgeOf(sb === r.L && r.closed ? 0 : sb);
       // material del cuadro: tablero de puente > tramo cubierto (túnel o bajo un cruce) > pista (o atajo)
-      const tgt = ba >= 0 && ba === bb ? bIdx[ba] : isCovered(layout, k, (sa + sb) / 2, sp.coveredRanges) ? cIdx : idx;
+      const tgt = ba >= 0 && ba === bb ? bIdx[ba] : isCovered(layout, k, (sa + sb) / 2, sp.coveredRanges) ? cIdx : isCovered(layout, k, (sa + sb) / 2, sp.suspRanges) ? sIdx : idx;
       for (let c2 = 0; c2 < cols - 1; c2++) {
         const a = q * cols + c2, b = a + 1, d = a + cols, e2 = d + 1;
         tgt.push(a, d, b, b, d, e2);
       }
     }
-    return { name: r.name, k, alt: r.kind === 'alt', positions: new Float32Array(pos), uvs: new Float32Array(uv), indices: idx, coveredIdx: cIdx, bridgeIdx: bIdx, bridgeNo: (r.bridges || []).map((b, k) => (b.idx ?? k) + 1) };
+    return { name: r.name, k, alt: r.kind === 'alt', positions: new Float32Array(pos), uvs: new Float32Array(uv), indices: idx, coveredIdx: cIdx, suspIdx: sIdx, bridgeIdx: bIdx, bridgeNo: (r.bridges || []).map((b, k) => (b.idx ?? k) + 1) };
   });
   // malla combinada (vista previa), en grupos de material: pista, atajos, tramos cubiertos, tableros de puente
   const nPos = parts.reduce((a, p) => a + p.positions.length, 0);
   const positions = new Float32Array(nPos), uvs = new Float32Array((nPos / 3) * 2);
-  const G = { main: [], alt: [], covered: [], bridge: [] };
+  const G = { main: [], alt: [], covered: [], bridge: [], susp: [] };
   let vo = 0;
   const altRanges = []; // tramo de cada atajo dentro del grupo de atajos: [{k, start, count}] (relativo al grupo)
   for (const p of parts) {
@@ -340,31 +345,36 @@ export function buildTrackMesh(layout, elev, spIn = {}) {
     if (p.alt) altRanges.push({ k: p.k, start: G.alt.length, count: p.indices.length });
     for (const i of p.indices) G[p.alt ? 'alt' : 'main'].push(i + vo);
     for (const i of p.coveredIdx) G.covered.push(i + vo);
+    for (const i of p.suspIdx) G.susp.push(i + vo);
     for (const bi of p.bridgeIdx) for (const i of bi) G.bridge.push(i + vo);
     vo += p.positions.length / 3;
   }
-  const indices = [...G.main, ...G.alt, ...G.covered, ...G.bridge];
+  const indices = [...G.main, ...G.alt, ...G.covered, ...G.bridge, ...G.susp];
   const groups = [
     { start: 0, count: G.main.length, mat: 0 },
     { start: G.main.length, count: G.alt.length, mat: 1 },
     { start: G.main.length + G.alt.length, count: G.covered.length, mat: 2 },
     { start: G.main.length + G.alt.length + G.covered.length, count: G.bridge.length, mat: 3 },
+    { start: G.main.length + G.alt.length + G.covered.length + G.bridge.length, count: G.susp.length, mat: 4 }, // suspendidos
   ];
-  const trackCount = G.main.length + G.alt.length + G.covered.length;
+  const trackCount = G.main.length + G.alt.length + G.covered.length + G.susp.length;
   const altGroups = altRanges.map((a) => ({ k: a.k, start: G.main.length + a.start, count: a.count }));
   // tramos cubiertos como objetos propios (exportación)
   const coveredParts = [];
   for (const p of parts) if (p.coveredIdx.length) coveredParts.push({ name: `${p.name}_cubierto`, alt: p.alt, ...compactMesh(p.positions, p.uvs, p.coveredIdx) });
+  // tramos suspendidos como objetos propios (exportación), con su propio material
+  const suspParts = [];
+  for (const p of parts) if (p.suspIdx.length) suspParts.push({ name: `${p.name}_suspendido`, alt: p.alt, k: p.k, ...compactMesh(p.positions, p.uvs, p.suspIdx) });
   // tableros como objetos propios (exportación), con los vértices compactados
   const bridgeParts = [];
   for (const p of parts) {
     p.bridgeIdx.forEach((bi, k) => { if (bi.length) bridgeParts.push({ name: `puente_${String(p.bridgeNo[k]).padStart(2, '0')}`, bridge: p.bridgeNo[k] - 1, ...compactMesh(p.positions, p.uvs, bi) }); });
   }
   for (const p of parts) {
-    if (p.bridgeIdx.some((b) => b.length) || p.coveredIdx.length) Object.assign(p, compactMesh(p.positions, p.uvs, p.indices));
-    delete p.bridgeIdx; delete p.bridgeNo; delete p.coveredIdx;
+    if (p.bridgeIdx.some((b) => b.length) || p.coveredIdx.length || p.suspIdx.length) Object.assign(p, compactMesh(p.positions, p.uvs, p.indices));
+    delete p.bridgeIdx; delete p.bridgeNo; delete p.coveredIdx; delete p.suspIdx;
   }
-  return { positions, uvs, indices, groups, altGroups, trackCount, parts, coveredParts, bridgeParts, rows: rowLists.map((q) => q.length) };
+  return { positions, uvs, indices, groups, altGroups, trackCount, parts, coveredParts, bridgeParts, suspParts, rows: rowLists.map((q) => q.length) };
 }
 
 /** Deja solo los vértices usados por los índices. */
@@ -506,7 +516,7 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
   const TT = sp.terrainType === 'beach' || sp.terrainType === 'mountain' ? sp.terrainType : 'forest';
   const special = TT !== 'forest';
   let zRoadMin = Infinity;
-  for (const p of S) if (!p.bridge) zRoadMin = Math.min(zRoadMin, p.zc);
+  for (const p of S) if (!p.bridge && !p.susp) zRoadMin = Math.min(zRoadMin, p.zc);
   if (!isFinite(zRoadMin)) zRoadMin = 0;
   const waterLevel = TT === 'beach' ? zRoadMin - Math.max(0.5, sp.coastHeight) : TT === 'mountain' ? zRoadMin - Math.max(2, sp.cliffHeight) : null;
   const landMax = Math.max(0, sp.coastLand) * 1.45;
@@ -519,7 +529,7 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
   const gap = sp.terrainGap;
   const fine = new SpatialGrid(Math.max(maxW, 8));
   for (const p of S) fine.insert(p.x, p.y, p);
-  const sub = S.filter((p, j) => j % 4 === 0 && !p.bridge); // bajo un puente el terreno no sube hasta la calzada
+  const sub = S.filter((p, j) => j % 4 === 0 && !p.bridge && !p.susp); // bajo un puente o un tramo suspendido el terreno no sube hasta la calzada
   const falloff = Math.max(5, sp.terrainFalloff);
   // costado de cada punto respecto de la pista (para playa / montaña): muestra más cercana y distancia lateral con signo
   const noise = valueNoise2((sp.treeSeed | 0) + 101);
@@ -623,7 +633,7 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
   // relieve general: IDW en una grilla gruesa
   const gx = 40, gy = 40;
   const base = new Float64Array((gx + 1) * (gy + 1));
-  const idwPts = S.filter((p, j) => j % 12 === 0 && !p.bridge);
+  const idwPts = S.filter((p, j) => j % 12 === 0 && !p.bridge && !p.susp);
   for (let j = 0; j <= gy; j++) for (let i = 0; i <= gx; i++) {
     const x = minX + (W * i) / gx, y = minY + (H * j) / gy;
     let ws = 0, zs = 0;
@@ -642,10 +652,11 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
     return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
   };
   /** Altura mínima de la pista que un triángulo de radio rho centrado en (x,y) podría cubrir (Infinity si ninguna). */
-  const zoneAt = (x, y, rho, skip = null) => {
+  const zoneAt = (x, y, rho, skip = null, only = 0) => { // only: 0 todas, 1 sin los tramos suspendidos, 2 solo ellos
     let zone = Infinity;
     fine.query(x, y, maxW / 2 + rho, (p) => {
       if (skip && skip[p.j] >= 0) return;
+      if ((only === 1 && p.susp) || (only === 2 && !p.susp)) return;
       const dx = x - p.x, dy = y - p.y;
       const a = Math.abs(dx * p.tx + dy * p.ty);
       if (a > rho) return;
@@ -659,9 +670,20 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
     return zone;
   };
   /** Altura de un vértice; rho = distancia máxima a la que un triángulo que lo usa puede cubrir la pista. */
-  const heightAt0 = (x, y, rho) => {
+  const anySusp = S.some((p) => p.susp);
+  // bajo un tramo suspendido el terreno sigue su relieve natural: solo se baja si llegaría a tocar la pista
+  const heightAt0 = anySusp ? (x, y, rho) => {
+    const zone = zoneAt(x, y, rho, null, 1);
+    if (zone < Infinity) return zone - gap;
+    const z = heightNat(x, y, rho);
+    const zs = zoneAt(x, y, rho, null, 2);
+    return zs < Infinity ? Math.min(z, zs - gap) : z;
+  } : (x, y, rho) => {
     const zone = zoneAt(x, y, rho);
     if (zone < Infinity) return zone - gap;
+    return heightNat(x, y, rho);
+  };
+  function heightNat(x, y, rho) {
     let bd = Infinity, bz = 0, bw = 0;
     coarseG.query(x, y, falloff + maxW, (p) => {
       const d = Math.hypot(p.x - x, p.y - y);
@@ -705,6 +727,8 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
   out.waterLevel = waterLevel;
   terrainColors(out, TT, waterLevel, nearestSide);
   out.rivers = RF.length;
+  // cauces socavados: sus triángulos (lecho y paredes) van aparte, con su propio material
+  if (RF.some((F) => F.river.mode === 'carved')) splitWalls(out, riverCarveAt, Math.max(0.5, sp.riverWallTile ?? 4));
   Object.defineProperty(out, 'ctx', { value: { S, fine, maxW, gap, zoneAt, heightAt, sp, origAt, riverCarveAt, inRiver }, enumerable: false });
   return out;
 }
@@ -1004,7 +1028,9 @@ export function buildHills(layout, elev, spIn, T, hills) {
     const orig = (x, y) => surfOrig(x, y, baseAtH(x, y), f.sample(x, y));
     samplers.push({ f, sample, h, fallCarve, orig, FF });
     const name = h.name || `cerro_${String(h.id).padStart(2, '0')}`;
-    res.hills.push({ id: h.id, name, positions: new Float32Array(pos), uvs: new Float32Array(uv), indices: new Uint32Array(idx), tris: idx.length / 3, cell: Math.max(cx, cy), subdivided: !!fmask });
+    const hillOut = { id: h.id, name, positions: new Float32Array(pos), uvs: new Float32Array(uv), indices: new Uint32Array(idx), tris: idx.length / 3, cell: Math.max(cx, cy), subdivided: !!fmask };
+    if (FF.some((F) => F.river.mode === 'carved')) splitWalls(hillOut, fallCarve, Math.max(0.5, sp.riverWallTile ?? 4)); // cauces de las cascadas: material propio
+    res.hills.push(hillOut);
     res.tris += idx.length / 3;
   });
   // superficie de un cerro concreto (con y sin el cauce de sus cascadas)
@@ -1033,6 +1059,38 @@ export function buildHills(layout, elev, spIn, T, hills) {
   };
   res.bboxes = samplers.map(({ f }) => ({ id: f.id, minX: f.minX, minY: f.minY, maxX: f.maxX, maxY: f.maxY, area: f.area }));
   return res;
+}
+
+/**
+ * Separa los triángulos socavados por un río o una cascada (lecho y paredes, donde carveAt > 5 cm) del resto de la
+ * malla: mesh.baseIndices (el resto) y mesh.wall = malla compacta propia con UV que no se estiran en las paredes
+ * verticales. mesh.indices queda completo (muestreo de alturas).
+ */
+export function splitWalls(mesh, carveAt, tile = 4) {
+  const P = mesh.positions, I = mesh.indices;
+  const base = [], wall = [];
+  for (let t = 0; t < I.length; t += 3) {
+    const a = I[t], b = I[t + 1], c = I[t + 2];
+    const x = (P[a * 3] + P[b * 3] + P[c * 3]) / 3, y = (P[a * 3 + 1] + P[b * 3 + 1] + P[c * 3 + 1]) / 3;
+    (carveAt(x, y) > 0.05 ? wall : base).push(a, b, c);
+  }
+  mesh.baseIndices = new Uint32Array(base);
+  if (!wall.length) { mesh.wall = null; return mesh; }
+  const map = new Map(), pos = [], uv = [], idx = [];
+  for (const v of wall) {
+    let k = map.get(v);
+    if (k === undefined) {
+      k = pos.length / 3;
+      map.set(v, k);
+      const x = P[v * 3], y = P[v * 3 + 1], z = P[v * 3 + 2];
+      pos.push(x, y, z);
+      // proyección oblicua: no se degenera ni en el lecho (plano XY) ni en paredes que miran a X o a Y
+      uv.push((x + 0.5 * z) / tile, (y + z) / tile);
+    }
+    idx.push(k);
+  }
+  mesh.wall = { positions: new Float32Array(pos), uvs: new Float32Array(uv), indices: new Uint32Array(idx), tris: idx.length / 3 };
+  return mesh;
 }
 
 function gridMesh(minX, minY, W, H, sp, heightAt) {
@@ -1516,6 +1574,33 @@ export function buildStartGate(layout, elev, spIn = {}) {
 }
 
 /** Pilares bajo los puentes de la ruta principal: [{x, y, zTop, zBot, size, angle, bridge}] (pivote en la base). */
+/**
+ * Pilares de los tramos suspendidos: sp.suspRanges = [{k, s0, s1, pillars}]; cada tramo lleva «pillars» pilares
+ * repartidos a lo largo, desde bajo la calzada hasta el suelo (ground.sample: terreno y cerros). Si el suelo está
+ * a menos de 0,6 m no hace falta pilar. Devuelve [{x, y, zTop, zBot, size, angle, zone, n}] (zone = índice del tramo).
+ */
+export function suspPillars(layout, elev, sp, ground = null) {
+  const out = [];
+  (sp.suspRanges || []).forEach((z, zi) => {
+    const r = layout.routes[z.k], e = elev.routes[z.k];
+    if (!r || !e) return;
+    const n = Math.max(0, Math.round(z.pillars ?? 3));
+    const len = z.s1 - z.s0;
+    let cnt = 0;
+    for (let q = 0; q < n; q++) {
+      let sv = z.s0 + (len * (q + 0.5)) / n;
+      if (r.closed) sv = ((sv % r.L) + r.L) % r.L;
+      const i = Math.min(r.n - 1, Math.max(0, Math.round(sv / r.ds))) % r.n;
+      const zTop = e.z[i] - Math.abs(Math.sin(e.roll[i])) * r.w[i] * 0.25 - 0.25;
+      const g = ground ? ground.sample(r.x[i], r.y[i]) : NaN;
+      const zBot = (Number.isFinite(g) ? g : Math.min(...e.z) - 2) - 0.3;
+      if (zTop - zBot < 0.6) continue;
+      out.push({ x: r.x[i], y: r.y[i], zTop, zBot, size: Math.min(2.2, Math.max(0.8, r.w[i] * 0.12)), angle: Math.atan2(r.ty[i], r.tx[i]), zone: zi, n: ++cnt });
+    }
+  });
+  return out;
+}
+
 export function bridgePillars(layout, elev, terrain = null) {
   const out = [];
   const r = layout.routes[0], e = elev.routes[0];

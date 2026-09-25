@@ -183,6 +183,7 @@ export class Editor2D {
       else if (tool === 'start') this.app.setStart(p);
       else if (tool === 'flat') this.dragFlat = { a: p, b: p };
       else if (tool === 'profile') this.dragProfile = { a: p, b: p }; // tramo para dibujar su perfil
+      else if (tool === 'susp') this.dragSusp = { a: p, b: p }; // tramo suspendido
       this.draw();
     });
 
@@ -234,6 +235,7 @@ export class Editor2D {
       }
       if (this.dragFlat) { this.dragFlat.b = p; this.draw(); return; }
       if (this.dragProfile) { this.dragProfile.b = p; this.draw(); return; }
+      if (this.dragSusp) { this.dragSusp.b = p; this.draw(); return; }
       // hover sobre la ruta principal
       const s = this.app.nearestMainS(p, 25 / this.view.zoom);
  const tl = this.app.state.tool;
@@ -293,6 +295,12 @@ export class Editor2D {
         const d = this.dragFlat;
         this.dragFlat = null;
         this.app.addFlatZone(d.a, d.b);
+        this.draw();
+      }
+      if (this.dragSusp) {
+        const d = this.dragSusp;
+        this.dragSusp = null;
+        this.app.addSuspZone(d.a, d.b);
         this.draw();
       }
       if (this.dragProfile) {
@@ -583,7 +591,7 @@ export class Editor2D {
     ctx.lineCap = 'butt';
     for (const m of list) {
       const P = m.positions, half = halfOf(m);
-      ctx.lineWidth = Math.max(2, (PE(m).barrierThick || 0.25) * pxPerM * 1.4);
+      ctx.lineWidth = Math.max(2, Math.max(0.08, PE(m).barrierThick ?? 0.25) * pxPerM * 1.4);
       for (const col of [0, 1]) {
         ctx.strokeStyle = col ? '#f2f2f2' : '#d42a2a';
         ctx.beginPath();
@@ -869,6 +877,18 @@ export class Editor2D {
       const s1 = this.app.nearestMainS(this.dragFlat.b, Infinity);
       if (s0 !== null && s1 !== null) this.strokeRange(L, 0, Math.min(s0, s1), Math.max(s0, s1), 'rgba(120,230,255,0.9)', 5);
     }
+    // tramos suspendidos: línea discontinua celeste (más marcada con su herramienta)
+    if (L && st.suspZones && st.suspZones.length) {
+      const ctx = this.ctx;
+      ctx.save();
+      ctx.setLineDash([8, 6]);
+      for (const Z of this.app.suspZonesS()) this.strokeRange(L, 0, Z.s0, Z.s1, st.tool === 'susp' ? 'rgba(90,220,255,0.95)' : 'rgba(90,220,255,0.55)', st.tool === 'susp' ? 5 : 3);
+      ctx.restore();
+    }
+    if (this.dragSusp && L) {
+      const s0 = this.app.nearestMainS(this.dragSusp.a, Infinity), s1 = this.app.nearestMainS(this.dragSusp.b, Infinity);
+      if (s0 !== null && s1 !== null) this.strokeRange(L, 0, Math.min(s0, s1), Math.max(s0, s1), 'rgba(90,220,255,0.9)', 6);
+    }
     // perfiles dibujados (violeta) y tramo elegido para dibujar su perfil (amarillo)
     if (L && (st.tool === 'profile' || st.tool === 'flat' || this.dragProfile)) {
       for (const Z of this.app.profileZonesS()) this.strokeRange(L, 0, Z.s0, Z.s1, 'rgba(186,120,255,0.75)', 4);
@@ -958,6 +978,10 @@ export class Editor2D {
     const TT = this.texStrip(isAltR && this.app.altTexCanvas ? this.app.altTexCanvas(r) : src, dir), TB = r.bridges && r.bridges.length ? this.texStrip(bsrc, dir) : TT;
     const cov = st.coveredRanges || [], k = L.routes.indexOf(r);
     const TC = cov.some((c) => c.k === k) && this.app.coveredTexCanvas ? this.texStrip(this.app.coveredTexCanvas(), dir) : TT;
+    const sus = (st.scene && st.scene.suspRanges) || [];
+    const suspTex = this.app.suspTexCanvas ? this.app.suspTexCanvas() : null;
+    const TS = suspTex && sus.some((c) => c.k === k) ? this.texStrip(suspTex, dir) : TT;
+    const suspAt = (sv) => { for (const c of sus) { if (c.k !== k) continue; let d = sv - c.s0; if (r.closed) d = ((d % r.L) + r.L) % r.L; if (d >= 0 && d <= c.s1 - c.s0) return true; } return false; };
     const coveredAt = (sv) => { for (const c of cov) { if (c.k !== k) continue; let ss = sv; if (r.closed) { while (ss < c.s0) ss += r.L; while (ss > c.s1 + r.L) ss -= r.L; } if (ss >= c.s0 && ss <= c.s1) return true; } return false; };
     const inBridge = (sv) => {
       if (!r.bridges) return false;
@@ -987,7 +1011,7 @@ export class Editor2D {
     const kindOf = (sg) => {
       const sa = r.s[sg[0]], sb = sg[1] === 0 && r.closed ? r.L : r.s[sg[1]];
       if (inBridge(sa) && inBridge(sb === r.L ? 0 : sb)) return 'b';
-      return coveredAt((sa + sb) / 2) ? 'c' : 'n';
+      return coveredAt((sa + sb) / 2) ? 'c' : suspAt((sa + sb) / 2) ? 's' : 'n';
     };
     for (let q = 0; q < segs.length;) {
       const a = segs[q][0];
@@ -1002,7 +1026,7 @@ export class Editor2D {
     }
     const GROW_ALONG = 1.2, GROW_SIDE = 0.5; // px: solape entre cuadros y cobertura del borde de la base
     for (const [a, b, br] of groups) {
-      const T = br === 'b' ? TB : br === 'c' ? TC : TT;
+      const T = br === 'b' ? TB : br === 'c' ? TC : br === 's' ? TS : TT;
       const { cv: tex, W, H } = T;
       const sa = r.s[a], sb = b === 0 && r.closed ? r.L : r.s[b];
       if (sb <= sa) continue;

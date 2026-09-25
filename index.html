@@ -181,7 +181,7 @@
         <p class="hint">Usa la herramienta «Zona plana» para aplanar otros tramos.</p>
         <div id="flatZoneList" class="list"></div>
         <h3 class="subhead" id="profileZonesHead">Perfiles dibujados</h3>
-        <p class="hint">Con <b>Perfil de tramo</b> (barra superior): arrastra sobre la pista en el mapa (o con Shift en el gráfico de perfil) para elegir un tramo y dibuja en el gráfico de perfil la forma de la elevación. Sin tramo elegido, el trazo define su propio tramo. Con <b>Editar puntos</b>, <b>Aplanar</b> deja los puntos seleccionados a su altura promedio.</p>
+        <p class="hint">Con <b>Perfil de tramo</b> (en la barra del gráfico de perfil): arrastra sobre la pista en el mapa (o con Shift en el gráfico de perfil) para elegir un tramo y dibuja en el gráfico de perfil la forma de la elevación. Sin tramo elegido, el trazo define su propio tramo. Con <b>Editar puntos</b>, <b>Aplanar</b> deja los puntos seleccionados a su altura promedio.</p>
         <div id="profileZoneList" class="list"></div>
 
       <section class="panel" data-panel="cross">
@@ -278,7 +278,7 @@
         <div class="field"><label>Lado</label><select id="barrierSide"><option value="none">Sin barrera</option><option value="left">Izquierda</option><option value="right">Derecha</option><option value="both">Ambos lados</option></select></div>
         <div id="barrierBox">
           <div class="field"><label>Altura <span class="val"><input type="number" id="barrierHeightNum" min="0.1" step="0.05" style="width:60px"> m</span></label><input type="range" id="barrierHeight" min="0.2" max="3" step="0.05"></div>
-          <div class="field"><label>Grosor <span class="val"><input type="number" id="barrierThickNum" min="0.05" step="0.05" style="width:60px"> m</span></label><input type="range" id="barrierThick" min="0.05" max="1.5" step="0.05"></div>
+          <div class="field"><label>Grosor (0 = plano de una cara) <span class="val"><input type="number" id="barrierThickNum" min="0" step="0.05" style="width:60px"> m</span></label><input type="range" id="barrierThick" min="0" max="1.5" step="0.05"></div>
           <div class="field"><label>Tiling: largo de cada repetición <span class="val"><input type="number" id="barrierTileNum" min="0.5" step="0.5" style="width:56px"> m</span></label><input type="range" id="barrierTile" min="0.5" max="20" step="0.5"></div>
           <div class="row gap"><button id="btnBarrierTex">Cargar textura…</button><button id="btnBarrierTexRemove" disabled>Por defecto</button><img id="barrierTexThumb" class="thumb" hidden alt=""></div>
           <input id="fileBarrierTex" type="file" accept="image/*" hidden>
@@ -386,7 +386,8 @@
             <option value="natural">Natural (caverna)</option>
           </select>
         </div>
-        <div class="field" id="caveBox"><label>Tamaño de la caverna <span class="val" id="caveSizeVal"></span></label><input type="range" id="caveSize" min="0" max="1" step="0.05"></div>
+        <div class="field" id="caveBox"><label>Tamaño de la caverna <span class="val" id="caveSizeVal"></span></label><input type="range" id="caveSize" min="0" max="1" step="0.05">
+          <label class="check small" style="margin-top:4px"><input type="checkbox" id="caveRocks"> Rocas y estalactitas</label></div>
         <div class="field">
           <label>Costado abierto (general)</label>
           <select id="tunnelOpen">
@@ -443,12 +444,34 @@
         <p class="hint">Se ubica en la línea de meta de la ruta principal (herramienta «Meta» para moverla). Se exporta en el .glb con el pivote en la base, al centro de la calzada.</p>
       </section>
 
+      <section class="panel" data-panel="susp">
+        <h2>Tramos suspendidos</h2>
+        <p class="hint">Con <b>Tramo suspendido</b> (barra superior) arrastra sobre la pista para marcar un tramo. Ahí el terreno no se adapta a la pista (solo se baja si llegaría a tocarla), así que puedes dejarla en el aire subiéndola con el <b>perfil de tramo</b> o las alturas de sus puntos. Cada tramo lleva pilares hasta el suelo y eliges si tiene camino de tierra y barreras. Se exportan como <code>ruta_principal_suspendido</code>, sus bordes como <code>…_suspendido_izq/der</code> y los pilares en el grupo <code>suspendidos</code>.</p>
+        <div class="row gap"><button id="btnSuspTool">Marcar tramo…</button></div>
+        <div id="suspZoneList" class="list"></div>
+        <h3 class="subhead">Texturas de los tramos suspendidos</h3>
+        <p class="hint">Por defecto, las mismas de la pista, su barrera y su camino de tierra.</p>
+        <div class="row gap"><span class="small" style="min-width:74px">Pista</span><button id="suspTexBtn">Cargar textura…</button><button id="suspTexRemove" disabled>Como la pista</button><img id="suspTexThumb" class="thumb" hidden alt=""></div>
+        <input id="suspTexFile" type="file" accept="image/*" hidden>
+        <div class="row gap" style="margin-top:6px"><span class="small" style="min-width:74px">Barrera</span><button id="suspBarrierTexBtn">Cargar textura…</button><button id="suspBarrierTexRemove" disabled>Como la pista</button><img id="suspBarrierTexThumb" class="thumb" hidden alt=""></div>
+        <input id="suspBarrierTexFile" type="file" accept="image/*" hidden>
+        <div class="row gap" style="margin-top:6px"><span class="small" style="min-width:74px">Camino tierra</span><button id="suspDirtTexBtn">Cargar textura…</button><button id="suspDirtTexRemove" disabled>Como la pista</button><img id="suspDirtTexThumb" class="thumb" hidden alt=""></div>
+        <input id="suspDirtTexFile" type="file" accept="image/*" hidden>
+      </section>
+
       <section class="panel" data-panel="rivers">
         <h2>Ríos y cascadas <span class="badge" id="riverCount">0</span></h2>
         <p class="hint">Con <b>Ríos y cascadas</b> (barra superior) pintas ríos sobre el terreno; con un cerro seleccionado, lo que pintes sobre él es una cascada de ese cerro. Si empiezas sobre un río, lo extiendes, y si el trazo se abre, se bifurca. <b>Posado</b>: solo el agua sobre la superficie. <b>Socavado</b>: la superficie se hunde (profundidad, paredes suaves o de roca y su densidad de geometría) y el agua queda dentro del cauce. Alt o clic derecho borra.</p>
         <div class="row gap"><button id="btnRiverTool">Pintar ríos…</button><button id="btnRiverClear">Borrar todos</button></div>
         <div id="riverList" class="list"></div>
         <p class="hint" id="riverInfo"></p>
+        <h3 class="subhead" id="riverWallHead">Material de las paredes socavadas</h3>
+        <p class="hint">El lecho y las paredes de los cauces socavados usan su propio material (roca por defecto): <code>cauce_rio</code> en los ríos (objeto <code>terreno_cauces</code>) y <code>cauce_cascada</code> en las cascadas (<code>cerro_NN_cauce</code>).</p>
+        <div class="row gap"><span class="small" style="min-width:62px">Ríos</span><button id="riverWallBtn">Cargar textura…</button><button id="riverWallRemove" disabled>Por defecto</button><img id="riverWallThumb" class="thumb" hidden alt=""></div>
+        <input id="riverWallFile" type="file" accept="image/*" hidden>
+        <div class="row gap" style="margin-top:6px"><span class="small" style="min-width:62px">Cascadas</span><button id="fallWallBtn">Cargar textura…</button><button id="fallWallRemove" disabled>Por defecto</button><img id="fallWallThumb" class="thumb" hidden alt=""></div>
+        <input id="fallWallFile" type="file" accept="image/*" hidden>
+        <div class="field"><label>Repetición de la textura <span class="val"><input type="number" id="riverWallTileNum" min="0.5" step="0.5" style="width:56px"> m</span></label><input type="range" id="riverWallTile" min="0.5" max="30" step="0.5"></div>
       </section>
 
       <section class="panel" data-panel="trees">
@@ -558,13 +581,14 @@
           <button data-tool="draw" title="Dibujar la ruta principal a mano alzada">Dibujar</button>
           <button data-tool="extend" title="Continúa la pista desde un extremo (círculo verde) o redibuja un tramo empezando y terminando sobre la pista">Extender</button>
           <button data-tool="alt" title="Dibujar una ruta alternativa: empieza y termina sobre la principal">Dibujar atajo</button>
+          <button id="btnLoop" title="Rizo: la pista da una o más vueltas sobre sí misma en los puntos seleccionados y se cruza por arriba">Rizo</button>
           <button data-tool="start" title="Clic sobre la pista para fijar la meta">Meta</button>
           <button data-tool="ref" title="Mover y escalar la imagen de referencia (arrastra la imagen o su esquina)">Referencia</button>
           <button data-tool="hill" title="Pinta cerros (suaves o paredes rocosas); si cubren la pista se crea un túnel. Alt o clic derecho borra">Pintar cerros</button>
           <button data-tool="paint" title="Pinta zonas del terreno (o del cerro seleccionado) que tendrán más polígonos (Alt o clic derecho borra)">Pintar subdivisión</button>
           <button data-tool="sculpt" title="Esculpe el terreno: clic derecho eleva, clic izquierdo hunde (en el mapa o en la vista 3D). [ y ] cambian el pincel">Esculpir relieve</button>
           <button data-tool="river" title="Pinta ríos sobre el terreno; con un cerro seleccionado, lo que pintes sobre él es una cascada. Empezar sobre un río lo extiende (y se bifurca). Alt o clic derecho borra">Ríos y cascadas</button>
-          <button data-tool="profile" title="Elige un tramo (arrastrando sobre la pista en el mapa, o con Shift en el gráfico de perfil) y dibuja en el gráfico de perfil cómo varía su elevación">Perfil de tramo</button>
+          <button data-tool="susp" title="Arrastra sobre la pista para marcar un tramo suspendido: el terreno no se adapta a él y lleva pilares hasta el suelo">Tramo suspendido</button>
           <button data-tool="flat" title="Arrastra sobre la pista para marcar un tramo plano">Zona plana</button>
           <span class="sep"></span>
           <button id="btnGenTerrain" class="gen">Generar terreno</button>
@@ -591,6 +615,15 @@
             <select id="hillHard" style="font-size:12px"><option value="soft">Colina suave</option><option value="hard">Pared rocosa</option></select>
             <label class="small">Cima plana <input type="range" id="hillFlatBar" min="0" max="1" step="0.05" style="width:70px"></label>
             <span class="small muted" title="Sobre un cerro existente: arrastrar pinta un cerro nuevo encima; con Shift agranda (o borra) el cerro original">sobre un cerro: nuevo encima · Shift = el original</span>
+          </span>
+          <span id="loopBox" class="row" hidden>
+            <label class="small" title="Cuántas vueltas da el rizo (se cruza una vez por vuelta)">Vueltas <input type="number" id="loopTurns" min="1" max="8" step="1" value="1" style="width:44px"></label>
+            <label class="small" title="Distancia vertical entre la pasada de abajo y la de arriba en el cruce">Separación Z <input type="range" id="loopSep" min="2" max="20" step="0.5" value="7" style="width:80px"> <span class="val" id="loopSepVal"></span></label>
+            <label class="small" title="Radio de cada vuelta en metros (0 o vacío = automático, según el tramo elegido y el ancho de la pista)">Radio <input type="range" id="loopRadiusR" min="0" max="150" step="1" value="0" style="width:90px"> <input type="number" id="loopRadius" min="0" max="150" step="1" placeholder="auto" style="width:62px"> m</label>
+            <label class="small" title="Tope de la barra del radio (y del número), en metros">máx. <input type="number" id="loopRadiusMax" min="5" max="5000" step="5" value="150" style="width:58px"></label>
+            <select id="loopSide" style="font-size:12px" title="Hacia qué lado sale el rizo"><option value="auto">Hacia afuera</option><option value="left">Izquierda</option><option value="right">Derecha</option></select>
+            <button id="btnLoopAdd" class="primary" title="Añade el rizo en los puntos seleccionados (el resto de la pista no se mueve)">Añadir rizo</button>
+            <span class="small muted" id="loopInfo"></span>
           </span>
           <span id="riverBox" class="row" hidden>
             <select id="riverMode" style="font-size:12px" title="Geometría del río o cascada nuevo"><option value="surface">Posado</option><option value="carved">Socavado</option></select>
@@ -643,12 +676,21 @@
           <button id="btnGameRestart" title="Volver a la meta">Reiniciar</button>
           <button id="btnGameFull" title="Pantalla completa">Pantalla completa</button>
           <button id="btnGameExit" title="Salir de la cámara de juego (Esc)">Salir</button>
+          <button id="btnGameCam" title="Distancia, altura, inclinación y campo de visión de la cámara">Ajustar cámara</button>
+          <span id="gameCamBox" class="row" hidden style="flex-basis:100%;gap:10px">
+            <label class="small" title="Distancia detrás del auto (tercera persona)">Distancia <input type="range" id="gameCamDist" min="1" max="40" step="0.5" style="width:90px"> <span class="val" id="gameCamDistVal"></span></label>
+            <label class="small" title="Altura sobre el auto (tercera persona)">Altura <input type="range" id="gameCamHeight" min="0" max="20" step="0.1" style="width:90px"> <span class="val" id="gameCamHeightVal"></span></label>
+            <label class="small" title="Inclinación de la mirada: positivo mira más hacia abajo">Inclinación <input type="range" id="gameCamTilt" min="-30" max="45" step="1" style="width:90px"> <span class="val" id="gameCamTiltVal"></span></label>
+            <label class="small" title="Campo de visión vertical">FOV <input type="range" id="gameCamFov" min="20" max="120" step="1" style="width:90px"> <span class="val" id="gameCamFovVal"></span></label>
+            <button id="btnGameCamReset" class="small" title="Valores por defecto">Por defecto</button>
+          </span>
         </div>
         <div id="view3d"></div>
       </div>
       <div class="view viewProfile">
         <div class="toolbar">
           <span class="label">Perfil de elevación z(s)</span>
+          <button data-tool="profile" id="btnProfileTool" title="Elige un tramo (arrastrando sobre la pista en el mapa, o con Shift en el gráfico de perfil) y dibuja en el gráfico de perfil cómo varía su elevación">Perfil de tramo</button>
           <label class="check small"><input type="checkbox" id="pinLocal" checked> Editar solo este punto</label>
           <span class="stats" id="stats"></span>
         </div>

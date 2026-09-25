@@ -196,10 +196,27 @@ export class GameCam {
       desiredUp = P.up.clone();
     } else {
       // detrás y un poco arriba, mirando por delante del auto
+      const G = this.app.state.game || {};
+      const dist = Math.max(0.5, G.camDist ?? 8.5), hgt = G.camHeight ?? 2.9;
       const ahead = this.pose(this.s + 12);
-      desiredPos = P.pos.clone().addScaledVector(P.fwd, -8.5).addScaledVector(P.up, 2.9);
+      desiredPos = P.pos.clone().addScaledVector(P.fwd, -dist).addScaledVector(P.up, hgt);
       desiredLook = ahead.pos.clone().addScaledVector(ahead.up, 1.3);
       desiredUp = new THREE.Vector3(0, 0, 1).lerp(P.up, 0.55).normalize();
+    }
+    // inclinación: baja (o sube) la mirada tantos grados
+    {
+      const tilt = ((this.app.state.game && this.app.state.game.camTilt) || 0) * Math.PI / 180;
+      if (Math.abs(tilt) > 1e-4) {
+        const d = desiredLook.clone().sub(desiredPos);
+        const right = d.clone().cross(desiredUp).normalize();
+        d.applyAxisAngle(right, -tilt);
+        desiredLook = desiredPos.clone().add(d);
+      }
+    }
+    // campo de visión
+    {
+      const fov = Math.max(20, Math.min(120, (this.app.state.game && this.app.state.game.fov) || 62));
+      if (Math.abs(this.camera.fov - fov) > 1e-3) { this.camera.fov = fov; this.camera.updateProjectionMatrix(); }
     }
     if (this.snapCamera) {
       this.camPos.copy(desiredPos); this.camLook.copy(desiredLook); this.camUp.copy(desiredUp);

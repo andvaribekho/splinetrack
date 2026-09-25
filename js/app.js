@@ -34,6 +34,8 @@ const state = {
   flatZones: [], // [[ [x,y], [x,y] ], ...] en coordenadas de lienzo
   profileZones: [], // perfiles dibujados en la ruta principal: [{a:[x,y], b:[x,y], pts:[[t, z], ...]}] (extremos en coords del lienzo)
   profileSel: null, // tramo elegido para dibujar un perfil: {a, b} (coords del lienzo)
+  suspZones: [], // tramos suspendidos de la ruta principal: [{a:[x,y], b:[x,y], pillars, dirt, barrier}] (coords del lienzo)
+  suspTex: null, suspBarrierTex: null, suspDirtTex: null, // texturas propias de los tramos suspendidos (null = las de la pista)
   image: null, // {canvas, w, h}
   imageOpacity: 0.5,
   tool: 'pan',
@@ -65,13 +67,14 @@ const state = {
   selItem: null, // {type, gid, idx}
   itemPaintTarget: null, // {type, gid} al pintar zonas de un grupo
   paintErase: false,
-  game: { speed: 120, mode: 'third' },
+  game: { speed: 120, mode: 'third', camDist: 8.5, camHeight: 2.9, camTilt: 0, fov: 62 }, // cámara: distancia y altura (tercera persona), inclinación (°) y FOV
   skyTex: null, skyCustom: false,
   trackTex: null, // canvas de la textura de la pista
   barrierTex: null, // canvas de la textura de la barrera (null = rojo y blanco por defecto)
   altTexs: {}, // texturas propias de cada atajo, por su uid: {track, barrier, dirt} (null = las de la pista)
   coveredTex: null, // textura de los tramos cubiertos: túneles y bajo cruces (null = la de la pista un 20 % más oscura)
   dirtTex: null, // canvas de la textura del camino de tierra (null = arena por defecto)
+  riverWallTex: null, fallWallTex: null, // texturas de las paredes socavadas de ríos y cascadas (null = roca por defecto)
   edgeMeshes: null, // última malla de bordes (para el mapa 2D y los clics)
   bridgeTex: null, // canvas de la textura de los puentes (null = café por defecto)
   grassTex: null, // canvas de la textura de hierba (null = por defecto)
@@ -84,7 +87,7 @@ const state = {
 const undoStack = [];
 function snapshot() {
   const ref = state.ref ? { x: state.ref.x, y: state.ref.y, scale: state.ref.scale, opacity: state.ref.opacity } : null;
-  return JSON.stringify({ project: state.project, flatZones: state.flatZones, profileZones: state.profileZones, overrides: state.overrides, ref, refCanvas: !!state.ref, densityPaint: state.densityPaint, terrainSculpt: state.terrainSculpt, decoSets: state.decoSets, hills: state.hills, selHill: state.selHill, rivers: state.rivers, items: state.items });
+  return JSON.stringify({ project: state.project, flatZones: state.flatZones, profileZones: state.profileZones, suspZones: state.suspZones, overrides: state.overrides, ref, refCanvas: !!state.ref, densityPaint: state.densityPaint, terrainSculpt: state.terrainSculpt, decoSets: state.decoSets, hills: state.hills, selHill: state.selHill, rivers: state.rivers, items: state.items });
 }
 function pushUndo() {
   undoStack.push(snapshot());
@@ -98,6 +101,7 @@ function undo() {
   state.project = o.project;
   state.flatZones = o.flatZones;
   if (o.profileZones) state.profileZones = o.profileZones;
+  if (o.suspZones) state.suspZones = o.suspZones;
   state.overrides = o.overrides;
   if (o.ref && state.ref) Object.assign(state.ref, o.ref);
   if (o.items) { state.items = o.items; if (typeof itemsChanged === 'function') { renderItemsPanel(); itemsChanged(); } }
@@ -138,10 +142,13 @@ function riverLabel(rv) {
   return rv.name || `${rv.kind === 'fall' ? 'cascada' : 'rio'}_${String(n).padStart(2, '0')}`;
 }
 function riversChanged() { renderRiverPanel(); editor.draw(); preview.update(false); }
-function selectRiver(id) {
+function selectRiver(id, expand = true) {
   state.selRiver = id;
+  const rv = id != null ? state.rivers.find((q) => q.id === id) : null;
+  if (rv && expand) rv.collapsed = false; // al elegirlo (en el mapa o en 3D) se despliega su tarjeta
   renderRiverPanel();
   editor.draw();
+  if (preview.setRiverSelection) preview.setRiverSelection(id);
   if (id != null) setTimeout(() => { try { focusPanel('rivers', document.querySelector(`#riverList .item[data-id="${id}"]`)); } catch { /* iniciando */ } }, 0);
 }
 function renderRiverPanel() {
@@ -152,17 +159,20 @@ function renderRiverPanel() {
   if (cnt) cnt.textContent = state.rivers.length;
   for (const rv of state.rivers) {
     const div = document.createElement('div');
-    div.className = 'item river-card' + (rv.id === state.selRiver ? ' sel' : '');
+    div.className = 'item river-card' + (rv.id === state.selRiver ? ' sel' : '') + (rv.collapsed ? ' collapsed' : '');
     div.dataset.id = rv.id;
     const hill = rv.kind === 'fall' ? state.hills.find((h) => h.id === rv.hill) : null;
     div.innerHTML = `
-      <div class="head"><span><strong>${riverLabel(rv)}</strong> <span class="muted small">${rv.kind === 'fall' ? `cascada en ${hill ? hill.name || hillName(hill.id) : 'un cerro'}` : 'río'}</span></span><button class="x del" title="Eliminar">✕</button></div>
+      <div class="head"><span><button class="x rtoggle" title="Mostrar u ocultar sus parámetros">${rv.collapsed ? '▸' : '▾'}</button> <strong>${riverLabel(rv)}</strong> <span class="muted small">${rv.kind === 'fall' ? `cascada en ${hill ? hill.name || hillName(hill.id) : 'un cerro'}` : 'río'}</span></span><button class="x del" title="Eliminar">✕</button></div>
+      <div class="rbody">
       <div class="field"><label>Geometría</label><select class="rmode"><option value="surface"${rv.mode === 'surface' ? ' selected' : ''}>Posada sobre la superficie</option><option value="carved"${rv.mode === 'carved' ? ' selected' : ''}>Socavada</option></select></div>
       <div class="rcarved${rv.mode === 'carved' ? '' : ' disabled'}">
         <div class="field"><label>Profundidad <span class="val"><input type="number" class="rdepthN" min="0.1" step="0.1" style="width:58px" value="${rv.depth}"> m</span></label><input type="range" class="rdepth" min="0.2" max="20" step="0.1" value="${Math.min(20, rv.depth)}"></div>
         <div class="field"><label>Paredes</label><select class="rwalls"><option value="smooth"${rv.walls !== 'rock' ? ' selected' : ''}>Suaves</option><option value="rock"${rv.walls === 'rock' ? ' selected' : ''}>De roca</option></select></div>
         <div class="field"><label>Densidad de las paredes <span class="val rsubV">${rv.wallSubdiv} (×${subdivFactor(rv.wallSubdiv)} pol.)</span></label><input type="range" class="rsub" min="0" max="6" step="1" value="${rv.wallSubdiv}"></div>
+      </div>
       </div>`;
+    div.querySelector('.rtoggle').addEventListener('click', () => { rv.collapsed = !rv.collapsed; div.classList.toggle('collapsed', rv.collapsed); div.querySelector('.rtoggle').textContent = rv.collapsed ? '▸' : '▾'; });
     let editing = false;
     const set = (k, v, done = true) => {
       if (!editing) { pushUndo(); editing = true; }
@@ -180,7 +190,7 @@ function renderRiverPanel() {
     div.querySelector('.rdepthN').addEventListener('change', (e) => { const v = parseFloat(e.target.value); if (v > 0) set('depth', v); });
     div.querySelector('.rsub').addEventListener('input', (e) => set('wallSubdiv', Math.round(parseFloat(e.target.value)), false));
     div.querySelector('.rsub').addEventListener('change', () => { editing = false; });
-    div.addEventListener('click', (e) => { if (e.target.closest('input,button,select,label')) return; selectRiver(state.selRiver === rv.id ? null : rv.id); });
+    div.addEventListener('click', (e) => { if (e.target.closest('input,button,select,label')) return; selectRiver(state.selRiver === rv.id ? null : rv.id, false); });
     el.appendChild(div);
   }
   const info = document.getElementById('riverInfo');
@@ -231,6 +241,7 @@ function refreshTunnelSel() {
     <div class="field"><label>Tipo</label><select class="tsType">${opt(types, sc.tunnelType)}</select></div>
     <div class="field"><label>Costado abierto</label>
       <select class="tsOpen"><option value="">Como el general (${genOpen})</option><option value="none">Cerrado</option><option value="left">Abierto a la izquierda (con pilares)</option><option value="right">Abierto a la derecha (con pilares)</option></select></div>
+    <label class="check small tsRocksBox${t.type === 'natural' ? '' : ' disabled'}"><input type="checkbox" class="tsRocks"${t.rocks !== false ? ' checked' : ''}> Rocas y estalactitas${own('rocks') ? '' : ' (como el general)'}</label>
     <div class="field tsPilBox${t.openMode === 'none' ? ' disabled' : ''}"><label><input type="checkbox" class="tsPilOwn"${own('pillars') ? ' checked' : ''}> Pilares propios <span class="val"><input type="number" class="tsPilN" min="0" max="200" step="1" style="width:56px" value="${t.pillarCount}"></span></label>
       <input type="range" class="tsPil" min="0" max="40" step="1" value="${Math.min(40, t.pillarCount)}"${own('pillars') ? '' : ' disabled'}></div>
     <h4 class="mini">Geometría ${own('density') || own('meshMode') || own('maxTris') || own('adapt') ? '(propia)' : '(la general)'}</h4>
@@ -255,6 +266,7 @@ function refreshTunnelSel() {
     sceneChanged();
   };
   box.querySelector('.tsOpen').addEventListener('change', (e) => setOv({ open: e.target.value || undefined }));
+  box.querySelector('.tsRocks').addEventListener('change', (e) => setOv({ rocks: e.target.checked === (sc.caveRocks !== false) ? undefined : e.target.checked }));
   box.querySelector('.tsShape').addEventListener('change', (e) => setOv({ shape: e.target.value || undefined }));
   box.querySelector('.tsType').addEventListener('change', (e) => setOv({ type: e.target.value || undefined }));
   const pilSet = (v) => { v = Math.max(0, Math.min(200, Math.round(v))); box.querySelector('.tsPilN').value = v; box.querySelector('.tsPil').value = Math.min(40, v); setOv({ pillars: v }); };
@@ -374,7 +386,7 @@ function edgeAt(p, tolLayout = 0) {
     for (const a of m.segs) {
       const v = a * 6, w = (a + 1) * 6;
       const ax = (P[v * 3] + P[v * 3 + 9]) / 2, ay = (P[v * 3 + 1] + P[v * 3 + 10]) / 2, bx = (P[w * 3] + P[w * 3 + 9]) / 2, by = (P[w * 3 + 1] + P[w * 3 + 10]) / 2;
-      if (segDist(ax, ay, bx, by) < (edgeParams(state.scene, L.routes[m.k]).barrierThick || 0.25) / 2 + tol) return { kind: 'barrier', k: m.k };
+      if (segDist(ax, ay, bx, by) < Math.max(0.1, edgeParams(state.scene, L.routes[m.k]).barrierThick ?? 0.25) / 2 + tol) return { kind: 'barrier', k: m.k };
     }
   }
   const inTri = (A, B, C) => { const d = (P1, P2) => (x - P2[0]) * (P1[1] - P2[1]) - (P1[0] - P2[0]) * (y - P2[1]); const d1 = d(A, B), d2 = d(B, C), d3 = d(C, A); return !((d1 < 0 || d2 < 0 || d3 < 0) && (d1 > 0 || d2 > 0 || d3 > 0)); };
@@ -557,6 +569,28 @@ const app = {
       const flip = s1 < s0;
       return { idx, s0: Math.min(s0, s1), s1: Math.max(s0, s1), pts: flip ? Z.pts.map(([t, z]) => [1 - t, z]).reverse() : Z.pts };
     }).filter((Z) => Z && Z.s1 - Z.s0 > 2);
+  },
+  /** Tramos suspendidos en s de la ruta principal: [{k: 0, s0, s1, pillars, dirt, barrier, idx}]. */
+  suspZonesS() {
+    const L = state.layout;
+    if (!L) return [];
+    return state.suspZones.map((Z, idx) => {
+      const s0 = app.nearestMainS(Z.a, Infinity), s1 = app.nearestMainS(Z.b, Infinity);
+      if (s0 === null || s1 === null) return null;
+      return { k: 0, idx, s0: Math.min(s0, s1), s1: Math.max(s0, s1), pillars: Z.pillars ?? 3, dirt: !!Z.dirt, barrier: !!Z.barrier };
+    }).filter((Z) => Z && Z.s1 - Z.s0 > 2);
+  },
+  addSuspZone(a, b) {
+    if (!state.layout) return;
+    const s0 = app.nearestMainS(a, Infinity), s1 = app.nearestMainS(b, Infinity);
+    if (s0 === null || s1 === null || Math.abs(s1 - s0) < 5) return;
+    pushUndo();
+    const lo = Math.min(s0, s1), hi = Math.max(s0, s1);
+    const cur = app.suspZonesS();
+    state.suspZones = state.suspZones.filter((Z, i) => { const c = cur.find((q) => q.idx === i); return !c || c.s1 < lo || c.s0 > hi; }); // reemplaza los que se superponen
+    state.suspZones.push({ a: app.mainLayoutAt(lo), b: app.mainLayoutAt(hi), pillars: Math.max(1, Math.round((hi - lo) / 25)), dirt: false, barrier: true });
+    scheduleElev();
+    toast(`Tramo suspendido entre s=${lo.toFixed(0)} y ${hi.toFixed(0)} m: súbelo con el perfil (o las alturas de sus puntos).`);
   },
   /** Tramo elegido para el perfil, en s: [s0, s1] o null. */
   profileSelS() {
@@ -1159,8 +1193,10 @@ const app = {
   /** Textura propia de un atajo (ruta, objeto de project.alts o uid) o null. kind: 'track' | 'barrier' | 'dirt'. */
   altOwnTex(r, kind) { const uid = r && typeof r === 'object' ? r.uid : r; const t = uid ? state.altTexs[uid] : null; return (t && t[kind]) || null; },
   // r: la ruta (o el atajo): los atajos usan su textura propia o, si no tienen, la de la pista
-  barrierTexCanvas(r = null) { return (r && typeof r === 'object' && this.altOwnTex(r, 'barrier')) || state.barrierTex || defaultBarrierCanvas(); },
-  dirtTexCanvas(r = null) { return (r && typeof r === 'object' && this.altOwnTex(r, 'dirt')) || state.dirtTex || defaultDirtCanvas(); },
+  barrierTexCanvas(r = null, susp = false) { return (susp && state.suspBarrierTex) || (r && typeof r === 'object' && this.altOwnTex(r, 'barrier')) || state.barrierTex || defaultBarrierCanvas(); },
+  dirtTexCanvas(r = null, susp = false) { return (susp && state.suspDirtTex) || (r && typeof r === 'object' && this.altOwnTex(r, 'dirt')) || state.dirtTex || defaultDirtCanvas(); },
+  /** Textura propia de los tramos suspendidos (null = la de la pista). */
+  suspTexCanvas() { return state.suspTex || null; },
   altTexCanvas(r = null) { return (r && this.altOwnTex(r, 'track')) || state.trackTex || defaultTrackCanvas(); },
   /** Asigna (o quita, con null) una textura propia a un atajo (objeto de project.alts o índice). */
   setAltTexture(a, kind, cv) {
@@ -1185,6 +1221,7 @@ const app = {
     selectAlt(i);
     setTimeout(() => { try { const card = document.querySelector(`#altList .item[data-alt="${i}"]`); focusPanel('alts', card && card.querySelector(kind === 'barrier' ? '.abarH' : kind === 'dirt' ? '.adirtH' : '.atexH')); } catch { /* iniciando */ } }, 20);
   },
+  wallTexCanvas(kind) { return (kind === 'fall' ? state.fallWallTex : state.riverWallTex) || null; },
   coveredTexCanvas() { return state.coveredTex || darkenedCanvas(state.trackTex || defaultTrackCanvas(), 0.2); },
   onEdgesInfo(B) {
     state.edgeMeshes = B;
@@ -1302,6 +1339,128 @@ function contiguousRun(key) {
   }
   return best;
 }
+// ---------- rizos ----------
+/**
+ * Plan de un rizo sobre los puntos seleccionados: la pista describe «turns» vueltas (trocoide) entre el primer y el
+ * último punto seleccionado (con uno solo, entre ese y el siguiente) y se cruza a sí misma en cada vuelta; la pasada
+ * de arriba queda «sep» metros sobre la de abajo (separación propia de cada cruce: la elevación la resuelve el
+ * optimizador, con rampas suaves). El resto de los puntos no se mueve (la vuelta se alarga).
+ * Devuelve {key, run, pts (lienzo), crosses [{lx, ly, upDir}], R, grade, len, D} o {error}.
+ */
+function loopPlan(turns, sep, sideMode = 'auto', radius = 0) {
+  const L = state.layout, E = state.result;
+  if (!L || !E) return { error: 'Primero crea o carga una pista.' };
+  const sel = state.selSet && state.selSet.idxs.size ? state.selSet : state.sel ? { key: state.sel.key, idxs: new Set([state.sel.idx]) } : null;
+  if (!sel) return { error: 'Selecciona uno o más puntos seguidos (Editar puntos) donde irá el rizo.' };
+  const key = sel.key, arr = ctrlArray(key);
+  if (!arr) return { error: 'Esa ruta no tiene puntos editables.' };
+  const n = arr.length;
+  const closed = key === 'main' ? state.project.main.closed !== false : false;
+  let run = sel.idxs.size > 1 ? (state.selSet ? contiguousRun(key) : null) : [[...sel.idxs][0]];
+  if (!run || (sel.idxs.size > 1 && run.length !== sel.idxs.size)) return { error: 'Los puntos del rizo deben ser seguidos.' };
+  if (run.length === 1) {
+    const i = run[0];
+    if (closed) run = [i, (i + 1) % n];
+    else if (i < n - 1) run = [i, i + 1];
+    else run = [i - 1, i];
+  }
+  const i0 = run[0], i1 = run[run.length - 1];
+  const k = key === 'main' ? 0 : L.routes.findIndex((r) => r.kind === 'alt' && r.altIndex === key);
+  const r = L.routes[k];
+  if (!r) return { error: 'No se encontró la ruta.' };
+  const cp = app.ctrlPoints().filter((q) => q.key === key);
+  const zOf = (idx) => { const q = cp.find((c) => c.idx === idx); return q ? q.z : 0; };
+  const [ax, ay] = L.toWorld(arr[i0][0], arr[i0][1]), [bx, by] = L.toWorld(arr[i1][0], arr[i1][1]);
+  const D = Math.hypot(bx - ax, by - ay);
+  if (D < 2) return { error: 'Los puntos están demasiado juntos para un rizo.' };
+  const N = Math.max(1, Math.min(8, Math.round(turns)));
+  const ux = (bx - ax) / D, uy = (by - ay) / D;
+  // lado: hacia afuera del circuito (o el elegido)
+  let side = sideMode === 'left' ? 1 : sideMode === 'right' ? -1 : 0;
+  if (!side) {
+    const r0 = L.routes[0];
+    let cx = 0, cy = 0; for (let i = 0; i < r0.n; i++) { cx += r0.x[i]; cy += r0.y[i]; } cx /= r0.n; cy /= r0.n;
+    const mx = (ax + bx) / 2 - cx, my = (ay + by) / 2 - cy;
+    side = mx * -uy + my * ux >= 0 ? 1 : -1;
+  }
+  const vx = -uy * side, vy = ux * side;
+  // trocoide: x = aθ + R sen θ, y = R (1 − cos θ); se cruza cuando R > a. Con R ≈ 1,57 a el cruce cae a media vuelta.
+  const w = (r.w && r.w[0]) || state.geom.width;
+  const a = D / (2 * Math.PI * N);
+  const Rauto = Math.max(1.57 * a, 1.6 * w, 8);
+  // radio pedido (0 = automático); para que la pista se cruce tiene que ser mayor que a (avance por radián)
+  const Rmin = a * 1.08 + 0.5;
+  const Rwant = radius > 0 ? radius : Rauto;
+  const R = Math.max(Rwant, Rmin);
+  const clampedR = radius > 0 && radius < Rmin;
+  const tight = R < w * 1.2; // más cerrado que el ancho de la pista: la calzada se pisa en la curva
+  // parámetro del cruce: sen ψ / ψ = a / R (pasadas en θ = π − ψ y θ = π + ψ de cada vuelta)
+  let lo = 1e-6, hi = Math.PI - 1e-6;
+  for (let it = 0; it < 60; it++) { const m = (lo + hi) / 2; if (Math.sin(m) / m > a / R) lo = m; else hi = m; }
+  const psi = (lo + hi) / 2;
+  const T = 2 * Math.PI * N;
+  const speed = (th) => Math.hypot(a + R * Math.cos(th), R * Math.sin(th));
+  const arcLen = (t0, t1) => { let s = 0; const m = 64; for (let j = 0; j < m; j++) s += speed(t0 + ((j + 0.5) / m) * (t1 - t0)) * (t1 - t0) / m; return s; };
+  // entre las dos pasadas de un cruce la pista recorre la vuelta: ahí se gana la separación (las vueltas alternan
+  // cuál pasada va arriba, así entre una vuelta y la siguiente no hay que bajar)
+  const grade = sep / arcLen(Math.PI - psi, Math.PI + psi);
+  // las vueltas alternan de lado (izquierda, derecha, …): así dos vueltas seguidas nunca se pisan
+  const sgn = (th) => (Math.floor(th / (2 * Math.PI) + 1e-9) % 2 === 0 ? 1 : -1);
+  const P = (th) => { const lx = a * th + R * Math.sin(th), ly = sgn(Math.min(th, T - 1e-9)) * R * (1 - Math.cos(th)); return [ax + ux * lx + vx * ly, ay + uy * lx + vy * ly]; };
+  const Tn = (th) => { const tx = a + R * Math.cos(th), ty = sgn(th) * R * Math.sin(th); return [ux * tx + vx * ty, uy * tx + vy * ty]; };
+  // con 3 o más vueltas, las del mismo lado necesitan espacio entre ellas
+  const needD = N >= 3 ? (N * (2 * R + w + 4)) / 2 : 0;
+  const crosses = [];
+  for (let q = 0; q < N; q++) {
+    const ta = 2 * Math.PI * q + Math.PI - psi, tb = 2 * Math.PI * q + Math.PI + psi;
+    const [X, Y] = P(ta);
+    const [lx, ly] = L.toLayout(X, Y);
+    const up = Tn(q % 2 === 0 ? tb : ta); // pasada que va arriba (dirección en el lienzo: Y invertida)
+    const l = Math.hypot(up[0], up[1]) || 1;
+    crosses.push({ lx: +lx.toFixed(3), ly: +ly.toFixed(3), upDir: [up[0] / l, -up[1] / l] });
+  }
+  const K = 14 * N; // puntos de control por vuelta
+  const pts = [];
+  for (let j = 1; j < K; j++) {
+    const [X, Y] = P((T * j) / K);
+    const [px, py] = L.toLayout(X, Y);
+    pts.push([+px.toFixed(3), +py.toFixed(3)]);
+  }
+  return { key, run, i0, i1, pts, crosses, R, Rauto, Rmin, clampedR, tight, grade, len: arcLen(0, T), D, N, side, overlap: D < needD, needD };
+}
+function addLoop(turns, sep, sideMode, radius = 0) {
+  const P = loopPlan(turns, sep, sideMode, radius);
+  if (P.error) { toast(P.error); return false; }
+  const arr = ctrlArray(P.key), za = zArray(P.key);
+  pushUndo();
+  const inner = new Set(P.run.slice(1, -1)); // los puntos entre el primero y el último quedan reemplazados por el rizo
+  const nA = [], nZ = [];
+  let newSel = [];
+  for (let i = 0; i < arr.length; i++) {
+    if (inner.has(i)) continue;
+    nA.push(arr[i]);
+    nZ.push(za[i]);
+    if (i === P.i0) P.pts.forEach((q) => { nA.push(q); nZ.push(null); newSel.push(nA.length - 1); }); // alturas automáticas
+  }
+  arr.length = 0; arr.push(...nA);
+  za.length = 0; za.push(...nZ);
+  // separación propia de cada cruce del rizo (y qué pasada va arriba)
+  for (const c of P.crosses) state.overrides.push({ lx: c.lx, ly: c.ly, upDir: c.upDir, type: 'auto', sep: +sep });
+  state.sel = null; state.selSet = { key: P.key, idxs: new Set(newSel) }; endArc(); refreshArcBox();
+  scheduleBuild();
+  toast(`Rizo de ${P.N} vuelta${P.N > 1 ? 's' : ''} (radio ${P.R.toFixed(0)} m, +${P.len.toFixed(0)} m de pista, ${sep} m de separación en ${P.N > 1 ? 'cada cruce' : 'el cruce'}).`);
+  return true;
+}
+function refreshLoopInfo() {
+  const el = document.getElementById('loopInfo');
+  if (!el) return;
+  const P = loopPlan(parseFloat($('loopTurns').value) || 1, parseFloat($('loopSep').value) || 7, $('loopSide').value, parseFloat($('loopRadius').value) || 0);
+  if (!P.error && !(parseFloat($('loopRadius').value) > 0)) $('loopRadius').placeholder = `auto ${P.Rauto.toFixed(0)}`;
+  el.textContent = P.error ? P.error : `radio ${P.R.toFixed(1)} m${P.clampedR ? ` (mínimo para que se cruce: ${P.Rmin.toFixed(1)} m)` : ''}${P.tight ? ' (muy cerrado para el ancho de la pista)' : ''} · +${P.len.toFixed(0)} m · pendiente ≈ ${(P.grade * 100).toFixed(1)} %${P.grade * 100 > state.elev.maxGrade ? ' (sube la pendiente máxima)' : ''}${P.overlap ? ` · las vueltas se pisan: elige puntos que abarquen ≥ ${P.needD.toFixed(0)} m` : ''}`;
+  el.classList.toggle('warn', !P.error && (P.grade * 100 > state.elev.maxGrade || P.overlap || P.clampedR || P.tight));
+  $('btnLoopAdd').disabled = !!P.error;
+}
+
 function fitRadiusMeters(key, run) {
   const arr = ctrlArray(key), L = state.layout;
   if (!run || run.length < 3 || !L) return null;
@@ -1516,6 +1675,7 @@ function forkSelection(side, sepM) {
   toast(`Bifurcación creada ${where}: ${len.toFixed(0)} m de pista, separación máxima ${total.toFixed(0)} m${total < sep - 1 ? ' (limitada por la curva)' : ''}.`);
 }
 function refreshArcBox() {
+  if (typeof app !== 'undefined' && app.refreshLoopInfo && document.getElementById('loopBox') && !document.getElementById('loopBox').hidden) setTimeout(() => app.refreshLoopInfo(), 0);
   refreshForkBox();
   const ctl = $('arcControls');
   if (!ctl) return;
@@ -1996,6 +2156,7 @@ function tick() {
         try {
           state.elev.flatZones = app.flatZonesS();
           state.elev.profileZones = app.profileZonesS();
+          state.scene.suspRanges = app.suspZonesS();
           state.result = computeElevation(state.layout, state.elev, overridesMap(state.layout), collectPins());
         } catch (err) {
           console.error(err);
@@ -2331,7 +2492,7 @@ function refreshPanels() {
       <div class="field"><label>Lado</label>${sideSel('barrierSide')}</div>
       <div class="abarBox${E.barrierSide === 'none' ? ' disabled' : ''}">
         ${numF('barrierHeight', 'Altura', 0.1, 3, 0.05)}
-        ${numF('barrierThick', 'Grosor', 0.05, 1.5, 0.05)}
+        ${numF('barrierThick', 'Grosor (0 = plano)', 0, 1.5, 0.05)}
         ${numF('barrierTile', 'Tiling', 0.5, 20, 0.5)}
         ${texRow('barrier', 'Como la pista')}
       </div>
@@ -2392,6 +2553,36 @@ function refreshPanels() {
   // zonas planas
   const fl = $('flatZoneList');
   fl.innerHTML = '';
+  const sl = $('suspZoneList');
+  if (sl && !draggingIn(sl)) {
+    sl.innerHTML = '';
+    const sz = app.suspZonesS();
+    state.suspZones.forEach((Z, i) => {
+      const c = sz.find((q) => q.idx === i);
+      const div = document.createElement('div');
+      div.className = 'item';
+      div.innerHTML = `<div class="head"><span><strong>suspendido_${String(i + 1).padStart(2, '0')}</strong>${c ? ` · s ${c.s0.toFixed(0)}–${c.s1.toFixed(0)} m` : ''}</span><button class="x del" title="Quitar (el terreno vuelve a adaptarse)">✕</button></div>
+        <div class="field"><label>Pilares <span class="val"><input type="number" class="spN" min="0" max="200" step="1" style="width:52px" value="${Z.pillars ?? 3}"></span></label><input type="range" class="spR" min="0" max="40" step="1" value="${Math.min(40, Z.pillars ?? 3)}"></div>
+        <label class="check small"><input type="checkbox" class="spDirt"${Z.dirt ? ' checked' : ''}> Camino de tierra</label>
+        <label class="check small"><input type="checkbox" class="spBar"${Z.barrier ? ' checked' : ''}> Barreras</label>`;
+      let editing = false;
+      const upd = (patch, done = true) => {
+        if (!editing) { pushUndo(); editing = true; }
+        Object.assign(Z, patch);
+        if (done) editing = false;
+        state.scene.suspRanges = app.suspZonesS();
+        preview.update(false, true); // pista, bordes y pilares
+      };
+      const pil = (v, done) => { v = Math.max(0, Math.min(200, Math.round(v))); div.querySelector('.spN').value = v; div.querySelector('.spR').value = Math.min(40, v); upd({ pillars: v }, done); };
+      div.querySelector('.spR').addEventListener('input', (e) => pil(parseFloat(e.target.value), false));
+      div.querySelector('.spR').addEventListener('change', () => { editing = false; });
+      div.querySelector('.spN').addEventListener('change', (e) => pil(parseFloat(e.target.value), true));
+      div.querySelector('.spDirt').addEventListener('change', (e) => upd({ dirt: e.target.checked }));
+      div.querySelector('.spBar').addEventListener('change', (e) => upd({ barrier: e.target.checked }));
+      div.querySelector('.del').addEventListener('click', () => { pushUndo(); state.suspZones.splice(i, 1); scheduleElev(); });
+      sl.appendChild(div);
+    });
+  }
   const pl = $('profileZoneList');
   if (pl) {
     pl.innerHTML = '';
@@ -2562,6 +2753,34 @@ function bindControls() {
     if (!openEndsSelected()) { toast('Para un puente: abre el circuito (borra un punto con «Abrir» activado) y selecciona los dos extremos con Shift.'); return; }
     createBridge(parseFloat($('bridgeWidthNum').value) || state.geom.width);
   });
+  // rizo: el botón de la barra muestra sus parámetros; «Añadir rizo» lo crea en los puntos seleccionados
+  $('btnLoop').addEventListener('click', () => {
+    const box = $('loopBox');
+    box.hidden = !box.hidden;
+    $('btnLoop').classList.toggle('active', !box.hidden);
+    if (!box.hidden && state.tool !== 'edit') setTool('edit');
+    refreshLoopInfo();
+  });
+  // radio: barra deslizable (0 = automático) y número (acepta más que la barra), sincronizados
+  // tope de la barra del radio: lo fija el usuario (se recuerda en este navegador)
+  const setLoopMax = (m, save = true) => {
+    m = Math.max(5, Math.min(5000, Math.round(m) || 150));
+    $('loopRadiusMax').value = m;
+    $('loopRadiusR').max = m; $('loopRadius').max = m;
+    const cur = parseFloat($('loopRadius').value) || 0;
+    if (cur > m) { $('loopRadius').value = m; }
+    $('loopRadiusR').value = Math.min(m, cur);
+    if (save) { try { localStorage.setItem('tsg.loopRadiusMax', String(m)); } catch { /* sin almacenamiento */ } }
+    refreshLoopInfo();
+  };
+  { let m0 = 150; try { m0 = parseFloat(localStorage.getItem('tsg.loopRadiusMax')) || 150; } catch { /* sin almacenamiento */ } setLoopMax(m0, false); }
+  $('loopRadiusMax').addEventListener('change', (e) => setLoopMax(parseFloat(e.target.value)));
+  $('loopRadiusR').addEventListener('input', (e) => { const v = parseFloat(e.target.value) || 0; $('loopRadius').value = v > 0 ? v : ''; refreshLoopInfo(); });
+  $('loopRadius').addEventListener('input', (e) => { const m = parseFloat($('loopRadiusMax').value) || 150; let v = parseFloat(e.target.value) || 0; if (v > m) { v = m; e.target.value = m; } $('loopRadiusR').value = Math.max(0, v); });
+  for (const id of ['loopTurns', 'loopSep', 'loopSide', 'loopRadius']) $(id).addEventListener('input', () => { $('loopSepVal').textContent = `${$('loopSep').value} m`; refreshLoopInfo(); });
+  $('btnLoopAdd').addEventListener('click', () => { if (addLoop(parseFloat($('loopTurns').value), parseFloat($('loopSep').value), $('loopSide').value, parseFloat($('loopRadius').value) || 0)) refreshLoopInfo(); });
+  $('loopSepVal').textContent = `${$('loopSep').value} m`;
+  app.refreshLoopInfo = refreshLoopInfo;
   $('btnTbFork').addEventListener('click', () => {
     focusPanel('arc');
     const sel = state.selSet;
@@ -2596,7 +2815,7 @@ function bindControls() {
   $('btnFit').addEventListener('click', () => editor.fit());
 
   // herramientas
-  document.querySelectorAll('#toolbar [data-tool]').forEach((b) => b.addEventListener('click', () => setTool(b.dataset.tool)));
+  document.querySelectorAll('#toolbar [data-tool], .viewProfile [data-tool]').forEach((b) => b.addEventListener('click', () => setTool(b.dataset.tool === state.tool && b.dataset.tool === 'profile' ? 'pan' : b.dataset.tool)));
 
   // ejemplos
   const sel = $('sampleSelect');
@@ -2609,7 +2828,7 @@ function bindControls() {
   $('btnNew').addEventListener('click', () => {
     pushUndo();
     state.project = { main: null, alts: [], start: null, reverse: false };
-    state.flatZones = []; state.profileZones = []; state.profileSel = null; state.overrides = []; state.image = null;
+    state.flatZones = []; state.profileZones = []; state.profileSel = null; state.suspZones = []; state.overrides = []; state.image = null;
     syncControls(); scheduleBuild(); setTool('draw');
     setTimeout(() => editor.fit(), 0);
   });
@@ -2787,7 +3006,7 @@ function setTool(t) {
   if (t === 'pan') document.querySelectorAll('.panel.focus-ring').forEach((p) => p.classList.remove('focus-ring')); // Navegar / Esc quitan el resaltado
   // al editar puntos, la barra lateral muestra «Puntos seleccionados»
   if (t === 'edit') { try { focusPanel('arc'); } catch { /* aún iniciando */ } }
-  document.querySelectorAll('#toolbar [data-tool]').forEach((b) => b.classList.toggle('active', b.dataset.tool === t));
+  document.querySelectorAll('#toolbar [data-tool], .viewProfile [data-tool]').forEach((b) => b.classList.toggle('active', b.dataset.tool === t));
 }
 
 async function loadImageBlob(blob, origin = 'cargada') {
@@ -2808,7 +3027,7 @@ function setImage(cv) {
   state.image = { canvas: cv, w: cv.width, h: cv.height };
   pushUndo();
   state.project = { main: null, alts: [], start: null, reverse: false };
-  state.flatZones = []; state.profileZones = []; state.profileSel = null; state.overrides = [];
+  state.flatZones = []; state.profileZones = []; state.profileSel = null; state.suspZones = []; state.overrides = [];
   refreshPanels();
   setTimeout(() => editor.fit(), 0);
   scheduleBuild();
@@ -2830,7 +3049,7 @@ function runTrace() {
     pushUndo();
     state.project = { main: e.data.main, alts: e.data.alts, start: null, reverse: false };
     state.closed = e.data.main.closed;
-    state.overrides = []; state.flatZones = []; state.profileZones = []; state.profileSel = null;
+    state.overrides = []; state.flatZones = []; state.profileZones = []; state.profileSel = null; state.suspZones = [];
     const inf = e.data.info;
     $('traceInfo').textContent = `Trazado en ${inf.ms} ms · modo: ${inf.modeName} · ${inf.crossNodes} cruce(s) y ${inf.forkNodes} bifurcación(es) en el esqueleto · ${e.data.alts.length} ruta(s) alternativa(s) · ${e.data.main.closed ? 'circuito cerrado' : 'ruta abierta'}.`;
     state.imageOpacity = Math.min(state.imageOpacity, 0.35);
@@ -2847,7 +3066,7 @@ function loadSample(k) {
   state.project = { ...s.build(), start: null, reverse: false };
   state.closed = true;
   state.geom.lapLength = s.lap || 1000;
-  state.flatZones = []; state.profileZones = []; state.profileSel = null; state.overrides = []; state.image = null;
+  state.flatZones = []; state.profileZones = []; state.profileSel = null; state.suspZones = []; state.overrides = []; state.image = null;
   syncControls();
   scheduleBuild();
   preview.fitted = false;
@@ -2864,7 +3083,7 @@ function saveProject() {
     stats: state.layout ? { length: Math.round(state.layout.routes[0].L), routes: state.layout.routes.length, crossings: state.result ? state.result.crossings.length : 0, hills: state.hills.length } : null,
     project: state.project, geom: state.geom, closed: state.closed,
     elev: { ...state.elev, flatZones: undefined, profileZones: undefined }, exp: state.exp, trace: state.trace,
-    overrides: state.overrides, flatZones: state.flatZones, profileZones: state.profileZones,
+    overrides: state.overrides, flatZones: state.flatZones, profileZones: state.profileZones, suspZones: state.suspZones,
     image: state.image ? state.image.canvas.toDataURL('image/png') : null,
     scene: state.scene,
     densityPaint: state.densityPaint,
@@ -2883,6 +3102,11 @@ function saveProject() {
     altTexs: Object.fromEntries(Object.entries(state.altTexs).filter(([uid]) => state.project.alts.some((a) => a.uid === uid)).map(([uid, t]) => [uid, Object.fromEntries(Object.entries(t).map(([k, cv]) => [k, cv ? cv.toDataURL('image/png') : null]))])),
     coveredTex: state.coveredTex ? state.coveredTex.toDataURL('image/png') : null,
     dirtTex: state.dirtTex ? state.dirtTex.toDataURL('image/png') : null,
+    riverWallTex: state.riverWallTex ? state.riverWallTex.toDataURL('image/png') : null,
+    suspTex: state.suspTex ? state.suspTex.toDataURL('image/png') : null,
+    suspBarrierTex: state.suspBarrierTex ? state.suspBarrierTex.toDataURL('image/png') : null,
+    suspDirtTex: state.suspDirtTex ? state.suspDirtTex.toDataURL('image/png') : null,
+    fallWallTex: state.fallWallTex ? state.fallWallTex.toDataURL('image/png') : null,
     terrainTex: state.terrainTex ? state.terrainTex.toDataURL('image/png') : null,
     grassTex: state.grassTex ? state.grassTex.toDataURL('image/png') : null,
     itemTex: Object.fromEntries(Object.entries(state.itemTex).map(([k, v]) => [k, v ? v.toDataURL('image/png') : null])),
@@ -3017,6 +3241,7 @@ async function openProject(text) {
   state.overrides = d.overrides || [];
   state.flatZones = d.flatZones || [];
   state.profileZones = d.profileZones || []; state.profileSel = null;
+  state.suspZones = d.suspZones || [];
   state.imageOpacity = d.imageOpacity ?? 0.35;
   state.image = null;
   if (d.image) {
@@ -3062,6 +3287,11 @@ async function openProject(text) {
     for (const k of keys) sc[gk(k)] = DEFAULT_SCENE[gk(k)];
   }
   state.dirtTex = await toCanvas(d.dirtTex);
+  state.riverWallTex = await toCanvas(d.riverWallTex);
+  state.suspTex = await toCanvas(d.suspTex);
+  state.suspBarrierTex = await toCanvas(d.suspBarrierTex);
+  state.suspDirtTex = await toCanvas(d.suspDirtTex);
+  state.fallWallTex = await toCanvas(d.fallWallTex);
   state.densityPaint = d.densityPaint || [];
   state.terrainSculpt = d.terrainSculpt || [];
   refreshSculptInfo();
@@ -3088,6 +3318,7 @@ async function openProject(text) {
   renderItemsPanel();
   itemsChanged();
   if (d.game) Object.assign(state.game, d.game);
+  if (app.syncGameCam) app.syncGameCam();
   if (d.sky) { state.skyTex = await toCanvas(d.sky); state.skyCustom = true; } else { state.skyTex = makeDefaultSky(); state.skyCustom = false; }
   refreshSkyThumb();
   state.terrainTex = await toCanvas(d.terrainTex);
@@ -3243,6 +3474,7 @@ function syncSceneControls() {
   if ($('sculptBrushPVal')) $('sculptBrushPVal').textContent = `${sc.sculptBrush} m`;
   refreshHillPanel();
   for (const k of ['tunnelShape', 'tunnelType', 'tunnelOpen', 'tunnelHeight', 'caveSize', 'tunnelPillars', 'tunnelDensity', 'portalFrame', 'portalDepth', 'startGateHeight']) set(k, sc[k]);
+  set('caveRocks', sc.caveRocks !== false);
   set('startGate', sc.startGate); if (document.activeElement !== $('startText')) set('startText', sc.startText);
   $('startGateHeightVal').textContent = `${sc.startGateHeight} m`;
   $('tunnelDensityVal').textContent = (() => { const { N, step } = tunnelResolution(sc); return `${N - 1} lados · cada ${step.toFixed(1)} m`; })();
@@ -3276,6 +3508,8 @@ function syncSceneControls() {
   thumb('trackTexThumb', state.trackTex || defaultTrackCanvas(), 'btnTrackTexRemove');
   $('btnTrackTexRemove').disabled = !state.trackTex;
   thumb('bridgeTexThumb', state.bridgeTex || defaultBridgeCanvas(), 'btnBridgeTexRemove');
+  for (const [k, id] of [['riverWallTex', 'riverWall'], ['fallWallTex', 'fallWall'], ['suspTex', 'suspTex'], ['suspBarrierTex', 'suspBarrierTex'], ['suspDirtTex', 'suspDirtTex']]) { const img = $(id + 'Thumb'); img.hidden = !state[k]; if (state[k]) img.src = thumbURL(state[k]); $(id + 'Remove').disabled = !state[k]; }
+  set('riverWallTile', sc.riverWallTile ?? 4); set('riverWallTileNum', sc.riverWallTile ?? 4);
   thumb('coveredTexThumb', app.coveredTexCanvas(), 'btnCoveredTexRemove'); $('btnCoveredTexRemove').disabled = !state.coveredTex;
   thumb('barrierTexThumb', state.barrierTex || defaultBarrierCanvas(), 'btnBarrierTexRemove');
   $('btnBarrierTexRemove').disabled = !state.barrierTex;
@@ -3577,6 +3811,7 @@ async function loadTexture(file, which) {
     state[which] = cv;
     syncSceneControls();
     sceneChanged();
+    editor.draw();
   } catch (err) { toast('No se pudo leer la textura: ' + err.message); }
 }
 const TERRAIN_KEYS = ['terrainMargin', 'terrainDensity', 'terrainMaxPolys', 'terrainGap', 'terrainFalloff', 'terrainTexRepX', 'terrainTexRepY', 'paintFactor', 'skirts'];
@@ -3608,7 +3843,7 @@ function focusPanel(id, sub = null) {
 /** Botones (fuera de la barra lateral) con parámetros asociados: a qué sección llevan. */
 const PANEL_FOR_BUTTON = {
   'tool:edit': 'arc', 'tool:draw': 'trace', 'tool:extend': 'trace', 'tool:alt': 'alts', 'tool:start': 'gate', 'tool:ref': 'ref',
-  btnDecoNew: 'deco', 'tool:hill': 'hills', 'tool:river': 'rivers', 'tool:paint': 'terrain', 'tool:sculpt': 'terrain', 'tool:flat': 'elev', 'tool:profile': 'elev', btnSculptTool: 'terrain', btnRef3dTop: 'ref3d',
+  btnDecoNew: 'deco', 'tool:hill': 'hills', 'tool:river': 'rivers', 'tool:paint': 'terrain', 'tool:sculpt': 'terrain', 'tool:flat': 'elev', 'tool:profile': 'elev', 'tool:susp': 'susp', btnSculptTool: 'terrain', btnRef3dTop: 'ref3d',
   btnGame: 'sky', btnExportBlender: 'export', btnExportMax: 'export', btnExportJSON: 'export', btnExportOBJ: 'export',
   btnExportGLB2: 'export', btnExportFBX2: 'export', btnTbRadius: 'arc', btnTbFork: 'arc', btnGenTerrain: 'terrain', btnGenTrees: 'trees',
 };
@@ -3681,12 +3916,12 @@ function bindSceneControls() {
     const f = e.key === ']' ? 1.15 : 1 / 1.15;
     if (state.tool === 'hill') setHillBrush(sc.hillBrush * f);
     else if (state.tool === 'sculpt') { sc.sculptBrush = Math.round(Math.min(200, Math.max(2, sc.sculptBrush * f))); syncSceneControls(); editor.draw(); }
-    else { sc.paintBrush = Math.round(Math.min(200, Math.max(3, sc.paintBrush * f))); syncSceneControls(); editor.draw(); }
+    else { const k = brushKey(state.tool); sc[k] = Math.round(Math.min(200, Math.max(k === 'riverBrush' ? 1 : 3, sc[k] * f))); syncSceneControls(); editor.draw(); } // subdivisión, ríos y pinceles de elementos
     e.preventDefault();
   });
   $('paintBrush').addEventListener('input', () => {
     const v = parseFloat($('paintBrush').value);
-    if (state.tool === 'hill') { sc.hillBrush = v; if (app.setHillBrush) app.setHillBrush(v); } else if (state.tool === 'sculpt') { sc.sculptBrush = v; syncSceneControls(); } else sc.paintBrush = v;
+    if (state.tool === 'hill') { sc.hillBrush = v; if (app.setHillBrush) app.setHillBrush(v); } else if (state.tool === 'sculpt') { sc.sculptBrush = v; syncSceneControls(); } else sc[brushKey(state.tool)] = v; // cada pincel guarda su tamaño (subdivisión, ríos…)
     $('paintBrushVal').textContent = `${v} m`;
     editor.draw();
   });
@@ -3790,12 +4025,34 @@ function bindSceneControls() {
   $('riverDepth').addEventListener('input', (e) => { sc.riverDepth = parseFloat(e.target.value); syncSceneControls(); });
   $('riverWallSubdiv').addEventListener('input', (e) => { sc.riverWallSubdiv = Math.round(parseFloat(e.target.value)); syncSceneControls(); });
   $('btnRiverTool').addEventListener('click', () => setTool('river'));
+  // texturas propias de los tramos suspendidos (pista, barrera y camino de tierra)
+  for (const [id, key] of [['suspTex', 'suspTex'], ['suspBarrierTex', 'suspBarrierTex'], ['suspDirtTex', 'suspDirtTex']]) {
+    $(id + 'Btn').addEventListener('click', () => $(id + 'File').click());
+    $(id + 'File').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) loadTexture(f, key); });
+    $(id + 'Remove').addEventListener('click', () => { state[key] = null; syncSceneControls(); sceneChanged(); editor.draw(); });
+  }
+  $('btnSuspTool').addEventListener('click', () => setTool('susp'));
+  $('caveRocks').addEventListener('change', (e) => { sc.caveRocks = e.target.checked; sceneChanged(); });
+  // material de las paredes socavadas (ríos y cascadas)
+  for (const [id, key] of [['riverWall', 'riverWallTex'], ['fallWall', 'fallWallTex']]) {
+    $(id + 'Btn').addEventListener('click', () => $(id + 'File').click());
+    $(id + 'File').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) loadTexture(f, key); });
+    $(id + 'Remove').addEventListener('click', () => { state[key] = null; syncSceneControls(); sceneChanged(); });
+  }
   $('btnRiverClear').addEventListener('click', () => { if (!state.rivers.length) return; pushUndo(); state.rivers = []; state.selRiver = null; riversChanged(); });
   // wireframe
   const wire = () => { preview.wire.on = $('wireOn').checked; preview.wire.color = $('wireColor').value; preview.wire.opacity = parseFloat($('wireOpacity').value); preview.applyWireframe(); };
   $('wireOn').addEventListener('change', wire);
   $('wireColor').addEventListener('input', wire);
   $('wireOpacity').addEventListener('input', wire);
+  // F3: mostrar u ocultar el wireframe (en cualquier momento, incluso con un campo enfocado)
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'F3') return;
+    e.preventDefault();
+    $('wireOn').checked = !$('wireOn').checked;
+    wire();
+    toast(`Wireframe ${$('wireOn').checked ? 'visible' : 'oculto'} (F3)`);
+  });
   // cámara de juego
   const game = new GameCam(preview, app);
   preview.game = game;
@@ -3816,6 +4073,15 @@ function bindSceneControls() {
     setCam(state.game.mode);
   });
   document.querySelectorAll('#gameBar [data-cam]').forEach((b) => b.addEventListener('click', () => setCam(b.dataset.cam)));
+  // ajustes de la cámara de juego (se guardan con el proyecto)
+  const CAM_DEF = { camDist: 8.5, camHeight: 2.9, camTilt: 0, fov: 62 };
+  const camCtl = [['gameCamDist', 'camDist', (v) => `${v} m`], ['gameCamHeight', 'camHeight', (v) => `${v} m`], ['gameCamTilt', 'camTilt', (v) => `${v}°`], ['gameCamFov', 'fov', (v) => `${v}°`]];
+  const syncCam = () => { for (const [id, k, fmt] of camCtl) { const v = state.game[k] ?? CAM_DEF[k]; $(id).value = v; $(id + 'Val').textContent = fmt(v); } };
+  for (const [id, k] of camCtl) $(id).addEventListener('input', (e) => { state.game[k] = parseFloat(e.target.value); syncCam(); });
+  $('btnGameCam').addEventListener('click', () => { $('gameCamBox').hidden = !$('gameCamBox').hidden; $('btnGameCam').classList.toggle('active', !$('gameCamBox').hidden); syncCam(); });
+  $('btnGameCamReset').addEventListener('click', () => { Object.assign(state.game, CAM_DEF); syncCam(); });
+  syncCam();
+  app.syncGameCam = syncCam;
   // velocidad: negativa = marcha atrás
   const speedLabel = (v) => `${v} km/h${v < 0 ? ' (marcha atrás)' : v === 0 ? ' (detenido)' : ''}`;
   const setSpeed = (v, from) => {
@@ -3881,6 +4147,7 @@ function bindSceneControls() {
   pair('tunnelWidth', 'tunnelWidthNum', 'tunnelWidth', 4, false);
   pair('terrainTexRepX', 'terrainTexRepXNum', 'terrainTexRepX', 0.1, false);
   pair('terrainTexRepY', 'terrainTexRepYNum', 'terrainTexRepY', 0.1, false);
+  pair('riverWallTile', 'riverWallTileNum', 'riverWallTile', 0.5, false); // paredes socavadas de ríos y cascadas
   // texturas
   $('btnTrackTex').addEventListener('click', () => $('fileTrackTex').click());
   $('fileTrackTex').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) loadTexture(f, 'trackTex'); });
@@ -3905,7 +4172,7 @@ function bindSceneControls() {
   pair('dirtWidth', 'dirtWidthNum', 'dirtWidth', 0.2, false);
   pair('dirtTile', 'dirtTileNum', 'dirtTile', 0.5, false);
   pair('barrierHeight', 'barrierHeightNum', 'barrierHeight', 0.1, false);
-  pair('barrierThick', 'barrierThickNum', 'barrierThick', 0.05, false);
+  pair('barrierThick', 'barrierThickNum', 'barrierThick', 0, false); // 0 = plano de una cara
   pair('barrierTile', 'barrierTileNum', 'barrierTile', 0.5, false);
   // textura propia de los tramos cubiertos (las de cada atajo están en su tarjeta)
   for (const [btn, file, rem, key] of [['btnCoveredTex', 'fileCoveredTex', 'btnCoveredTexRemove', 'coveredTex']]) {
@@ -3941,7 +4208,7 @@ function bindSceneControls() {
     const { exportGLB } = await import('./export-glb.js');
     toast('Generando escena .glb…');
     try {
-      const { buffer, info } = await exportGLB(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: state.bridgeTex || defaultBridgeCanvas(), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
+      const { buffer, info } = await exportGLB(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: state.bridgeTex || defaultBridgeCanvas(), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
       download('track_scene.glb', buffer, 'model/gltf-binary');
       toast(`Escena exportada: pista ${info.trackTris.toLocaleString('es')} triángulos${info.terrainTris ? `, terreno ${info.terrainTris.toLocaleString('es')}` : ''}${info.hills ? `, ${info.hills} cerro(s)` : ''}${info.tunnels ? `, ${info.tunnels} túnel(es)` : ''}${info.gateTris ? ', pórtico de salida' : ''}${info.items ? `, ${info.items} elementos de pista` : ''}${info.trees ? `, ${info.trees} árboles` : ''}. Todo como objetos separados.`);
     } catch (err) { console.error(err); toast('No se pudo exportar la escena: ' + err.message); }
@@ -3953,7 +4220,7 @@ function bindSceneControls() {
     const { exportFBX } = await import('./export-fbx.js');
     toast('Generando escena .fbx…');
     try {
-      const { buffer, info } = await exportFBX(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: state.bridgeTex || defaultBridgeCanvas(), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
+      const { buffer, info } = await exportFBX(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: state.bridgeTex || defaultBridgeCanvas(), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
       download('track_scene.fbx', buffer, 'application/octet-stream');
       toast(`FBX exportado (${(buffer.length / 1048576).toFixed(1)} MB): pista${info.terrainTris ? ', terreno' : ''}${info.hills ? `, ${info.hills} cerro(s)` : ''}${info.tunnels ? `, ${info.tunnels} túnel(es)` : ''}${info.gateTris ? ', pórtico' : ''}${info.items ? `, ${info.items} elementos de pista` : ''}${info.trees ? `, ${info.trees} árboles` : ''}${info.grass ? ', hierba' : ''}. Z arriba, en metros, con texturas incrustadas.`);
     } catch (err) { console.error(err); toast('No se pudo exportar el FBX: ' + err.message); }
@@ -4108,7 +4375,7 @@ const HINTS = {
   dirtTile: 'Cada cuántos metros de pista se repite la textura del camino de tierra.', dirtTileNum: 'Metros por repetición de la textura del camino.',
   barrierSide: 'Barrera de contención a un costado o a ambos. Se abre sola en las salidas de los atajos; dentro de los túneles sigue, con la pared del túnel después.',
   barrierHeight: 'Altura de la barrera.', barrierHeightNum: 'Altura exacta de la barrera en metros.',
-  barrierThick: 'Grosor de la barrera.', barrierThickNum: 'Grosor exacto de la barrera en metros.',
+  barrierThick: 'Grosor de la barrera. Con 0 es un plano de una sola cara (mirando a la calzada).', barrierThickNum: 'Grosor exacto de la barrera en metros.',
   barrierTile: 'Tiling de la barrera: metros de pista por cada repetición de la textura (rojo + blanco en la de por defecto).', barrierTileNum: 'Metros por repetición de la textura de la barrera.',
   btnBarrierTex: 'Carga una textura para la barrera: U a lo largo, V de abajo hacia arriba.', btnDirtTex: 'Carga una textura para el camino de tierra: U a lo ancho, V a lo largo.',
   tunnelMaxTris: 'Tope de triángulos de cada túnel (paredes, techo y veredas): manda sobre la densidad.', tunnelMaxTrisNum: 'Tope exacto de triángulos por túnel.',
@@ -4120,7 +4387,7 @@ const HINTS = {
   btnSculptTool: 'Activa «Esculpir relieve» en el mapa y en la vista 3D: clic derecho eleva y clic izquierdo hunde el terreno. Es parte de la misma malla del terreno.',
   btnSculptClear: 'Quita todo el relieve esculpido (Ctrl+Z lo recupera).',
   paintErase: 'Pinta borrando (también con Alt o clic derecho).',
-  wireOn: 'Muestra el wireframe de pista, terreno y árboles en la vista 3D.',
+  wireOn: 'Muestra el wireframe de pista, terreno y árboles en la vista 3D (F3 lo muestra u oculta).',
   wireColor: 'Color del wireframe.',
   wireOpacity: 'Opacidad del wireframe.',
   btnGame: 'Un auto recorre la pista solo. Tercera o primera persona, velocidad ajustable; la cámara sigue curvas, pendientes y peralte.',

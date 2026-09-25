@@ -5,7 +5,7 @@ import { computeElevation } from '../js/elevation.js';
 import { traceImage } from '../js/trace.js';
 import { exportBlender, exportMax, exportJSON, exportOBJ, routeSamples, bezierKnots, bezierError } from '../js/export.js';
 import { rasterize } from './raster.js';
-import { buildTerrain, buildTrees, buildTrackMesh, trackRows, buildDecoInstances, coveredRanges, isCovered, buildHills, buildStartGate, buildGrass, makeGround } from '../js/scene.js';
+import { buildTerrain, buildTrees, buildTrackMesh, trackRows, buildDecoInstances, coveredRanges, isCovered, buildHills, buildStartGate, buildGrass, makeGround, suspPillars } from '../js/scene.js';
 import { edgeSamples } from '../js/export.js';
 import { computeItems, defaultGroup, itemAt } from '../js/items.js';
 import { nearestOnSamples } from '../js/geometry.js';
@@ -133,6 +133,14 @@ for (const [key, s] of Object.entries(SAMPLES)) {
         const H2 = buildHills(L, E, { ...sp0, tunnelOpen: 'left', tunnelOverrides: [{ k: t0.k, s: (t0.s0 + t0.s1) / 2, open: 'none' }] }, T, hills);
         const g2 = H2.tunnelGeo.find((g) => g.id === t0.id);
         check(g2 && g2.openMode === 'none' && g2.pillars.length === 0 && H2.tunnelGeo.filter((g) => g.id !== t0.id).every((g) => g.openMode === 'left'), `${key}: un túnel cerrado con el general abierto`);
+        if (key === 'oval') { // cavernas: rocas y estalactitas opcionales (general y por túnel)
+          const spN = { ...sp0, tunnelType: 'natural' };
+          const nRock = (H) => H.tunnelGeo.reduce((acc, g) => acc + g.stalactites.indices.length + g.rocks.indices.length, 0);
+          const HN = buildHills(L, E, spN, T, hills), HO = buildHills(L, E, { ...spN, caveRocks: false }, T, hills);
+          const HP = buildHills(L, E, { ...spN, caveRocks: false, tunnelOverrides: [{ k: t0.k, s: (t0.s0 + t0.s1) / 2, rocks: true }] }, T, hills);
+          const gp = HP.tunnelGeo.find((g) => g.id === t0.id);
+          check(nRock(HN) > 0 && nRock(HO) === 0 && gp.stalactites.indices.length + gp.rocks.indices.length > 0, `${key}: cavernas con o sin rocas y estalactitas (${nRock(HN)} / ${nRock(HO)})`);
+        }
       }
     }
     // lado abierto: no queda cerro en el piso entre los pilares; forma, tipo y geometría propios por túnel
@@ -504,6 +512,8 @@ for (const [key, s] of Object.entries(SAMPLES)) {
   const d0 = T.sample(cx - 30, cy - 20) - TR.sample(cx - 30, cy - 20);
   check(d0 > 2.4 && d0 < 3.6, `río socavado: hunde el terreno (${d0.toFixed(2)} m)`);
   check(Math.abs(T.sample(cx - 30, cy + 20) - TR.sample(cx - 30, cy + 20)) < 0.3, 'río socavado: fuera del cauce no cambia');
+  check(TR.wall && TR.wall.tris > 20 && TR.baseIndices.length + TR.wall.indices.length === TR.indices.length, `río socavado: lecho y paredes aparte (${TR.wall && TR.wall.tris} triángulos)`);
+  check(!T.wall, 'sin ríos socavados no hay malla de cauces');
   const RW = buildRivers(TR, null, [rv]);
   check(RW.length === 1 && RW[0].tris > 10 && RW[0].name === 'rio_01', `río: malla de agua (${RW.length && RW[0].tris} triángulos)`);
   if (RW.length) {
@@ -523,6 +533,7 @@ for (const [key, s] of Object.entries(SAMPLES)) {
   const dh = Hno.hillSample(1, cx + 30, cy + 5) - HF.hillSample(1, cx + 30, cy + 5);
   check(dh > 1.8 && dh < 3.2, `cascada socavada: hunde el cerro (${dh.toFixed(2)} m)`);
   check(HF.hills[0].subdivided, 'cascada socavada: paredes con más geometría');
+  check(HF.hills[0].wall && HF.hills[0].wall.tris > 10, 'cascada socavada: cauce con material propio');
   const FW = buildRivers(T, HF, [fall]);
   check(FW.length === 1 && FW[0].kind === 'fall' && FW[0].name === 'cascada_01', 'cascada: malla de agua propia');
 }
@@ -548,6 +559,48 @@ for (const [key, s] of Object.entries(SAMPLES)) {
   check(Math.abs(zAt(E2, 410) - zAt(E1, 410)) < 0.3, 'perfil dibujado: manda sobre las alturas fijadas del tramo');
 }
 
+// tramo suspendido: el terreno no se adapta, pilares hasta el suelo, bordes y material propios; barrera de grosor 0
+{
+  const L = buildLayout(SAMPLES.oval.build(), { lapLength: 1000 });
+  const r = L.routes[0];
+  const s0 = 300, s1 = 520, zb0 = 0;
+  const pts = [[0, 0], [0.25, 10], [0.75, 10], [1, 0]].map(([t, dz]) => [t, dz]);
+  const E0 = computeElevation(L, { hills: 0.3 });
+  const zS = E0.routes[0].z[Math.round(s0 / r.ds)];
+  const E = computeElevation(L, { hills: 0.3, profileZones: [{ s0, s1, pts: pts.map(([t, dz]) => [t, zS + dz]) }] });
+  const susp = [{ k: 0, s0, s1, pillars: 5, dirt: true, barrier: true }];
+  const sp = { terrain: true, terrainDensity: 45, barrierSide: 'none', dirtSide: 'none' };
+  const TA = buildTerrain(L, E, sp), TS = buildTerrain(L, E, { ...sp, suspRanges: susp });
+  const i = Math.round(410 / r.ds), x = r.x[i], y = r.y[i], zt = E.routes[0].z[i];
+  const gA = zt - TA.sample(x, y), gS = zt - TS.sample(x, y);
+  check(gA < 1 && gS > 5, `tramo suspendido: el terreno no sube a la pista (bajo la pista ${gA.toFixed(2)} → ${gS.toFixed(2)} m)`);
+  const PL = suspPillars(L, E, { suspRanges: susp }, makeGround(TS, null));
+  check(PL.length >= 3 && PL.every((p) => p.zTop > p.zBot + 0.6), `tramo suspendido: pilares hasta el suelo (${PL.length})`);
+  const TM = buildTrackMesh(L, E, { ...sp, suspRanges: susp });
+  check(TM.suspParts.length === 1 && TM.suspParts[0].name === 'ruta_principal_suspendido' && TM.groups[4].count > 0, 'tramo suspendido: objeto y grupo de material propios');
+  const B = buildEdgeMeshes(L, E, { ...sp, suspRanges: susp });
+  check(B.barriers.length === 2 && B.barriers.every((b) => b.susp) && B.dirt.length === 2 && B.dirt.every((d) => d.susp), `tramo suspendido: barreras y camino propios aunque la pista no los tenga (${B.barriers.length}, ${B.dirt.length})`);
+  const B2 = buildEdgeMeshes(L, E, { ...sp, barrierSide: 'both', suspRanges: [{ ...susp[0], barrier: false, dirt: false }] });
+  const nS = B2.barriers.filter((b) => b.susp).length;
+  check(B2.barriers.length === 2 && nS === 0, 'tramo suspendido sin barreras: la barrera de la pista se corta ahí');
+  // barrera de grosor 0: una sola cara, con la normal hacia la calzada
+  const BP = buildEdgeMeshes(L, E, { barrierSide: 'both', barrierThick: 0 });
+  let okN = BP.barriers.length === 2;
+  for (const m of BP.barriers) {
+    okN = okN && m.plane && m.indices.length / 6 === m.segs.length;
+    const P = m.positions, I = m.indices, a = I[0], b = I[1], c = I[2];
+    const ux = P[b * 3] - P[a * 3], uy = P[b * 3 + 1] - P[a * 3 + 1], uz = P[b * 3 + 2] - P[a * 3 + 2];
+    const vx = P[c * 3] - P[a * 3], vy = P[c * 3 + 1] - P[a * 3 + 1], vz = P[c * 3 + 2] - P[a * 3 + 2];
+    const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz;
+    const q = m.segs[0] * 6, fr = m.segs[0];
+    // la calzada está hacia el eje: vector del vértice al eje más cercano
+    const n0 = nearestOnSamples(r, P[q * 3], P[q * 3 + 1]);
+    const dx = r.x[n0.i] - P[q * 3], dy = r.y[n0.i] - P[q * 3 + 1];
+    okN = okN && nx * dx + ny * dy > 0;
+  }
+  check(okN, 'barrera de grosor 0: plano de una cara mirando a la calzada');
+}
+
 // tramos cubiertos (bajo cruces y en túneles): material propio, cortes exactos
 {
   const L = buildLayout(SAMPLES.figure8.build(), { lapLength: 1000 });
@@ -555,7 +608,7 @@ for (const [key, s] of Object.entries(SAMPLES)) {
   const cov = coveredRanges(L, E, [{ k: 0, s0: 100, s1: 160 }]);
   check(cov.length === 1 + E.crossings.length, `cubiertos: túnel + ${E.crossings.length} cruce(s)`);
   const TM = buildTrackMesh(L, E, { coveredRanges: cov, trackDensity: 30, trackMeshMode: 'optimized', trackAdapt: 1 });
-  check(TM.groups.length === 4 && TM.groups[2].count > 0 && TM.coveredParts.length === 1 && TM.coveredParts[0].name === 'ruta_principal_cubierto', `cubiertos: grupo y objeto propios (${TM.groups.map((g) => g.count).join('/')})`);
+  check(TM.groups.length >= 4 && TM.groups[2].count > 0 && TM.coveredParts.length === 1 && TM.coveredParts[0].name === 'ruta_principal_cubierto', `cubiertos: grupo y objeto propios (${TM.groups.map((g) => g.count).join('/')})`);
   const r = L.routes[0], cp = TM.coveredParts[0];
   let inside = 0, total = 0;
   const ez = E.routes[0].z;
