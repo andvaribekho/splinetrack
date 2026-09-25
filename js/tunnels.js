@@ -349,7 +349,10 @@ export function applyTunnelOverrides(layout, runs, sp) {
     t.meshMode = (o && o.meshMode) || sp.tunnelMeshMode || 'uniform';
     t.maxTris = o && Number.isFinite(o.maxTris) ? Math.max(100, o.maxTris) : sp.tunnelMaxTris ?? 60000;
     t.adapt = o && Number.isFinite(o.adapt) ? clamp(o.adapt, 0, 1) : sp.tunnelAdapt ?? 0.5;
-    t.rocks = o && typeof o.rocks === 'boolean' ? o.rocks : sp.caveRocks !== false; // rocas y estalactitas (cavernas)
+    t.rocks = o && typeof o.rocks === 'boolean' ? o.rocks : sp.caveRocks !== false; // rocas del piso (cavernas)
+    // estalactitas: por separado (los proyectos anteriores tenían un solo valor para ambas cosas)
+    const genStal = typeof sp.caveStalactites === 'boolean' ? sp.caveStalactites : sp.caveRocks !== false;
+    t.stal = o && typeof o.stal === 'boolean' ? o.stal : o && typeof o.rocks === 'boolean' ? o.rocks : genStal;
     t.sp = { ...sp, tunnelShape: t.shape, tunnelType: t.type, tunnelDensity: t.density };
   }
   return runs;
@@ -618,14 +621,15 @@ export function buildTunnelGeometry(layout, elev, spIn, runs, opts = {}) {
       }
     }
     // cavernas: rocas y estalactitas opcionales (general o propio de cada túnel)
-    if (t.rocks === false) { sPos.length = 0; sIdx.length = 0; rPos.length = 0; rIdx.length = 0; }
+    if (t.rocks === false) { rPos.length = 0; rIdx.length = 0; }
+    if (t.stal === false) { sPos.length = 0; sIdx.length = 0; }
     const stalactites = { positions: new Float32Array(sPos), indices: sIdx };
     const rocks = { positions: new Float32Array(rPos), indices: rIdx };
     const tris = (walls.indices.length + ceiling.indices.length + walkways.indices.length + portals.reduce((a2, p) => a2 + p.geo.indices.length, 0) + sIdx.length + rIdx.length) / 3 + pillars.length * 12;
     out.push({
       id: t.id, name: `tunel_${String(t.id + 1).padStart(2, '0')}`, len: t.s1 - t.s0, k: t.k, sMid: (t.s0 + t.s1) / 2,
       openMode: t.openMode ?? sp.tunnelOpen, pillarCount: nPil, custom: !!t.custom, key: t.key ?? -1,
-      shape: sp.tunnelShape, type: sp.tunnelType, natural, density: sp.tunnelDensity, meshMode: t.meshMode || 'uniform', maxTris: t.maxTris, adapt: t.adapt, rocks: t.rocks !== false, sections: ns + 1, profilePts: N,
+      shape: sp.tunnelShape, type: sp.tunnelType, natural, density: sp.tunnelDensity, meshMode: t.meshMode || 'uniform', maxTris: t.maxTris, adapt: t.adapt, rocks: t.rocks !== false, stal: t.stal !== false, sections: ns + 1, profilePts: N,
       walls, ceiling, walkways, portals, stalactites, rocks, pillars, tris, box,
     });
   }

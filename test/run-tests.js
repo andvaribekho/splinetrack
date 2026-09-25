@@ -13,6 +13,7 @@ import { buildEdgeMeshes } from '../js/edges.js';
 import { edgeExtents } from '../js/tunnels.js';
 import { buildRivers } from '../js/rivers.js';
 import { sculptField } from '../js/scene.js';
+import { buildShadows, shadowCasters, sunShadowDir } from '../js/shadows.js';
 import { SCULPT_PRESETS, curveLUT, curveEval, normCurve, presetOf } from '../js/sculptcurve.js';
 
 let fails = 0, passes = 0;
@@ -689,7 +690,7 @@ for (const [key, s] of Object.entries(SAMPLES)) {
   const capped = buildTrackMesh(L, E, { trackMaxTris: 3000 });
   check(capped.indices.length / 3 <= 3000, `densidad pista: tope de triángulos (${capped.indices.length / 3})`);
   // UV: la coordenada a lo largo es proporcional a la distancia recorrida en cada sección
-  const tm = buildTrackMesh(L, E, { trackDensity: 30, trackMeshMode: 'optimized', trackAdapt: 1, skirts: false, trackTexReps: 100 });
+  const tm = buildTrackMesh(L, E, { trackDensity: 30, trackMeshMode: 'optimized', trackAdapt: 1, skirts: false, trackTexReps: 100, trackDivs: 1 });
   const p0 = tm.parts[0], reps = 100 / r.L;
   let worstUV = 0;
   for (let v = 1; v < p0.positions.length / 3; v += 3) { // columna central
@@ -765,6 +766,75 @@ for (const [key, s] of Object.entries(SAMPLES)) {
     for (let k = 0; k < r.n; k++) { const j = (k + 1) % r.n, d = Math.hypot(r.x[j] - r.x[k], r.y[j] - r.y[k]); dmax = Math.max(dmax, d); dmin = Math.min(dmin, d); }
     check(dmax / dmin < 1.05, `puente desplazado ${side}: muestreo uniforme (${dmin.toFixed(3)}–${dmax.toFixed(3)})`);
   }
+}
+
+// ---- divisiones a lo ancho de la pista: 0 por defecto, misma forma con menos triángulos ----
+{
+  const L = buildLayout(SAMPLES.oval.build(), { lapLength: 1000 });
+  const E = computeElevation(L, { hills: 0.5, bank: true });
+  const m0 = buildTrackMesh(L, E, { skirts: false }), m1 = buildTrackMesh(L, E, { skirts: false, trackDivs: 1 }), m3 = buildTrackMesh(L, E, { skirts: false, trackDivs: 3 });
+  check(m1.indices.length === 2 * m0.indices.length && m3.indices.length === 4 * m0.indices.length, `divisiones a lo ancho: triángulos ${m0.indices.length / 3} / ${m1.indices.length / 3} / ${m3.indices.length / 3}`);
+  // la columna del centro (trackDivs 1) cae justo en la recta entre los bordes
+  const P = m1.parts[0].positions;
+  let dev = 0;
+  for (let v = 0; v + 2 < P.length / 3; v += 3) for (let c = 0; c < 3; c++) dev = Math.max(dev, Math.abs(P[(v + 1) * 3 + c] - (P[v * 3 + c] + P[(v + 2) * 3 + c]) / 2));
+  check(dev < 1e-4, `divisiones a lo ancho: 0 divisiones no cambia la forma (desvío ${dev.toExponential(1)})`);
+}
+
+// ---- planos de sombra ----
+{
+  const L = buildLayout(SAMPLES.oval.build(), { lapLength: 1000 });
+  const E = computeElevation(L, { hills: 0.6, bank: true });
+  const r0 = L.routes[0], ih = Math.floor(r0.n * 0.5);
+  const hills = [{ id: 1, height: 30, hard: false, flat: 0, density: 50, maxTris: 20000, strokes: [{ x: r0.x[ih] + 60 * -r0.ty[ih], y: r0.y[ih] + 60 * r0.tx[ih], r: 40, e: false }] }];
+  const sp = { terrain: true, terrainDensity: 35, treeDensity: 10, treeSpread: 60, treeOnSlopes: true, treeHillDensity: 8 };
+  const T = buildTerrain(L, E, sp);
+  const HS = buildHills(L, E, sp, T, hills);
+  const G = makeGround(T, HS);
+  const TR = buildTrees(L, E, sp, G);
+  check(shadowCasters({ ...sp, treeShadow: false }, TR.trees, [], null).length === 0, 'sombras: sin la casilla los árboles no proyectan');
+  const cas = shadowCasters({ ...sp, treeShadow: true }, TR.trees, [{ set: { shadow: true }, items: [{ x: r0.x[5], y: r0.y[5], asset: 'cube:#fff', scale: 2 }] }, { set: { shadow: false }, items: [{ x: 0, y: 0, asset: 'x', scale: 1 }] }], () => ({ size: [1, 1, 1] }));
+  check(cas.length === TR.count + 1, `sombras: árboles + el set marcado (${cas.length})`);
+  const c2 = buildShadows(L, E, { ...sp, shadowMaxTris: 2 }, G, cas, { baseAt: (x, y) => T.sample(x, y) });
+  check(c2.tris === cas.length * 2 && c2.count === cas.length, `sombras: 2 triángulos por plano (${c2.tris})`);
+  const c32 = buildShadows(L, E, { ...sp, shadowMaxTris: 32, shadowTol: 0.03 }, G, cas, { baseAt: (x, y) => T.sample(x, y) });
+  const hs = Object.keys(c32.hist).map(Number);
+  check(c32.tris > c2.tris && c32.tris < cas.length * 32 && hs.includes(2) && Math.max(...hs) <= 32, `sombras: subdivisión adaptativa (${JSON.stringify(c32.hist)})`);
+  check(c32.kinds.some((k) => k === 1), 'sombras: vértices sobre el cerro marcados');
+  // se amolda a la superficie: vértices sobre el suelo o la calzada, a la altura de despegue
+  let worst = 0;
+  const P = c32.positions;
+  for (let v = 0; v < P.length / 3; v++) { const z = P[v * 3 + 2] - 0.04, g = G.sample(P[v * 3], P[v * 3 + 1]); if (z < g - 0.01) worst = Math.max(worst, g - z); }
+  check(worst < 0.02, `sombras: ningún vértice bajo el suelo (${worst.toFixed(3)} m)`);
+  // la sombra del cubo junto a la pista sube a la calzada
+  const one = buildShadows(L, E, sp, G, [{ x: r0.x[5], y: r0.y[5], r: 1, h: 2 }]);
+  const zRoad = E.routes[0].z[5];
+  check(Math.abs(one.positions[2] - 0.04 - zRoad) < 0.4 && one.positions[2] - 0.04 > G.sample(one.positions[0], one.positions[1]) - 0.01, `sombras: sube a la calzada (${(one.positions[2] - 0.04).toFixed(2)} vs pista ${zRoad.toFixed(2)})`);
+  // sol: la sombra se corre al lado contrario del sol y se alarga con el sol bajo
+  const c = [{ x: 0, y: 0, r: 2, h: 10 }];
+  const spS = { shadowMode: 'sun', sunX: 1, sunY: 0, sunElev: 45 };
+  const s45 = buildShadows(null, null, spS, null, c), s20 = buildShadows(null, null, { ...spS, sunElev: 20 }, null, c);
+  const xs = (m) => { const X = []; for (let v = 0; v < m.positions.length / 3; v++) X.push(m.positions[v * 3]); return [Math.min(...X), Math.max(...X)]; };
+  const [a0, a1] = xs(s45), [b0, b1] = xs(s20);
+  check(Math.abs(a0 - -12) < 0.01 && Math.abs(a1 - 2) < 0.01, `sombras: con sol al este se estira al oeste desde el pie (${a0.toFixed(2)}..${a1.toFixed(2)})`);
+  check(b1 - b0 > a1 - a0 && Math.abs(b1 - 2) < 0.01, `sombras: sol bajo = sombra más larga (${(a1 - a0).toFixed(1)} → ${(b1 - b0).toFixed(1)} m)`);
+  check(sunShadowDir({ sunX: 0, sunY: 0, sunElev: 45 }) === null, 'sombras: sol encima = centrada');
+}
+
+// ---- cavernas: rocas y estalactitas por separado ----
+{
+  const L = buildLayout(SAMPLES.oval.build(), { lapLength: 1000 });
+  const E = computeElevation(L, { hills: 0 });
+  const r0 = L.routes[0], i0 = Math.floor(r0.n * 0.3);
+  const hills = [{ id: 1, height: 45, hard: true, flat: 1, density: 50, maxTris: 30000, strokes: [{ x: r0.x[i0], y: r0.y[i0], r: 50, e: false }] }];
+  const base = { terrain: true, terrainDensity: 30, tunnelType: 'natural', caveSize: 1 };
+  const T = buildTerrain(L, E, base);
+  const cnt = (sp) => { const H = buildHills(L, E, { ...base, ...sp }, T, hills); const t = H.tunnelGeo[0]; return t ? [t.rocks.indices.length, t.stalactites.indices.length] : null; };
+  const both = cnt({}), noR = cnt({ caveRocks: false, caveStalactites: true }), noS = cnt({ caveStalactites: false }), old = cnt({ caveRocks: false });
+  check(both && both[0] > 0 && both[1] > 0, `caverna con rocas y estalactitas (${both})`);
+  check(noR && noR[0] === 0 && noR[1] > 0, `caverna sin rocas, con estalactitas (${noR})`);
+  check(noS && noS[0] > 0 && noS[1] === 0, `caverna con rocas, sin estalactitas (${noS})`);
+  check(old && old[0] === 0 && old[1] === 0, `proyecto anterior (un solo valor apagado): sin ambas (${old})`);
 }
 
 // ---- atajos con puntos de control: pasan por todos sus puntos y empalman tangentes ----

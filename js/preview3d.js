@@ -6,7 +6,8 @@ import { edgeSamples } from './export.js';
 import { buildEdgeMeshes } from './edges.js';
 import { instancedGroup } from './assets.js';
 import { decoSetItems, treeModelItems, grassModelItems } from './deco.js';
-import { buildTrackMesh, trackRows, coveredRanges, terrainTint, buildTerrain, buildTrees, buildHills, buildStartGate, buildGrass, makeGround, bridgePillars, suspPillars, pillarBlocked } from './scene.js';
+import { buildShadows, shadowCasters, sunVector } from './shadows.js';
+import { buildTrackMesh, trackRows, trackCols, coveredRanges, terrainTint, buildTerrain, buildTrees, buildHills, buildStartGate, buildGrass, makeGround, bridgePillars, suspPillars, pillarBlocked } from './scene.js';
 import { buildRivers } from './rivers.js';
 import { pillarGeometry } from './tunnels.js';
 import { applyRefLook } from './refmodel.js';
@@ -32,6 +33,7 @@ export class Preview3D {
     const sun = new THREE.DirectionalLight(0xffffff, 1.6);
     sun.position.set(400, -300, 800);
     this.scene.add(sun);
+    this.sunLight = sun; // sigue al sol de los planos de sombra si se pide (updateSunLight)
     this.group = new THREE.Group();
     this.scene.add(this.group);
     // grupos en metros reales con la exageración Z aplicada como escala
@@ -315,15 +317,15 @@ export class Preview3D {
     const t = this.triCounts;
     const sp = this.app.state.scene;
     const tun = t.tunnels || 0, hills = t.hills || 0, gate = t.gate || 0, grass = sp.grass ? (t.grass || 0) : 0;
-    const edges = t.edges || 0, deco = t.deco || 0, rivers = t.rivers || 0;
-    const total = t.track + (sp.terrain ? t.terrain : 0) + (sp.trees ? t.trees : 0) + tun + hills + gate + grass + edges + deco + rivers;
+    const edges = t.edges || 0, deco = t.deco || 0, rivers = t.rivers || 0, shadows = t.shadows || 0;
+    const total = t.track + (sp.terrain ? t.terrain : 0) + (sp.trees ? t.trees : 0) + tun + hills + gate + grass + edges + deco + rivers + shadows;
     const ot = this.objTris || { hills: new Map(), tunnels: new Map() };
     const st = this.app.state;
     const nH = ot.hills.size, nT = ot.tunnels.size;
     const selIt = st.selItem ? this.findItem(st.selItem) : null;
     const selObj = selIt ? { name: selIt.name, tris: selIt.indices.length / 3 } : st.selHill != null ? ot.hills.get(st.selHill) : st.selTunnel != null ? ot.tunnels.get(st.selTunnel) : null;
     const selTxt = selObj ? `<div class="sel"><b>Seleccionado</b> · ${selObj.name}: ${f(selObj.tris)} triángulos</div>` : '';
-    this.statsDiv.innerHTML = `<b>Triángulos</b> · pista ${f(t.track)}${edges ? ` · bordes ${f(edges)}` : ''}${sp.terrain ? ` · terreno ${f(t.terrain)}` : ''}${hills || tun ? ` · cerros + túneles ${f(hills + tun)} (${[hills ? `${nH} cerro${nH === 1 ? '' : 's'}: ${f(hills)}` : '', tun ? `${nT} túnel${nT === 1 ? '' : 'es'}: ${f(tun)}` : ''].filter(Boolean).join(' · ')})` : ''}${rivers ? ` · ríos y cascadas ${f(rivers)}` : ''}${sp.trees ? ` · árboles ${f(t.trees)}` : ''}${grass ? ` · hierba ${f(grass)}` : ''}${gate ? ` · pórtico ${f(gate)}` : ''}${t.items ? ` · elementos ${f(t.items)} (${this.itemCount})` : ''}${deco ? ` · decoración ${f(deco)}` : ''} · <b>total ${f(total + (t.items || 0))}</b>${selTxt}`;
+    this.statsDiv.innerHTML = `<b>Triángulos</b> · pista ${f(t.track)}${edges ? ` · bordes ${f(edges)}` : ''}${sp.terrain ? ` · terreno ${f(t.terrain)}` : ''}${hills || tun ? ` · cerros + túneles ${f(hills + tun)} (${[hills ? `${nH} cerro${nH === 1 ? '' : 's'}: ${f(hills)}` : '', tun ? `${nT} túnel${nT === 1 ? '' : 'es'}: ${f(tun)}` : ''].filter(Boolean).join(' · ')})` : ''}${rivers ? ` · ríos y cascadas ${f(rivers)}` : ''}${sp.trees ? ` · árboles ${f(t.trees)}` : ''}${grass ? ` · hierba ${f(grass)}` : ''}${gate ? ` · pórtico ${f(gate)}` : ''}${t.items ? ` · elementos ${f(t.items)} (${this.itemCount})` : ''}${deco ? ` · decoración ${f(deco)}` : ''}${shadows ? ` · sombras ${f(shadows)}` : ''} · <b>total ${f(total + (t.items || 0))}</b>${selTxt}`;
   }
 
   /** Wireframe superpuesto (color y opacidad elegibles) sobre pista, terreno y árboles. */
@@ -452,7 +454,7 @@ export class Preview3D {
     if (this.app.onTrackMeshInfo) {
       const rowsN = tm.rows.reduce((a, b) => a + b, 0);
       let uniTris = null;
-      if (sp.trackMeshMode === 'optimized') uniTris = trackRows(L, E, { ...sp, skirts: sp.terrain && sp.skirts, trackMeshMode: 'uniform' }).reduce((a, q) => a + (q.length - 1), 0) * ((sp.terrain && sp.skirts) ? 4 : 2) * 2;
+      if (sp.trackMeshMode === 'optimized') uniTris = trackRows(L, E, { ...sp, skirts: sp.terrain && sp.skirts, trackMeshMode: 'uniform' }).reduce((a, q) => a + (q.length - 1), 0) * (trackCols({ ...sp, skirts: sp.terrain && sp.skirts }) - 1) * 2;
       const samples = L.routes.reduce((a, r) => a + (r.closed ? r.n + 1 : r.n), 0);
       this.app.onTrackMeshInfo({ rows: rowsN, tris: tm.indices.length / 3, uniTris, samples });
     }
@@ -895,8 +897,10 @@ export class Preview3D {
       info.grass = gItems ? gItems.length : GR.count;
       info.grassTris = GR.tris;
     }
+    let shadowTrees = null;
     if (sp.trees) {
       const TR = buildTrees(L, E, sp, ground);
+      shadowTrees = TR.trees;
       const tItems = treeModelItems(TR.trees, sp.treeAssets, hasAsset); // árboles reemplazados por modelos
       if (tItems) this.vegModels.trees = tItems;
       if (TR.count && !tItems) {
@@ -917,6 +921,8 @@ export class Preview3D {
       info.treeTris = tItems ? tItems.reduce((a, it) => a + (this.app.assetById(it.asset).tris || 0), 0) : TR.indices.length / 3;
       info.treesOnHills = TR.trees.filter((t) => t.where !== 'terrain').length;
     }
+    this.shadowTrees = shadowTrees;
+    this.buildShadowMesh(info);
     // los bordes se cortan en los túneles: si cambiaron, se rehacen
     if (JSON.stringify(newRuns) !== JSON.stringify(this.tunnelRuns)) { this.tunnelRuns = newRuns; setTimeout(() => this.update(false, true), 0); } // pista (material de los tramos en túnel) y bordes
     this.applyExag(); // también rehace la decoración (sets y modelos de vegetación)
@@ -1511,6 +1517,118 @@ export class Preview3D {
     if (this.xformMode) { this.xformMode = null; this.app.endXform(); this.proxy.rotation.set(0, 0, 0); this.proxy.scale.set(1, 1, 1); }
     else if (this.groupMode) { this.groupMode = false; this.app.endGroupDrag(); } else this.app.endCtrlDrag();
     this.updateHandles();
+  }
+
+  /**
+   * Planos de sombra (árboles y sets de decoración con «Proyectar sombra»): una malla unida sobre terreno, cerros y
+   * calzada. Se rehace sola sin reconstruir el terreno (cambios de sol, tamaño, textura o de los sets).
+   */
+  buildShadowMesh(info = null) {
+    if (this.shadowMesh) { this.extras.remove(this.shadowMesh); this.shadowMesh.geometry.dispose(); this.shadowMesh.material.dispose(); this.shadowMesh = null; }
+    const L = this.app.state.layout, E = this.app.state.result, sp = this.app.state.scene;
+    this.triCounts.shadows = 0;
+    this.shadowInfo = { count: 0, tris: 0, hist: {} };
+    if (L && E && sp.shadows) {
+      const ground = this.groundCache || null;
+      const hasAsset = (id) => !!(this.app.assetById && this.app.assetById(id));
+      const sets = (this.app.state.decoSets || []).filter((q) => q.shadow && q.visible !== false);
+      const decoRes = sets.length ? decoSetItems(L, E, sp, ground, sets, (set) => this.app.decoPaintWorld(set), hasAsset) : [];
+      const cas = shadowCasters(sp, sp.trees ? this.shadowTrees : null, decoRes, (id) => (this.app.assetById ? this.app.assetById(id) : null));
+      const T0 = this.terrainData;
+      const SH = buildShadows(L, E, sp, ground, cas, { baseAt: T0 ? (x, y) => T0.sample(x, y) : null });
+      if (SH.tris) {
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.BufferAttribute(SH.positions, 3));
+        g.setAttribute('uv', new THREE.BufferAttribute(SH.uvs, 2));
+        g.setIndex(new THREE.BufferAttribute(SH.indices, 1));
+        const mat = new THREE.MeshBasicMaterial({ map: this.texture(this.app.shadowTexCanvas()), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+        const sm = new THREE.Mesh(g, mat);
+        this.markExag(sm, (x, y, z, v) => (SH.kinds[v] && T0 ? T0.sample(x, y) : z)); // sobre un cerro: se apoya; en terreno y calzada: se estira como ellos
+        const k = this.zExag - 1, a = g.getAttribute('position').array, ex = sm.userData.exag;
+        for (let v = 0; v < a.length / 3; v++) a[v * 3 + 2] = ex.base[v * 3 + 2] + ex.shift[v] * k;
+        sm.renderOrder = 3;
+        sm.userData.noWire = true;
+        sm.userData.shadows = true;
+        this.extras.add(sm);
+        this.shadowMesh = sm;
+      }
+      this.shadowInfo = { count: SH.count, tris: SH.tris, hist: SH.hist };
+      this.triCounts.shadows = SH.tris;
+    }
+    if (info) { info.shadows = this.shadowInfo.count; info.shadowTris = this.shadowInfo.tris; }
+    else { this.updateStats(); if (this.app.onShadowInfo) this.app.onShadowInfo(this.shadowInfo); }
+    this.updateSunLight();
+    this.needsFrame = true;
+  }
+
+  /** La luz direccional sigue al sol de los planos de sombra (modo proyectado con «La luz sigue al sol»). */
+  updateSunLight() {
+    const sp = this.app.state.scene;
+    if (sp && sp.shadows && sp.shadowMode === 'sun' && sp.sunLight !== false) { const v = sunVector(sp); this.sunLight.position.set(v[0] * 1000, v[1] * 1000, v[2] * 1000); }
+    else this.sunLight.position.set(400, -300, 800);
+    this.needsFrame = true;
+  }
+
+  /** Caja (en la vista 3D, con la exageración Z) de lo seleccionado, o null si no hay nada seleccionado. */
+  selectionBox() {
+    const st = this.app.state, L = st.layout, E = st.result;
+    const box = new THREE.Box3(), v = new THREE.Vector3();
+    const ex = this.zExag;
+    const routeRange = (k, s0, s1) => {
+      if (!L || !E || !L.routes[k]) return;
+      const r = L.routes[k], z = E.routes[k].z;
+      const i0 = Math.floor(s0 / r.ds), i1 = Math.ceil(s1 / r.ds);
+      for (let ii = i0; ii <= i1; ii++) { const i = r.closed ? ((ii % r.n) + r.n) % r.n : Math.max(0, Math.min(r.n - 1, ii)); box.expandByPoint(v.set(r.x[i], r.y[i], z[i] * ex)); }
+    };
+    const meshes = (list) => { for (const m of list) { m.geometry.computeBoundingBox(); const b = m.geometry.boundingBox.clone().applyMatrix4(m.matrixWorld); box.union(b); } };
+    if (st.tool === 'edit' && st.subObj === 'segment' && this.app.segSelRanges) {
+      for (const R of this.app.segSelRanges()) routeRange(R.k, R.s0, R.s1);
+    }
+    if (box.isEmpty() && st.tool === 'edit' && (st.sel || (st.selSet && st.selSet.idxs.size))) {
+      for (const m of this.handleGroup.children) {
+        const u = m.userData;
+        const on = (st.sel && st.sel.key === u.key && st.sel.idx === u.idx) || (st.selSet && st.selSet.key === u.key && st.selSet.idxs.has(u.idx));
+        if (on) box.expandByPoint(m.position);
+      }
+    }
+    if (box.isEmpty() && st.selHill != null) meshes((this.hillMeshes || []).filter((m) => m.userData.hillId === st.selHill));
+    if (box.isEmpty() && st.selTunnel != null) meshes((this.tunnelMeshes || []).filter((m) => m.userData.tunnelId === st.selTunnel));
+    if (box.isEmpty() && st.selRiver != null) { const list = []; this.extras.traverse((o) => { if (o.isMesh && o.userData.riverId === st.selRiver) list.push(o); }); meshes(list); }
+    if (box.isEmpty() && st.selItem && this.findItem) { const it = this.findItem(st.selItem); if (it) { box.expandByPoint(v.set(it.origin[0], it.origin[1], it.origin[2] * ex)); box.expandByScalar(4); } }
+    if (box.isEmpty() && st.selAlt != null && L) { const k = L.routes.findIndex((r) => r.kind === 'alt' && r.altIndex === st.selAlt); if (k > 0) routeRange(k, 0, L.routes[k].L); }
+    if (box.isEmpty() && st.selBridge != null && L) { const b = (L.routes[0].bridges || []).find((q) => q.idx === st.selBridge); if (b) routeRange(0, b.s0, b.s1); }
+    if (box.isEmpty() && st.selCross != null && E) { const c = E.crossings.find((q) => q.id === st.selCross); if (c) routeRange(c.ra, c.sa - 15, c.sa + 15); }
+    if (box.isEmpty() && st.ref3d && st.ref3d.sel && this.refOuter) { box.setFromObject(this.refOuter); }
+    return box.isEmpty() ? null : box;
+  }
+
+  /** Tecla F: encuadra lo seleccionado (sin selección, toda la pista), con una transición corta. */
+  focusSelection() {
+    const b = this.selectionBox();
+    if (!b) { this.fit(); return false; }
+    const c = new THREE.Vector3(), sz = new THREE.Vector3();
+    b.getCenter(c); b.getSize(sz);
+    const radius = Math.max(8, sz.length() / 2);
+    const fov = THREE.MathUtils.degToRad(this.camera.fov || 50);
+    const dist = Math.max(15, (radius / Math.sin(fov / 2)) * 1.15);
+    const dir = new THREE.Vector3().subVectors(this.camera.position, this.controls.target);
+    if (dir.lengthSq() < 1e-6) dir.set(0, -1, 0.8);
+    dir.normalize();
+    const t0 = this.controls.target.clone(), p0 = this.camera.position.clone();
+    const t1 = c, p1 = c.clone().addScaledVector(dir, dist);
+    this.camera.near = Math.min(this.camera.near, Math.max(0.1, dist / 500));
+    this.camera.updateProjectionMatrix();
+    const start = performance.now(), T = 280;
+    const step = () => {
+      const u = Math.min(1, (performance.now() - start) / T), e = u * u * (3 - 2 * u);
+      this.controls.target.lerpVectors(t0, t1, e);
+      this.camera.position.lerpVectors(p0, p1, e);
+      this.controls.update();
+      this.needsFrame = true;
+      if (u < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+    return true;
   }
 
   fit() {

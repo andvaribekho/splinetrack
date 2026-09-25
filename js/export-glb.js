@@ -8,6 +8,7 @@ import { pillarGeometry } from './tunnels.js';
 import { buildEdgeMeshes } from './edges.js';
 import { assetObject, builtinAsset } from './assets.js';
 import { decoSetItems, treeModelItems, grassModelItems } from './deco.js';
+import { buildShadows, shadowCasters } from './shadows.js';
 import { makeBannerCanvas, makeCheckerCanvas, makeGrassCanvas, makePadCanvas, makeGlowCanvas } from './gatetex.js';
 
 function tex(canvas) {
@@ -268,8 +269,10 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
   const byId = (id) => (DC && DC.assetById ? DC.assetById(id) : null);
   const hasAsset = (id) => !!byId(id);
   const putItems = (grp, items, prefix) => items.forEach((it, i) => { const A = byId(it.asset); if (A) grp.add(assetObject(A, it, `${prefix}_${String(i + 1).padStart(4, '0')}`)); });
+  let shadowTrees = null;
   if (sp.trees) {
     const tr = buildTrees(layout, elev, sp, ground);
+    shadowTrees = tr.trees;
     treeCount = tr.count;
     const tItems = treeModelItems(tr.trees, sp.treeAssets, hasAsset);
     if (tItems) { // árboles con modelos: un objeto por árbol, pivote del modelo
@@ -377,7 +380,22 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
     }
     if (dg.children.length) root.add(dg);
   }
-  return { scene, root, info: { decoCount, trackTris: tm.indices.length / 3, terrainTris: terrain && sp.terrain ? terrain.tris : 0, hills: HS ? HS.hills.length : 0, hillTris: HS ? HS.tris : 0, tunnels: HS ? HS.tunnelGeo.length : 0, gateTris, trees: treeCount, treeTris: treeCount * 16, grass: grassCount, items: itemCount } };
+  // planos de sombra: todas en una sola malla («sombras»), con la textura de sombra (transparente)
+  let shadowCount = 0, shadowTris = 0;
+  if (sp.shadows) {
+    const sets = (DC && DC.sets ? DC.sets : []).filter((q) => q.shadow && q.visible !== false);
+    const decoRes = sets.length ? decoSetItems(layout, elev, sp, ground, sets, DC.paintFor, hasAsset) : [];
+    const cas = shadowCasters(sp, shadowTrees, decoRes, (id) => builtinAsset(id) || byId(id));
+    const SH = buildShadows(layout, elev, sp, ground, cas, {});
+    if (SH.tris) {
+      const st = tex(textures.shadow);
+      const mat = new THREE.MeshBasicMaterial({ name: 'sombra', color: st ? 0xffffff : 0x000000, map: st, transparent: true, opacity: st ? 1 : 0.2, depthWrite: false });
+      const m = mesh('sombras', SH.positions, SH.indices, SH.uvs, mat);
+      root.add(m);
+      shadowCount = SH.count; shadowTris = SH.tris;
+    }
+  }
+  return { scene, root, info: { shadows: shadowCount, shadowTris, decoCount, trackTris: tm.indices.length / 3, terrainTris: terrain && sp.terrain ? terrain.tris : 0, hills: HS ? HS.hills.length : 0, hillTris: HS ? HS.tris : 0, tunnels: HS ? HS.tunnelGeo.length : 0, gateTris, trees: treeCount, treeTris: treeCount * 16, grass: grassCount, items: itemCount } };
 }
 
 export async function exportGLB(...args) {

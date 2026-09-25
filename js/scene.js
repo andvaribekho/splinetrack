@@ -4,15 +4,18 @@ import { SpatialGrid, rng, clamp, smoothstep, nearestOnSamples } from './geometr
 import Delaunator from '../vendor/delaunator.js';
 import { riverField, subdivFactor } from './rivers.js';
 import { DEFAULT_SCULPT_CURVE } from './sculptcurve.js';
+import { SHADOW_DEFAULTS } from './shadows.js';
 import { hillFieldOne, detectTunnels, tunnelTop, buildTunnelGeometry, applyTunnelOverrides, portalBox, frameAt, edgeExtents, tunnelInnerWidth } from './tunnels.js';
 
 export const DEFAULT_SCENE = {
+  ...SHADOW_DEFAULTS, // planos de sombra (shadows.js)
   // pista
   trackTexDir: 'vertical', // 'vertical' = la textura corre a lo largo de la pista en V; 'horizontal' = en U
   trackTexReps: 100, // repeticiones a lo largo de la ruta principal
   trackTexOpacity: 1, // opacidad de la textura en la vista 3D (0 = solo colores por altura)
   trackMeshMode: 'uniform', // 'uniform' = secciones a distancia pareja; 'optimized' = más secciones en curvas que en rectas
   trackDensity: 100, // 1..100: separación entre secciones de 16 m (1) a la del muestreo (100)
+  trackDivs: 0, // divisiones a lo ancho de la pista (edges a lo largo entre los bordes); 0 = solo los bordes
   trackMaxTris: 200000, // tope de triángulos de la pista (manda sobre la densidad)
   trackAdapt: 0.5, // 0..1 (optimizado): 0 = las curvas tienen algo más que las rectas; 1 = las rectas mucho menos
   skirts: true, // faldones laterales hacia el terreno
@@ -201,9 +204,14 @@ function bridgeIndexAt(r, sv) {
  * (curvatura en planta, curvatura vertical, peralte y ancho), así las rectas llevan menos secciones que las curvas.
  * Devuelve por ruta la lista creciente de filas q (0..n, n = vuelta completa en rutas cerradas).
  */
+/** Divisiones a lo ancho de la pista (edges a lo largo, entre los bordes): 0 por defecto. */
+export function trackDivsOf(sp) { return Math.max(0, Math.min(16, Math.round(sp.trackDivs ?? 0))); }
+/** Columnas de vértices de cada sección de la malla de la pista. */
+export function trackCols(sp) { return trackDivsOf(sp) + 2 + (sp.skirts ? 2 : 0); }
+
 export function trackRows(layout, elev, spIn = {}) {
   const sp = { ...DEFAULT_SCENE, ...spIn };
-  const cols = sp.skirts ? 5 : 3;
+  const cols = trackCols(sp);
   const d = clamp(sp.trackDensity ?? 100, 1, 100);
   const per = layout.routes.map((r) => {
     const nq = r.closed ? r.n : r.n - 1; // segmentos entre muestras
@@ -297,8 +305,8 @@ export function buildTrackMesh(layout, elev, spIn = {}) {
     const n = r.n;
     const qList = rowLists[k];
     const rows = qList.length;
-    // columnas: [faldón izq], izq, centro, der, [faldón der]
-    const cols = sp.skirts ? 5 : 3;
+    // columnas: [faldón izq], borde izq, divisiones a lo ancho (trackDivs, por defecto ninguna), borde der, [faldón der]
+    const cols = trackCols(sp), divs = trackDivsOf(sp);
     for (const q of qList) {
       const i = q % n;
       const s = q === n ? r.L : r.s[i];
@@ -307,11 +315,11 @@ export function buildTrackMesh(layout, elev, spIn = {}) {
       const c = Math.cos(e.roll[i]), sn = Math.sin(e.roll[i]);
       const hw = r.w[i] / 2;
       const ox = lx * c * hw, oy = ly * c * hw, oz = sn * hw;
-      const P = [
-        [r.x[i] + ox, r.y[i] + oy, e.z[i] + oz, 0],
-        [r.x[i], r.y[i], e.z[i], 0.5],
-        [r.x[i] - ox, r.y[i] - oy, e.z[i] - oz, 1],
-      ];
+      const P = [];
+      for (let c2 = 0; c2 <= divs + 1; c2++) {
+        const t = c2 / (divs + 1), f = 1 - 2 * t; // la sección es una recta (el peralte es rígido)
+        P.push([r.x[i] + ox * f, r.y[i] + oy * f, e.z[i] + oz * f, t]);
+      }
       if (sp.skirts) {
         P.unshift([P[0][0] + lx * 0.2, P[0][1] + ly * 0.2, P[0][2] - skirt, -0.05]);
         P.push([P[P.length - 1][0] - lx * 0.2, P[P.length - 1][1] - ly * 0.2, P[P.length - 1][2] - skirt, 1.05]);

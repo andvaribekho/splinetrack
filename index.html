@@ -257,6 +257,7 @@
           <button data-mode="optimized" title="Más secciones en curvas, cambios de pendiente, peralte y ancho; menos en las rectas">Optimizado</button>
         </div>
         <div class="field"><label>Densidad de polígonos <span class="val"><input type="number" id="trackDensityNum" min="1" max="100" step="1" style="width:56px"> %</span></label><input type="range" id="trackDensity" min="1" max="100" step="1"></div>
+        <div class="field" title="Líneas (edges) a lo largo de la pista entre sus dos bordes. 0 = solo los bordes (la sección es una recta, así la forma es la misma con menos triángulos)"><label>Divisiones a lo ancho <span class="val" id="trackDivsVal"></span></label><input type="range" id="trackDivs" min="0" max="8" step="1"></div>
         <div class="field"><label>Máximo de triángulos <span class="val"><input type="number" id="trackMaxTrisNum" min="200" step="500" style="width:84px"></span></label><input type="range" id="trackMaxTris" min="1000" max="300000" step="1000"></div>
         <div class="field" id="trackAdaptBox"><label>Optimización <span class="val" id="trackAdaptVal"></span></label><input type="range" id="trackAdapt" min="0" max="1" step="0.01">
           <div class="range-ends"><span>mínimo: curvas con algo más</span><span>máximo: rectas con mucho menos</span></div></div>
@@ -392,7 +393,7 @@
           </select>
         </div>
         <div class="field" id="caveBox"><label>Tamaño de la caverna <span class="val" id="caveSizeVal"></span></label><input type="range" id="caveSize" min="0" max="1" step="0.05">
-          <label class="check small" style="margin-top:4px"><input type="checkbox" id="caveRocks"> Rocas y estalactitas</label></div>
+          <label class="check small" style="margin-top:4px"><input type="checkbox" id="caveRocks"> Rocas</label> <label class="check small" style="margin-top:4px"><input type="checkbox" id="caveStal"> Estalactitas</label></div>
         <div class="field">
           <label>Costado abierto (general)</label>
           <select id="tunnelOpen">
@@ -516,6 +517,7 @@
         <div class="field" id="treeHillBox"><label>Densidad en cerros (por 1000 m²) <span class="val" id="treeHillDensityVal"></span></label><input type="range" id="treeHillDensity" min="0" max="40" step="0.5"></div>
         <div class="field"><label>Inclinación según el suelo <span class="val" id="treeTiltVal"></span></label><input type="range" id="treeTilt" min="0" max="100" step="1"></div>
         <div class="field"><label>Modelos para los árboles <span class="val small muted">(de la biblioteca de Decoración; sin elegir = conos)</span></label><div id="treeAssetList" class="asset-chips"></div></div>
+        <label class="check" title="Cada árbol lleva un plano de sombra (se generan con «Planos de sombra»)"><input type="checkbox" id="treeShadow"> Proyectar sombra</label>
         <p class="hint" id="treesInfo"></p>
         </div></div>
         <div class="collapsible" id="grassBlock">
@@ -550,6 +552,38 @@
         <div class="field">
           <label>Semilla (árboles y hierba)</label>
           <div class="row"><input type="number" id="treeSeed" min="0" step="1"><button id="btnTreeDice">Aleatoria</button></div>
+        </div>
+      </section>
+
+      <section class="panel" data-panel="shadows">
+        <h2>Planos de sombra</h2>
+        <label class="check" title="Genera un plano con textura de sombra bajo cada árbol o elemento de decoración que tenga «Proyectar sombra» marcado"><input type="checkbox" id="shadows"> Generar planos de sombra</label>
+        <p class="hint">Proyectan sombra los árboles y los sets de decoración que tengan marcada su casilla «Proyectar sombra». Se amoldan al terreno, a los cerros y a la calzada. Al exportar todas las sombras van en una sola malla (<code>sombras</code>).</p>
+        <div id="shadowBody">
+        <div class="field" title="Tamaño del plano respecto de la huella del objeto (copa del árbol o base del elemento)"><label>Tamaño <span class="val" id="shadowSizeVal"></span></label><input type="range" id="shadowSize" min="0.3" max="3" step="0.05"></div>
+        <div class="field" title="Máximo de triángulos por plano. Cada plano usa la menor cantidad que alcance para seguir la superficie (2 = un solo cuadro)"><label>Máximo de triángulos por plano <span class="val" id="shadowMaxTrisVal"></span></label><input type="range" id="shadowMaxTris" min="2" max="32" step="2"></div>
+        <div class="field" title="Cuánto puede separarse el plano de la superficie antes de subdividirlo más"><label>Tolerancia <span class="val" id="shadowTolVal"></span></label><input type="range" id="shadowTol" min="0.01" max="0.5" step="0.01"></div>
+        <div class="field"><label>Posición</label>
+          <select id="shadowMode"><option value="center">Centrada en el objeto (pivote al centro)</option><option value="sun">Proyectada según el sol</option></select></div>
+        <div id="sunBox">
+          <div class="row gap" style="align-items:flex-start;flex-wrap:nowrap">
+            <canvas id="sunPad" width="132" height="132" title="Arrastra el sol: su posición en planta (arriba = +Y). La sombra se proyecta hacia el lado contrario"></canvas>
+            <div style="flex:1;min-width:0">
+              <div class="field"><label>Altura del sol <span class="val" id="sunElevVal"></span></label><input type="range" id="sunElev" min="5" max="90" step="1"></div>
+              <div class="field" title="Largo máximo de la sombra, en veces la altura del objeto (con el sol muy bajo)"><label>Largo máximo <span class="val" id="shadowMaxLenVal"></span></label><input type="range" id="shadowMaxLen" min="0.5" max="8" step="0.1"></div>
+            </div>
+          </div>
+          <label class="check small" title="La luz de la vista 3D viene desde el mismo sol"><input type="checkbox" id="sunLight"> La luz de la vista 3D sigue al sol</label>
+          <p class="hint">Con el sol, la sombra se corre y se estira hacia el lado contrario y su base queda en el pie del objeto.</p>
+        </div>
+        <h3 class="subhead">Textura</h3>
+        <div class="row gap"><img id="shadowTexThumb" class="thumb checker" alt=""><button id="btnShadowTex">Cargar…</button><button id="btnShadowTexRemove">Por defecto</button><input type="file" id="fileShadowTex" accept="image/png,image/webp,image/*" hidden></div>
+        <div id="shadowDefBox">
+          <div class="field" title="Opacidad del centro de la textura por defecto"><label>Opacidad <span class="val" id="shadowOpacityVal"></span></label><input type="range" id="shadowOpacity" min="0.02" max="1" step="0.01"></div>
+          <div class="field" title="Cuánto se difumina el borde del círculo"><label>Difuminado del borde <span class="val" id="shadowSoftVal"></span></label><input type="range" id="shadowSoft" min="0" max="1" step="0.01"></div>
+        </div>
+        <div class="field" title="Separación sobre la superficie para que no parpadee con el terreno o la pista"><label>Despegue del suelo <span class="val" id="shadowLiftVal"></span></label><input type="range" id="shadowLift" min="0" max="0.3" step="0.005"></div>
+        <p class="hint" id="shadowInfo"></p>
         </div>
       </section>
 

@@ -11,6 +11,7 @@ import { initPanels } from './panels.js';
 import { initSplitters } from './splitters.js';
 import { initHotkeys } from './hotkeys.js';
 import { DEFAULT_SCENE, terrainCell } from './scene.js';
+import { makeShadowCanvas, sunShadowDir } from './shadows.js';
 import { SCULPT_PRESETS, DEFAULT_SCULPT_CURVE, normCurve, curveEval, curveLUT, presetOf } from './sculptcurve.js';
 import { makeTrackThumbnail } from './thumbnail.js';
 import { parseReference, footprint } from './refmodel.js';
@@ -86,6 +87,7 @@ const state = {
   edgeMeshes: null, // última malla de bordes (para el mapa 2D y los clics)
   bridgeTex: null, // canvas de la textura de los puentes (null = café por defecto)
   grassTex: null, // canvas de la textura de hierba (null = por defecto)
+  shadowTex: null, // textura propia de los planos de sombra (null = círculo difuminado por defecto)
   itemTex: { puddle: null, pad: null, strip: null, border: null }, // texturas de los elementos de pista
   terrainTex: null, // canvas de la textura del terreno
   ref: null, // imagen de referencia {canvas,w,h,x,y,scale,opacity,visible}
@@ -250,7 +252,8 @@ function refreshTunnelSel() {
     <div class="field"><label>Tipo</label><select class="tsType">${opt(types, sc.tunnelType)}</select></div>
     <div class="field"><label>Costado abierto</label>
       <select class="tsOpen"><option value="">Como el general (${genOpen})</option><option value="none">Cerrado</option><option value="left">Abierto a la izquierda (con pilares)</option><option value="right">Abierto a la derecha (con pilares)</option></select></div>
-    <label class="check small tsRocksBox${t.type === 'natural' ? '' : ' disabled'}"><input type="checkbox" class="tsRocks"${t.rocks !== false ? ' checked' : ''}> Rocas y estalactitas${own('rocks') ? '' : ' (como el general)'}</label>
+    <label class="check small tsRocksBox${t.type === 'natural' ? '' : ' disabled'}"><input type="checkbox" class="tsRocks"${t.rocks !== false ? ' checked' : ''}> Rocas${own('rocks') ? '' : ' (como el general)'}</label>
+    <label class="check small tsRocksBox${t.type === 'natural' ? '' : ' disabled'}"><input type="checkbox" class="tsStal"${t.stal !== false ? ' checked' : ''}> Estalactitas${own('stal') ? '' : ' (como el general)'}</label>
     <div class="field tsPilBox${t.openMode === 'none' ? ' disabled' : ''}"><label><input type="checkbox" class="tsPilOwn"${own('pillars') ? ' checked' : ''}> Pilares propios <span class="val"><input type="number" class="tsPilN" min="0" max="200" step="1" style="width:56px" value="${t.pillarCount}"></span></label>
       <input type="range" class="tsPil" min="0" max="40" step="1" value="${Math.min(40, t.pillarCount)}"${own('pillars') ? '' : ' disabled'}></div>
     <h4 class="mini">Geometría ${own('density') || own('meshMode') || own('maxTris') || own('adapt') ? '(propia)' : '(la general)'}</h4>
@@ -275,7 +278,10 @@ function refreshTunnelSel() {
     sceneChanged();
   };
   box.querySelector('.tsOpen').addEventListener('change', (e) => setOv({ open: e.target.value || undefined }));
-  box.querySelector('.tsRocks').addEventListener('change', (e) => setOv({ rocks: e.target.checked === (sc.caveRocks !== false) ? undefined : e.target.checked }));
+  // rocas y estalactitas por separado: cada cambio deja explícito el otro valor (los proyectos anteriores usaban uno solo para ambos)
+  const genStal = () => (typeof sc.caveStalactites === 'boolean' ? sc.caveStalactites : sc.caveRocks !== false);
+  box.querySelector('.tsRocks').addEventListener('change', (e) => setOv({ rocks: e.target.checked === (sc.caveRocks !== false) ? undefined : e.target.checked, stal: t.stal === genStal() ? undefined : t.stal }));
+  box.querySelector('.tsStal').addEventListener('change', (e) => setOv({ stal: e.target.checked === genStal() ? undefined : e.target.checked, rocks: t.rocks === (sc.caveRocks !== false) ? undefined : t.rocks }));
   box.querySelector('.tsShape').addEventListener('change', (e) => setOv({ shape: e.target.value || undefined }));
   box.querySelector('.tsType').addEventListener('change', (e) => setOv({ type: e.target.value || undefined }));
   const pilSet = (v) => { v = Math.max(0, Math.min(200, Math.round(v))); box.querySelector('.tsPilN').value = v; box.querySelector('.tsPil').value = Math.min(40, v); setOv({ pillars: v }); };
@@ -1335,6 +1341,7 @@ const app = {
   selectItem(ref) { selectItem(ref); },
   itemPaintColor() { const t = state.itemPaintTarget; if (t && t.type === 'deco') { const d = itemGroup(t); return d ? d.color : '#e040fb'; } return t ? ITEM_COLORS[t.type] : '#e040fb'; },
   // ---- decoración ----
+  shadowTexCanvas() { return shadowTexCanvas(); },
   assetById(id) { if (!id) return null; return builtinAsset(id) || state.assets.find((a) => a.id === id) || null; },
   decoPaintWorld(set) { const L = state.layout; if (!L || !set.paint || !set.paint.length) return null; return set.paint.map((q) => { const [x, y] = L.toWorld(q.x, q.y); return { x, y, r: q.r * L.scale, e: q.e }; }); },
   selectDecoSet(id) { selectDecoSet(id); },
@@ -3989,6 +3996,7 @@ function saveProject() {
     fallWallTex: state.fallWallTex ? state.fallWallTex.toDataURL('image/png') : null,
     terrainTex: state.terrainTex ? state.terrainTex.toDataURL('image/png') : null,
     grassTex: state.grassTex ? state.grassTex.toDataURL('image/png') : null,
+    shadowTex: state.shadowTex ? state.shadowTex.toDataURL('image/png') : null,
     itemTex: Object.fromEntries(Object.entries(state.itemTex).map(([k, v]) => [k, v ? v.toDataURL('image/png') : null])),
     ref: state.ref ? { image: state.ref.canvas.toDataURL('image/png'), x: state.ref.x, y: state.ref.y, scale: state.ref.scale, opacity: state.ref.opacity, visible: state.ref.visible, above: !!state.ref.above } : null,
     imageOpacity: state.imageOpacity,
@@ -4207,6 +4215,7 @@ async function openProject(text) {
   refreshSkyThumb();
   state.terrainTex = await toCanvas(d.terrainTex);
   state.grassTex = await toCanvas(d.grassTex);
+  state.shadowTex = await toCanvas(d.shadowTex);
   for (const k of Object.keys(state.itemTex)) state.itemTex[k] = d.itemTex ? await toCanvas(d.itemTex[k]) : null;
   if (typeof refreshItemTex === 'function') refreshItemTex();
   syncSceneControls();
@@ -4255,6 +4264,74 @@ function toast(msg) {
 
 
 // ---------- escena 3D: terreno, árboles y texturas ----------
+// ---------- planos de sombra ----------
+let shadowDefCanvas = null, shadowDefKey = '';
+/** Textura de las sombras: la propia o el círculo difuminado por defecto (según opacidad y difuminado). */
+function shadowTexCanvas() {
+  if (state.shadowTex) return state.shadowTex;
+  const sc = state.scene, key = `${sc.shadowOpacity}|${sc.shadowSoft}`;
+  if (!shadowDefCanvas || shadowDefKey !== key) { shadowDefCanvas = makeShadowCanvas(sc.shadowOpacity ?? 0.2, sc.shadowSoft ?? 0.6); shadowDefKey = key; }
+  return shadowDefCanvas;
+}
+let shadowTimer = null;
+/** Rehace solo los planos de sombra (sin reconstruir el terreno), con una pequeña espera mientras se arrastra. */
+function scheduleShadows() { clearTimeout(shadowTimer); shadowTimer = setTimeout(() => { if (preview.buildShadowMesh) preview.buildShadowMesh(); }, 90); }
+function drawSunPad() {
+  const cv = $('sunPad');
+  if (!cv) return;
+  const sc = state.scene, dpr = window.devicePixelRatio || 1, W = cv.clientWidth || 132, H = cv.clientHeight || 132;
+  if (cv.width !== Math.round(W * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+  const g = cv.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, W, H);
+  const pad = 10, cx = W / 2, cy = H / 2, R = W / 2 - pad;
+  g.strokeStyle = 'rgba(255,255,255,0.08)'; g.lineWidth = 1;
+  g.strokeRect(pad, pad, W - 2 * pad, H - 2 * pad);
+  g.beginPath(); g.moveTo(cx, pad); g.lineTo(cx, H - pad); g.moveTo(pad, cy); g.lineTo(W - pad, cy); g.stroke();
+  g.fillStyle = 'rgba(255,255,255,0.45)'; g.font = '9px system-ui, sans-serif'; g.textAlign = 'center';
+  g.fillText('+Y', cx, 8); g.fillText('X+', W - 7, cy + 3);
+  // objeto en el centro y su sombra hacia el lado contrario del sol
+  const sd = sunShadowDir(sc);
+  if (sd) {
+    const Ls = Math.min(sd.perM, sc.shadowMaxLen ?? 3) * R * 0.22;
+    g.strokeStyle = 'rgba(0,0,0,0.6)'; g.lineWidth = 7; g.lineCap = 'round';
+    g.beginPath(); g.moveTo(cx, cy); g.lineTo(cx + sd.dx * Ls, cy - sd.dy * Ls); g.stroke();
+  }
+  g.fillStyle = '#2e6b34'; g.beginPath(); g.arc(cx, cy, 5, 0, Math.PI * 2); g.fill();
+  const sx = cx + (sc.sunX ?? 0) * R, sy = cy - (sc.sunY ?? 0) * R;
+  g.fillStyle = '#ffd54a'; g.strokeStyle = '#a07400'; g.lineWidth = 1.5;
+  g.beginPath(); g.arc(sx, sy, 7, 0, Math.PI * 2); g.fill(); g.stroke();
+  g.strokeStyle = 'rgba(255,213,74,0.6)';
+  for (let k = 0; k < 8; k++) { const a = (k / 8) * Math.PI * 2; g.beginPath(); g.moveTo(sx + Math.cos(a) * 9, sy + Math.sin(a) * 9); g.lineTo(sx + Math.cos(a) * 12, sy + Math.sin(a) * 12); g.stroke(); }
+}
+const SHADOW_FMT = {
+  shadowSize: (v) => `${(+v).toFixed(2)}×`, shadowMaxTris: (v) => `${v}`, shadowTol: (v) => `${Math.round(v * 100)} cm`,
+  sunElev: (v) => `${v}°`, shadowMaxLen: (v) => `${(+v).toFixed(1)}× alto`, shadowOpacity: (v) => `${Math.round(v * 100)} %`,
+  shadowSoft: (v) => `${Math.round(v * 100)} %`, shadowLift: (v) => `${Math.round(v * 1000) / 10} cm`,
+};
+function syncShadowControls() {
+  const sc = state.scene;
+  const set = (id, v) => { const el = $(id); if (el && el !== rangeDrag) { if (el.type === 'checkbox') el.checked = !!v; else el.value = v; } };
+  set('shadows', sc.shadows); set('treeShadow', sc.treeShadow); set('sunLight', sc.sunLight !== false); set('shadowMode', sc.shadowMode || 'center');
+  for (const k of Object.keys(SHADOW_FMT)) { set(k, sc[k]); if ($(k + 'Val')) $(k + 'Val').textContent = SHADOW_FMT[k](sc[k]); }
+  $('shadowBody').classList.toggle('disabled', !sc.shadows);
+  $('sunBox').hidden = sc.shadowMode !== 'sun';
+  $('shadowDefBox').classList.toggle('disabled', !!state.shadowTex);
+  $('btnShadowTexRemove').disabled = !state.shadowTex;
+  $('shadowTexThumb').src = shadowTexCanvas().toDataURL('image/png');
+  drawSunPad();
+}
+function refreshShadowInfo(inf) {
+  const el = $('shadowInfo');
+  if (!el) return;
+  const sc = state.scene;
+  if (!sc.shadows) { el.textContent = 'Desactivado.'; return; }
+  const sets = state.decoSets.filter((q) => q.shadow).length;
+  if (!inf || !inf.count) { el.textContent = sc.treeShadow || sets ? 'Sin objetos que proyecten sombra a la vista.' : 'Marca «Proyectar sombra» en los árboles o en algún set de decoración.'; return; }
+  const h = Object.entries(inf.hist || {}).sort((a, b) => a[0] - b[0]).map(([t, n]) => `${n}×${t}`).join(' · ');
+  el.textContent = `${inf.count.toLocaleString('es')} planos · ${inf.tris.toLocaleString('es')} triángulos (planos × triángulos: ${h}).`;
+}
+
 function sceneChanged() { preview.update(false); if (typeof editor !== 'undefined') editor.draw(); }
 function terrainDensityLabel() {
   const L = state.layout;
@@ -4334,6 +4411,7 @@ let bridgeDefaultCanvas = null;
 function defaultBridgeCanvas() { if (!bridgeDefaultCanvas) bridgeDefaultCanvas = makeBridgeCanvas(); return bridgeDefaultCanvas; }
 function syncSceneControls() {
   const sc = state.scene;
+  if (typeof syncShadowControls === 'function' && $('shadowBody')) syncShadowControls();
   const set = (id, v) => { const el = $(id); if (el && el !== rangeDrag) { if (el.type === 'checkbox') el.checked = !!v; else el.value = v; } }; // no toca el deslizador que se está arrastrando
   for (const k of VEG_CHECKS) set(k, sc[k]);
   for (const k of ['terrainDensity', 'terrainMaxPolys', 'terrainMargin', 'terrainGap', 'terrainFalloff', 'treeSide', 'grassSide', 'treeSeed', 'trackTexDir', ...VEG_NUMS]) set(k, sc[k]);
@@ -4360,6 +4438,7 @@ function syncSceneControls() {
   refreshHillPanel();
   for (const k of ['tunnelShape', 'tunnelType', 'tunnelOpen', 'tunnelHeight', 'caveSize', 'tunnelPillars', 'tunnelDensity', 'portalFrame', 'portalDepth', 'startGateHeight']) set(k, sc[k]);
   set('caveRocks', sc.caveRocks !== false);
+  set('caveStal', typeof sc.caveStalactites === 'boolean' ? sc.caveStalactites : sc.caveRocks !== false);
   set('startGate', sc.startGate); if (document.activeElement !== $('startText')) set('startText', sc.startText);
   $('startGateHeightVal').textContent = `${sc.startGateHeight} m`;
   $('tunnelDensityVal').textContent = (() => { const { N, step } = tunnelResolution(sc); return `${N - 1} lados · cada ${step.toFixed(1)} m`; })();
@@ -4420,6 +4499,7 @@ function syncSceneControls() {
   set('trackTexOpacity', sc.trackTexOpacity ?? 1);
   document.querySelectorAll('#trackMeshMode button').forEach((b) => b.classList.toggle('on', b.dataset.mode === (sc.trackMeshMode || 'uniform')));
   set('trackDensity', sc.trackDensity ?? 100); set('trackDensityNum', sc.trackDensity ?? 100);
+  set('trackDivs', sc.trackDivs ?? 0); if ($('trackDivsVal')) $('trackDivsVal').textContent = `${sc.trackDivs ?? 0}`;
   set('trackMaxTris', Math.min(300000, sc.trackMaxTris ?? 200000)); set('trackMaxTrisNum', sc.trackMaxTris ?? 200000);
   set('trackAdapt', sc.trackAdapt ?? 0.5);
   $('trackAdaptVal').textContent = `${Math.round((sc.trackAdapt ?? 0.5) * 100)} %`;
@@ -4521,7 +4601,7 @@ function ref3dSettings() { const R = state.ref3d; const o = {}; for (const k of 
 // ---------- decoración: biblioteca de assets y sets ----------
 /** Lo que la exportación necesita de la decoración: biblioteca, sets y sus zonas pintadas. */
 function decoExportInfo() { return { assetById: (id) => app.assetById(id), sets: state.decoSets, paintFor: (set) => app.decoPaintWorld(set) }; }
-function decoChanged() { preview.buildDeco(); editor.draw(); }
+function decoChanged() { preview.buildDeco(); editor.draw(); if (state.scene.shadows) scheduleShadows(); }
 function selectDecoSet(id) {
   state.selDeco = id;
   const st = state.decoSets.find((x) => x.id === id);
@@ -4605,7 +4685,7 @@ function renderDecoPanel() {
       <div class="meta"><span class="dcount"></span></div>
       <div class="dbody">
       <div class="field"${models.length ? ' hidden' : ''}><label>Forma</label><select class="dshape"><option value="cube">Cubos</option><option value="plane">Planos (de frente, 1 cara con UV)</option></select></div>
-      <div class="row gap wrap"><label class="check"><input type="checkbox" class="dv"${set.visible !== false ? ' checked' : ''}> Visible</label>
+      <div class="row gap wrap"><label class="check"><input type="checkbox" class="dv"${set.visible !== false ? ' checked' : ''}> Visible</label><label class="check" title="Cada elemento del set lleva un plano de sombra (se generan con «Planos de sombra»)"><input type="checkbox" class="dsh"${set.shadow ? ' checked' : ''}> Proyectar sombra</label>
         <select class="dm"><option value="road">Junto a la pista</option><option value="painted">Solo en zonas pintadas</option></select></div>
       <div class="row gap wrap dpaint"${set.mode === 'painted' ? '' : ' hidden'}><button class="dp${painting ? ' active' : ''}">${painting ? 'Terminar de pintar' : 'Pintar zonas'}</button><button class="dpc"${set.paint && set.paint.length ? '' : ' disabled'}>Borrar zonas</button><span class="small muted">clic derecho o Alt borra</span></div>
       <div class="field droad"${set.mode === 'painted' ? ' hidden' : ''}><label>Lado</label><select class="ds"><option value="both">Ambos lados</option><option value="left">Izquierda</option><option value="right">Derecha</option></select></div>
@@ -4650,6 +4730,7 @@ function renderDecoPanel() {
     d.querySelector('.dn').addEventListener('change', (e) => { const v = e.target.value.trim().replace(/[^\w\-áéíóúñÁÉÍÓÚÑ ]/g, '').replace(/\s+/g, '_'); if (v) set.name = v; e.target.value = set.name; });
     d.querySelector('.dc').addEventListener('input', (e) => { set.color = e.target.value; d.querySelector('.swatch').style.background = set.color; commit(); });
     d.querySelector('.dv').addEventListener('change', (e) => { set.visible = e.target.checked; commit(); });
+    d.querySelector('.dsh').addEventListener('change', (e) => { set.shadow = e.target.checked; commit(); refreshShadowInfo(preview.shadowInfo); });
     d.querySelector('.dm').addEventListener('change', (e) => { pushUndo(); set.mode = e.target.value; commit(true); });
     d.querySelector('.ds').addEventListener('change', (e) => { set.side = e.target.value; commit(); });
     d.querySelector('.dsl').addEventListener('change', (e) => { set.onSlopes = e.target.checked; commit(); });
@@ -5038,7 +5119,8 @@ function bindSceneControls() {
   $('btnSusp').addEventListener('click', suspFromSel);
   $('btnSuspTool').addEventListener('click', suspFromSel);
   $('btnBankTop').addEventListener('click', () => focusPanel('bank'));
-  $('caveRocks').addEventListener('change', (e) => { sc.caveRocks = e.target.checked; sceneChanged(); });
+  $('caveRocks').addEventListener('change', (e) => { if (typeof sc.caveStalactites !== 'boolean') sc.caveStalactites = sc.caveRocks !== false; sc.caveRocks = e.target.checked; sceneChanged(); });
+  $('caveStal').addEventListener('change', (e) => { sc.caveStalactites = e.target.checked; sceneChanged(); });
   // material de las paredes socavadas (ríos y cascadas)
   for (const [id, key] of [['riverWall', 'riverWallTex'], ['fallWall', 'fallWallTex']]) {
     $(id + 'Btn').addEventListener('click', () => $(id + 'File').click());
@@ -5052,6 +5134,15 @@ function bindSceneControls() {
   $('wireColor').addEventListener('input', wire);
   $('wireOpacity').addEventListener('input', wire);
   // F3: mostrar u ocultar el wireframe (en cualquier momento, incluso con un campo enfocado)
+  // F: la vista 3D encuadra lo seleccionado (sin selección, toda la pista)
+  document.addEventListener('keydown', (e) => {
+    if (e.code !== 'KeyF' || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || (preview.game && preview.game.active)) return;
+    const t = e.target || {};
+    if (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA') return;
+    try { const hk = JSON.parse(localStorage.getItem('tsg.hotkeys.v1') || '{}'); if (Object.values(hk).includes('F')) return; } catch { /* sin almacenamiento */ }
+    e.preventDefault();
+    preview.focusSelection();
+  });
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'F3') return;
     e.preventDefault();
@@ -5137,6 +5228,42 @@ function bindSceneControls() {
   $('btnGrassTex').addEventListener('click', () => $('fileGrassTex').click());
   $('fileGrassTex').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) loadTexture(f, 'grassTex'); });
   $('btnGrassTexRemove').addEventListener('click', () => { state.grassTex = null; syncSceneControls(); sceneChanged(); });
+  // planos de sombra: los cambios rehacen solo las sombras
+  {
+    const shadowsChanged = () => { syncShadowControls(); scheduleShadows(); };
+    $('shadows').addEventListener('change', (e) => { sc.shadows = e.target.checked; shadowsChanged(); refreshShadowInfo(preview.shadowInfo); });
+    $('treeShadow').addEventListener('change', (e) => { sc.treeShadow = e.target.checked; shadowsChanged(); });
+    $('sunLight').addEventListener('change', (e) => { sc.sunLight = e.target.checked; preview.updateSunLight(); });
+    $('shadowMode').addEventListener('change', (e) => { sc.shadowMode = e.target.value; shadowsChanged(); });
+    for (const k of Object.keys(SHADOW_FMT)) {
+      $(k).addEventListener('input', (e) => {
+        const v = parseFloat(e.target.value);
+        if (!Number.isFinite(v)) return;
+        sc[k] = k === 'shadowMaxTris' ? Math.round(v) : v;
+        if ($(k + 'Val')) $(k + 'Val').textContent = SHADOW_FMT[k](sc[k]);
+        if (k === 'shadowOpacity' || k === 'shadowSoft') $('shadowTexThumb').src = shadowTexCanvas().toDataURL('image/png');
+        if (k === 'sunElev' || k === 'shadowMaxLen') drawSunPad();
+        scheduleShadows();
+      });
+    }
+    $('btnShadowTex').addEventListener('click', () => $('fileShadowTex').click());
+    $('fileShadowTex').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) loadTexture(f, 'shadowTex'); });
+    $('btnShadowTexRemove').addEventListener('click', () => { state.shadowTex = null; syncShadowControls(); scheduleShadows(); });
+    // sol: se arrastra en el cuadro (posición en planta)
+    const pad = $('sunPad');
+    const setSun = (e) => {
+      const r = pad.getBoundingClientRect(), R = r.width / 2 - 10;
+      sc.sunX = +Math.max(-1, Math.min(1, (e.clientX - r.left - r.width / 2) / R)).toFixed(3);
+      sc.sunY = +Math.max(-1, Math.min(1, -(e.clientY - r.top - r.height / 2) / R)).toFixed(3);
+      drawSunPad(); preview.updateSunLight(); scheduleShadows();
+    };
+    pad.addEventListener('pointerdown', (e) => { pad.setPointerCapture(e.pointerId); pad.style.cursor = 'grabbing'; setSun(e); pad._drag = true; });
+    pad.addEventListener('pointermove', (e) => { if (pad._drag) setSun(e); });
+    const endSun = () => { pad._drag = false; pad.style.cursor = 'grab'; };
+    pad.addEventListener('pointerup', endSun);
+    pad.addEventListener('pointercancel', endSun);
+    new ResizeObserver(() => drawSunPad()).observe(pad);
+  }
   // pares slider + número
   const pair = (range, numId, key, min, isInt) => {
     const apply = (v) => {
@@ -5203,6 +5330,7 @@ function bindSceneControls() {
     const cap = (v) => { v = Math.round(Math.max(200, v)); if (!isFinite(v)) return; sc.trackMaxTris = v; trackMeshChanged(); };
     $('trackMaxTris').addEventListener('input', (e) => cap(parseFloat(e.target.value)));
     $('trackMaxTrisNum').addEventListener('change', (e) => cap(parseFloat(e.target.value)));
+    $('trackDivs').addEventListener('input', (e) => { sc.trackDivs = Math.max(0, Math.min(16, Math.round(parseFloat(e.target.value) || 0))); trackMeshChanged(); });
     $('trackAdapt').addEventListener('input', (e) => { sc.trackAdapt = Math.max(0, Math.min(1, parseFloat(e.target.value))); trackMeshChanged(); });
   }
   $('trackTexOpacity').addEventListener('input', () => { sc.trackTexOpacity = parseFloat($('trackTexOpacity').value); $('trackTexOpacityVal').textContent = `${Math.round(sc.trackTexOpacity * 100)} %`; preview.update(false, true); editor.draw(); });
@@ -5215,7 +5343,7 @@ function bindSceneControls() {
     const { exportGLB } = await import('./export-glb.js');
     toast('Generando escena .glb…');
     try {
-      const { buffer, info } = await exportGLB(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: state.bridgeTex || defaultBridgeCanvas(), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
+      const { buffer, info } = await exportGLB(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: state.bridgeTex || defaultBridgeCanvas(), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas() }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
       download('track_scene.glb', buffer, 'model/gltf-binary');
       toast(`Escena exportada: pista ${info.trackTris.toLocaleString('es')} triángulos${info.terrainTris ? `, terreno ${info.terrainTris.toLocaleString('es')}` : ''}${info.hills ? `, ${info.hills} cerro(s)` : ''}${info.tunnels ? `, ${info.tunnels} túnel(es)` : ''}${info.gateTris ? ', pórtico de salida' : ''}${info.items ? `, ${info.items} elementos de pista` : ''}${info.trees ? `, ${info.trees} árboles` : ''}. Todo como objetos separados.`);
     } catch (err) { console.error(err); toast('No se pudo exportar la escena: ' + err.message); }
@@ -5227,7 +5355,7 @@ function bindSceneControls() {
     const { exportFBX } = await import('./export-fbx.js');
     toast('Generando escena .fbx…');
     try {
-      const { buffer, info } = await exportFBX(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: state.bridgeTex || defaultBridgeCanvas(), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
+      const { buffer, info } = await exportFBX(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: state.bridgeTex || defaultBridgeCanvas(), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas() }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
       download('track_scene.fbx', buffer, 'application/octet-stream');
       toast(`FBX exportado (${(buffer.length / 1048576).toFixed(1)} MB): pista${info.terrainTris ? ', terreno' : ''}${info.hills ? `, ${info.hills} cerro(s)` : ''}${info.tunnels ? `, ${info.tunnels} túnel(es)` : ''}${info.gateTris ? ', pórtico' : ''}${info.items ? `, ${info.items} elementos de pista` : ''}${info.trees ? `, ${info.trees} árboles` : ''}${info.grass ? ', hierba' : ''}. Z arriba, en metros, con texturas incrustadas.`);
     } catch (err) { console.error(err); toast('No se pudo exportar el FBX: ' + err.message); }
@@ -5240,7 +5368,9 @@ function bindSceneControls() {
     const f = (v) => Math.round(v).toLocaleString('es');
     el.textContent = `${f(m.rows)} secciones de ${f(m.samples)} muestras · ${f(m.tris)} triángulos${m.uniTris ? ` (uniforme a esta densidad: ${f(m.uniTris)})` : ''}. ${state.scene.trackMeshMode === 'optimized' ? 'Las curvas, los cambios de pendiente, el peralte y los cambios de ancho reciben más secciones; las rectas, menos.' : 'Secciones a distancia pareja.'} El mapeado UV sigue la distancia recorrida, así que la textura se ve igual con más o menos secciones. El tope de triángulos manda sobre la densidad.`;
   };
+  app.onShadowInfo = (inf) => refreshShadowInfo(inf);
   app.onSceneInfo = (info) => {
+    refreshShadowInfo(preview.shadowInfo);
     $('terrainInfo').textContent = state.scene.terrain ? `Terreno: ${info.terrainTris.toLocaleString('es')} triángulos, celda de ${info.terrainCell.toFixed(1)} m${info.terrainCellFine ? ` (${info.terrainCellFine.toFixed(1)} m en lo pintado)` : ''} · ${info.ms.toFixed(0)} ms. Nunca atraviesa la pista: queda al menos ${state.scene.terrainGap} m bajo su superficie.` : 'Desactivado.';
     $('treesInfo').textContent = state.scene.trees ? `${info.trees} árboles${info.treesOnHills ? ` (${info.treesOnHills} sobre cerros)` : ''}.${!(state.scene.treeOnSlopes || state.scene.treeOnTops) && state.hills.length ? ' Sin marcar laderas ni cima, solo van sobre el terreno.' : ''}` : 'Desactivado.';
     $('grassInfo').textContent = state.scene.grass ? `${(info.grass || 0).toLocaleString('es')} matas · ${(info.grassTris || 0).toLocaleString('es')} triángulos. Se exporta como una sola malla «hierba» con la textura recortada por transparencia.` : 'Desactivado.';
