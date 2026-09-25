@@ -10,6 +10,7 @@ import { edgeSamples } from '../js/export.js';
 import { computeItems, defaultGroup, itemAt } from '../js/items.js';
 import { nearestOnSamples } from '../js/geometry.js';
 import { buildEdgeMeshes } from '../js/edges.js';
+import { edgeExtents } from '../js/tunnels.js';
 
 let fails = 0, passes = 0;
 const check = (cond, msg) => { if (cond) passes++; else { fails++; console.log('  FALLA:', msg); } };
@@ -78,6 +79,14 @@ for (const [key, s] of Object.entries(SAMPLES)) {
     check(T.adaptive && worst <= -0.29, `${key}: terreno adaptativo atraviesa la pista (${worst.toFixed(3)})`);
     check(T.tris <= 60000 * 1.1, `${key}: tope de polígonos adaptativo (${T.tris})`);
     check(T.cellFine && T.cellFine < T.cell * 0.4, `${key}: celdas finas en lo pintado`);
+    // subdivisiones por pincelada: dos zonas con distinto multiplicador
+    if (key === 'oval') {
+      const c1 = { x: L.routes[0].x[Math.floor(L.routes[0].n / 2)], y: L.routes[0].y[Math.floor(L.routes[0].n / 2)] };
+      const cnt = (TT, c) => { let n = 0; const P = TT.positions; for (let v = 0; v < P.length; v += 3) if (Math.hypot(P[v] - c.x, P[v + 1] - c.y) < 50) n++; return n; };
+      const T2 = buildTerrain(L, E, { terrain: true, terrainDensity: 45, terrainMaxPolys: 200000 }, [{ x: c0.x, y: c0.y, r: 70, e: false, f: 4 }, { x: c1.x, y: c1.y, r: 70, e: false, f: 25 }]);
+      const nA = cnt(T2, c0), nB = cnt(T2, c1);
+      check(T2.adaptive && nB > nA * 3, `${key}: cada pincelada con sus subdivisiones (${nA} / ${nB} vértices)`);
+    }
   }
   // cerros como mallas propias: fuera de los túneles ni terreno ni cerros quedan sobre la pista; donde cubren la pista, túnel
   {
@@ -402,6 +411,18 @@ for (const [key, s] of Object.entries(SAMPLES)) {
   const ab = BA.barriers.find((b) => b.alt);
   check(Math.abs((ab.positions[5] - ab.positions[2]) - 1.6) < 1e-3, `bordes: altura propia de la barrera del atajo (${(ab.positions[5] - ab.positions[2]).toFixed(2)})`);
   check(B.dirt.length === 4 && B.barriers.length === 4, `bordes: tierra y barrera a ambos lados de cada ruta (${B.dirt.length}, ${B.barriers.length})`);
+  // parámetros propios de cada atajo (route.edges) por encima de los generales de atajos
+  {
+    const ai = L.routes.findIndex((q) => q.kind === 'alt');
+    L.routes[ai].edges = { dirtSide: 'none', barrierSide: 'right', barrierHeight: 2.4 };
+    const BR = buildEdgeMeshes(L, E, sp);
+    const arB = BR.barriers.filter((b) => b.k === ai), arD = BR.dirt.filter((d) => d.k === ai);
+    check(arB.length === 1 && arB[0].side === -1 && arD.length === 0, `bordes: parámetros por atajo (${arB.length} barreras, ${arD.length} caminos)`);
+    check(arB.length && Math.abs((arB[0].positions[5] - arB[0].positions[2]) - 2.4) < 1e-3, 'bordes: altura propia de la barrera de un atajo');
+    const X = edgeExtents(sp, L.routes[ai]);
+    check(X.left === 0 && X.right > 0.2, `bordes: ancho extra por atajo (${X.left}, ${X.right.toFixed(2)})`);
+    delete L.routes[ai].edges;
+  }
   // hereda las secciones de la pista: mismas filas que la malla de la pista
   const rows = trackRows(L, E, sp);
   const bm = B.barriers.find((b) => b.k === 0 && b.side === 1);

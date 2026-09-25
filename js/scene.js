@@ -23,7 +23,8 @@ export const DEFAULT_SCENE = {
   terrainFalloff: 60, // m para pasar de la altura de la pista al relieve general
   terrainTexRepX: 20,
   terrainTexRepY: 20,
-  paintFactor: 4, // multiplicador de densidad en zonas pintadas
+  paintFactor: 4, // multiplicador de densidad de las pinceladas antiguas (sin valor propio)
+  paintSubdiv: 1, // subdivisiones extra del pincel de densidad: cada pincelada nueva guarda f = (n + 1)²
   terrainType: 'forest', // 'forest' (bosque) | 'beach' (playa: costa hacia el agua) | 'mountain' (acantilado y pared de roca)
   coastSide: 'right', // playa: 'left' | 'right' | 'both'
   coastLand: 25, // m de tierra (irregular) entre la pista y la playa o el borde del acantilado
@@ -116,13 +117,13 @@ export { edgeExtents } from './tunnels.js';
 
 function trackSamples(layout, elev, sp = {}) {
   const out = [];
-  const XM = edgeExtents(sp, false), XA = edgeExtents(sp, true); // bordes de la pista y de los atajos (independientes)
+  const XR = layout.routes.map((r) => edgeExtents(sp, r)); // bordes de cada ruta (cada atajo tiene los suyos)
   layout.routes.forEach((r, k) => {
     const e = elev.routes[k];
     for (let i = 0; i < r.n; i++) {
       const low = e.z[i] - Math.abs(Math.sin(e.roll[i])) * r.w[i] / 2;
       const bridge = !!(r.bridges && r.bridges.some((b) => { const d = r.closed ? (((r.s[i] - b.s0) % r.L) + r.L) % r.L : r.s[i] - b.s0; return d >= 0 && d <= b.s1 - b.s0; }));
-      const X = r.kind === 'alt' ? XA : XM;
+      const X = XR[k];
       const uL = r.w[i] / 2 + X.left, uR = r.w[i] / 2 + X.right; // calzada + camino de tierra + barrera
       out.push({ x: r.x[i], y: r.y[i], z: low, zc: e.z[i], sr: Math.sin(e.roll[i]), tx: r.tx[i], ty: r.ty[i], w: r.w[i], uL, uR, ew: 2 * Math.max(uL, uR), k, i, s: r.s[i], j: out.length, bridge });
     }
@@ -323,16 +324,18 @@ export function buildTrackMesh(layout, elev, spIn = {}) {
         tgt.push(a, d, b, b, d, e2);
       }
     }
-    return { name: r.name, alt: r.kind === 'alt', positions: new Float32Array(pos), uvs: new Float32Array(uv), indices: idx, coveredIdx: cIdx, bridgeIdx: bIdx, bridgeNo: (r.bridges || []).map((b, k) => (b.idx ?? k) + 1) };
+    return { name: r.name, k, alt: r.kind === 'alt', positions: new Float32Array(pos), uvs: new Float32Array(uv), indices: idx, coveredIdx: cIdx, bridgeIdx: bIdx, bridgeNo: (r.bridges || []).map((b, k) => (b.idx ?? k) + 1) };
   });
   // malla combinada (vista previa), en grupos de material: pista, atajos, tramos cubiertos, tableros de puente
   const nPos = parts.reduce((a, p) => a + p.positions.length, 0);
   const positions = new Float32Array(nPos), uvs = new Float32Array((nPos / 3) * 2);
   const G = { main: [], alt: [], covered: [], bridge: [] };
   let vo = 0;
+  const altRanges = []; // tramo de cada atajo dentro del grupo de atajos: [{k, start, count}] (relativo al grupo)
   for (const p of parts) {
     positions.set(p.positions, vo * 3);
     uvs.set(p.uvs, vo * 2);
+    if (p.alt) altRanges.push({ k: p.k, start: G.alt.length, count: p.indices.length });
     for (const i of p.indices) G[p.alt ? 'alt' : 'main'].push(i + vo);
     for (const i of p.coveredIdx) G.covered.push(i + vo);
     for (const bi of p.bridgeIdx) for (const i of bi) G.bridge.push(i + vo);
@@ -346,6 +349,7 @@ export function buildTrackMesh(layout, elev, spIn = {}) {
     { start: G.main.length + G.alt.length + G.covered.length, count: G.bridge.length, mat: 3 },
   ];
   const trackCount = G.main.length + G.alt.length + G.covered.length;
+  const altGroups = altRanges.map((a) => ({ k: a.k, start: G.main.length + a.start, count: a.count }));
   // tramos cubiertos como objetos propios (exportación)
   const coveredParts = [];
   for (const p of parts) if (p.coveredIdx.length) coveredParts.push({ name: `${p.name}_cubierto`, alt: p.alt, ...compactMesh(p.positions, p.uvs, p.coveredIdx) });
@@ -358,7 +362,7 @@ export function buildTrackMesh(layout, elev, spIn = {}) {
     if (p.bridgeIdx.some((b) => b.length) || p.coveredIdx.length) Object.assign(p, compactMesh(p.positions, p.uvs, p.indices));
     delete p.bridgeIdx; delete p.bridgeNo; delete p.coveredIdx;
   }
-  return { positions, uvs, indices, groups, trackCount, parts, coveredParts, bridgeParts, rows: rowLists.map((q) => q.length) };
+  return { positions, uvs, indices, groups, altGroups, trackCount, parts, coveredParts, bridgeParts, rows: rowLists.map((q) => q.length) };
 }
 
 /** Deja solo los vértices usados por los índices. */
@@ -664,7 +668,7 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
     return (sideZ ?? forestZ) + sc * fade;
   };
   if (extraPaint.length) paint = [...(paint || []), ...extraPaint];
-  const painted = paint && paint.length && sp.paintFactor > 1;
+  const painted = paint && paint.length && paint.some((st) => !st.e && (st.f ?? sp.paintFactor) > 1);
   const out = painted
     ? adaptiveMesh(minX, minY, W, H, sp, paint, heightAt)
     : gridMesh(minX, minY, W, H, sp, heightAt);
@@ -715,7 +719,7 @@ export function buildHills(layout, elev, spIn, T, hills) {
       const tsp = t.sp || sp, nat = tsp.tunnelType === 'natural'; // tipo propio del túnel
       const top = tunnelTop(tsp, t, ss);
       const vault = nat ? top / sp.tunnelHeight : 1;
-      const half = tunnelInnerWidth(sp, p.w, layout.routes[p.k].kind === 'alt') / 2 * vault + (nat ? 0.6 + 3 * sp.caveSize : 0) + 1;
+      const half = tunnelInnerWidth(sp, p.w, layout.routes[p.k]) / 2 * vault + (nat ? 0.6 + 3 * sp.caveSize : 0) + 1;
       const q = { ...p, tun: id, top, half, open: t.openSide || 0 };
       tunReach = Math.max(tunReach, half + box.thick + 2 + (t.openSide ? 2 * sp.tunnelWidth : 0));
       tunGrid.insert(p.x, p.y, q);
@@ -917,46 +921,61 @@ function gridMesh(minX, minY, W, H, sp, heightAt) {
 }
 
 function adaptiveMesh(minX, minY, W, H, sp, paint, heightAt) {
-  // 1) máscara de lo pintado
+  // 1) máscara de lo pintado: cada celda guarda el multiplicador de densidad de la última pincelada que la tocó
+  //    (cada pincelada lleva su propio multiplicador «f»; las antiguas usan el general sp.paintFactor)
   const mc = Math.max(1, Math.max(W, H) / 600);
   const mw = Math.ceil(W / mc) + 1, mh = Math.ceil(H / mc) + 1;
-  const mask = new Uint8Array(mw * mh);
+  const mask = new Float32Array(mw * mh);
+  const defF = Math.max(1, sp.paintFactor);
   for (const st of paint) {
+    const fv = st.e ? 0 : Math.max(1, Math.round((st.f ?? defF) * 4) / 4);
     const i0 = Math.max(0, Math.floor((st.x - st.r - minX) / mc)), i1 = Math.min(mw - 1, Math.ceil((st.x + st.r - minX) / mc));
     const j0 = Math.max(0, Math.floor((st.y - st.r - minY) / mc)), j1 = Math.min(mh - 1, Math.ceil((st.y + st.r - minY) / mc));
     for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
-      if (Math.hypot(minX + i * mc - st.x, minY + j * mc - st.y) <= st.r) mask[j * mw + i] = st.e ? 0 : 1;
+      if (Math.hypot(minX + i * mc - st.x, minY + j * mc - st.y) <= st.r) mask[j * mw + i] = fv <= 1 ? 0 : fv;
     }
   }
-  const isPainted = (x, y) => {
+  const factorAt = (x, y) => {
     const i = Math.round((x - minX) / mc), j = Math.round((y - minY) / mc);
-    return i >= 0 && j >= 0 && i < mw && j < mh && mask[j * mw + i] === 1;
+    return i >= 0 && j >= 0 && i < mw && j < mh ? mask[j * mw + i] : 0;
   };
-  let pc = 0;
-  for (let k = 0; k < mask.length; k++) pc += mask[k];
-  const Ap = Math.min(W * H, pc * mc * mc), Ar = Math.max(0, W * H - Ap);
-  // 2) espaciados: base según densidad, fino = base / sqrt(multiplicador); se ajustan al tope de polígonos
+  // área por nivel de multiplicador
+  const areas = new Map();
+  for (let k = 0; k < mask.length; k++) if (mask[k] > 0) areas.set(mask[k], (areas.get(mask[k]) || 0) + mc * mc);
+  let Ap = 0;
+  for (const a of areas.values()) Ap += a;
+  Ap = Math.min(W * H, Ap);
+  const Ar = Math.max(0, W * H - Ap);
+  // 2) espaciados: base según densidad; cada nivel pintado usa base / sqrt(f); todo se ajusta al tope de polígonos
   const d = clamp(sp.terrainDensity, 1, 100) / 100;
   let c = 20 * Math.pow(1 / 20, d);
-  const f = Math.sqrt(Math.max(1, sp.paintFactor));
-  let cf = c / f;
-  const pts = Ar / (c * c) + Ap / (cf * cf);
+  let pts = Ar / (c * c);
+  for (const [fv, a] of areas) pts += (Math.min(a, W * H) * fv) / (c * c);
   const maxTris = Math.max(200, sp.terrainMaxPolys);
-  if (2 * pts > maxTris) { const k = Math.sqrt((2 * pts) / maxTris); c *= k; cf *= k; }
-  // 3) puntos: grilla base fuera de lo pintado + grilla fina dentro (con un leve desfase para evitar degeneraciones)
+  if (2 * pts > maxTris) c *= Math.sqrt((2 * pts) / maxTris);
+  // 3) puntos: grilla base fuera de lo pintado + una grilla fina por nivel (con un leve desfase para evitar degeneraciones)
   const P = [];
   const nx = Math.max(2, Math.ceil(W / c)), ny = Math.max(2, Math.ceil(H / c));
   const cx = W / nx, cy = H / ny;
   for (let j = 0; j <= ny; j++) for (let i = 0; i <= nx; i++) {
     const x = minX + i * cx, y = minY + j * cy;
     const border = i === 0 || j === 0 || i === nx || j === ny;
-    if (border || !isPainted(x, y)) P.push(x, y);
+    if (border || !factorAt(x, y)) P.push(x, y);
   }
-  const fx = Math.max(2, Math.ceil(W / cf)), fy = Math.max(2, Math.ceil(H / cf));
-  const fcx = W / fx, fcy = H / fy;
-  for (let j = 1; j < fy; j++) for (let i = 1; i < fx; i++) {
-    const x = minX + i * fcx + (j % 2) * fcx * 0.013, y = minY + j * fcy + (i % 2) * fcy * 0.011;
-    if (isPainted(x, y)) P.push(x, y);
+  let cf = c;
+  for (const fv of areas.keys()) {
+    const cl = c / Math.sqrt(fv);
+    cf = Math.min(cf, cl);
+    const fx = Math.max(2, Math.ceil(W / cl)), fy = Math.max(2, Math.ceil(H / cl));
+    const fcx = W / fx, fcy = H / fy;
+    // recorre solo la caja de las celdas de este nivel
+    for (let j = 1; j < fy; j++) {
+      const y0 = minY + j * fcy;
+      for (let i = 1; i < fx; i++) {
+        const x = minX + i * fcx + (j % 2) * fcx * 0.013, y = y0 + (i % 2) * fcy * 0.011;
+        if (factorAt(x, y) === fv) P.push(x, y);
+      }
+    }
   }
   const coords = new Float64Array(P);
   const del = new Delaunator(coords);

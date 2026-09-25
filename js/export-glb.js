@@ -127,7 +127,17 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
     const trackMat = M('pista', tex(textures.track), 0x55585e);
     const altMat = M('pista_atajo', tex(textures.alt || textures.track), 0x55585e);
     const covMat = M('pista_cubierta', tex(textures.covered || textures.track), 0x44464b);
-    for (const p of tm.parts) if (p.indices.length) trackGroup.add(mesh(p.name, p.positions, p.indices, p.uvs, p.alt ? altMat : trackMat));
+    // cada atajo con textura propia tiene su material (pista_<atajo>); los demás comparten pista_atajo
+    const altOwn = new Map();
+    const matFor = (p) => {
+      if (!p.alt) return trackMat;
+      const r = layout.routes[p.k];
+      const own = r && textures.altFor ? textures.altFor(r).track : null;
+      if (!own) return altMat;
+      if (!altOwn.has(r.name)) altOwn.set(r.name, M(`pista_${r.name}`, tex(own), 0x55585e));
+      return altOwn.get(r.name);
+    };
+    for (const p of tm.parts) if (p.indices.length) trackGroup.add(mesh(p.name, p.positions, p.indices, p.uvs, matFor(p)));
     for (const p of tm.coveredParts) trackGroup.add(mesh(p.name, p.positions, p.indices, p.uvs, covMat));
   }
   // puentes creados a mano: tablero (textura propia, café por defecto) y un objeto por pilar, pivote en la base
@@ -167,8 +177,19 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
       const BM = (name, t) => new THREE.MeshStandardMaterial({ name, color: t ? 0xffffff : 0xd42a2a, map: t, roughness: 0.6, metalness: 0.1 });
       const dirtMat = DM('camino_tierra', tex(textures.dirt)), barMat = BM('barrera', tex(textures.barrier));
       const dirtAlt = DM('camino_tierra_atajo', tex(textures.altDirt || textures.dirt)), barAlt = BM('barrera_atajo', tex(textures.altBarrier || textures.barrier));
-      for (const m of B.dirt) grp.add(mesh(m.name, m.positions, m.indices, m.uvs, m.alt ? dirtAlt : dirtMat));
-      for (const m of B.barriers) grp.add(mesh(m.name, m.positions, m.indices, m.uvs, m.alt ? barAlt : barMat));
+      // cada atajo con textura propia de barrera / camino tiene su material (barrera_<atajo>, camino_tierra_<atajo>)
+      const own = new Map();
+      const edgeMat = (m, kind) => {
+        if (!m.alt) return kind === 'dirt' ? dirtMat : barMat;
+        const r = layout.routes[m.k];
+        const t = r && textures.altFor ? textures.altFor(r)[kind] : null;
+        if (!t) return kind === 'dirt' ? dirtAlt : barAlt;
+        const key = kind + ':' + r.name;
+        if (!own.has(key)) own.set(key, kind === 'dirt' ? DM(`camino_tierra_${r.name}`, tex(t)) : BM(`barrera_${r.name}`, tex(t)));
+        return own.get(key);
+      };
+      for (const m of B.dirt) grp.add(mesh(m.name, m.positions, m.indices, m.uvs, edgeMat(m, 'dirt')));
+      for (const m of B.barriers) grp.add(mesh(m.name, m.positions, m.indices, m.uvs, edgeMat(m, 'barrier')));
     }
   }
   // pórtico de salida: pivote en la base, al centro de la calzada

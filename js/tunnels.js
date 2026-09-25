@@ -168,7 +168,16 @@ export function profileSplit(prof) {
 
 /** Parámetros de bordes (camino de tierra y barrera) de la pista principal o de los atajos (independientes). */
 export function edgeParams(sp = {}, alt = false) {
-  const g = (k) => (alt ? sp['alt' + k[0].toUpperCase() + k.slice(1)] : sp[k]);
+  // alt: false (pista), true (atajos: valores generales antiguos) o la ruta; un atajo con parámetros propios
+  // (route.edges) usa los suyos y, para lo que no tenga, los generales de atajos
+  const route = alt && typeof alt === 'object' ? alt : null;
+  const isAlt = route ? route.kind === 'alt' : !!alt;
+  const own = route && isAlt ? route.edges : null;
+  const g = (k) => {
+    if (!isAlt) return sp[k];
+    if (own && own[k] != null) return own[k];
+    return sp['alt' + k[0].toUpperCase() + k.slice(1)];
+  };
   return {
     dirtSide: g('dirtSide') || 'none', dirtWidth: g('dirtWidth') ?? 3, dirtTile: g('dirtTile') ?? 4,
     barrierSide: g('barrierSide') || 'none', barrierHeight: g('barrierHeight') ?? 0.8, barrierThick: g('barrierThick') ?? 0.25, barrierTile: g('barrierTile') ?? 4,
@@ -397,9 +406,8 @@ export function buildTunnelGeometry(layout, elev, spIn, runs, opts = {}) {
     const noise = valueNoise(17 + t.id);
     const natural = sp.tunnelType === 'natural';
     const roadW = r.w[0];
-    const isAlt = r.kind === 'alt';
-    const W = tunnelInnerWidth(sp, roadW, isAlt); // la pared queda después de la barrera (y del camino de tierra)
-    const X = edgeExtents(sp, isAlt);
+    const W = tunnelInnerWidth(sp, roadW, r); // la pared queda después de la barrera (y del camino de tierra)
+    const X = edgeExtents(sp, r);
     const extSide = (side) => (side > 0 ? X.left : X.right);
     const Hb = sp.tunnelHeight;
     const prof = tunnelProfile(sp.tunnelShape, W, Hb, Nreq);
@@ -487,7 +495,7 @@ export function buildTunnelGeometry(layout, elev, spIn, runs, opts = {}) {
     const walkways = meshOut(wpos, wuv, widx);
     // bocas: marco con contorno exterior rectangular que sobresale del cerro (depth) y se mete en él (collarIn)
     // caja de la boca medida en los contornos reales de ambos extremos (+ grosor del marco)
-    const box = portalBox(sp, roadW, isAlt);
+    const box = portalBox(sp, roadW, r);
     {
       let mu = 0, mv = 0;
       for (const R of [ring[0], ring[ns]]) for (let q = 0; q < N; q++) if (keep[q]) { mu = Math.max(mu, Math.abs(R.loc[q][0])); mv = Math.max(mv, R.loc[q][1]); }

@@ -1,4 +1,5 @@
 // Editor 2D: muestra la imagen, el trazado coloreado por altura, los cruces y permite dibujar.
+import { edgeParams } from './tunnels.js';
 import { taubinSmooth, resampleUniform } from './geometry.js';
 
 /** Afín que lleva el triángulo src [[u,v]×3] al triángulo dst [[x,y]×3]: [a, b, c, d, e, f] para setTransform. */
@@ -95,7 +96,7 @@ export class Editor2D {
       cv.setPointerCapture(e.pointerId);
       const tool = this.app.state.tool;
       if ((tool === 'paint' || tool === 'hill' || tool === 'itemPaint' || tool === 'sculpt') && (e.button === 0 || e.button === 2)) {
-        this.painting = { kind: tool, erase: e.button === 2 || e.altKey || (tool !== 'sculpt' && this.app.state.paintErase), ctrl: e.ctrlKey || e.metaKey, last: null };
+        this.painting = { kind: tool, erase: e.button === 2 || e.altKey || (tool !== 'sculpt' && this.app.state.paintErase), ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey, last: null };
         const p0 = this.toLayout(sx, sy);
         this.app.beginPaint(tool, this.painting, p0);
         this.addPaint(p0);
@@ -359,24 +360,30 @@ export class Editor2D {
     ctx.restore();
   }
 
-  /** Atajo seleccionado: contorno amarillo. */
+  /** Atajo seleccionado: iluminado en amarillo (halo, relleno translúcido y bordes). */
   drawSelectedAlt(L) {
     const r = L.routes.find((q) => q.kind === 'alt' && q.altIndex === this.app.state.selAlt);
     if (!r) return;
     const { ctx } = this;
     ctx.save();
-    ctx.strokeStyle = 'rgba(255,224,102,0.9)';
-    ctx.lineWidth = Math.max(3, (r.w[0] / L.scale) * this.view.zoom + 4);
+    const wpx = Math.max(3, (r.w[0] / L.scale) * this.view.zoom);
+    const path = () => { ctx.beginPath(); for (let i = 0; i < r.n; i++) { const [lx, ly] = L.toLayout(r.x[i], r.y[i]); const [x, y] = this.toScreen(lx, ly); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); } };
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    ctx.globalAlpha = 0.45;
-    ctx.beginPath();
-    for (let i = 0; i < r.n; i++) { const [lx, ly] = L.toLayout(r.x[i], r.y[i]); const [x, y] = this.toScreen(lx, ly); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); }
-    ctx.stroke();
-    ctx.globalAlpha = 1;
-    const [lx, ly] = L.toLayout(r.x[Math.floor(r.n / 2)], r.y[Math.floor(r.n / 2)]);
-    const [x, y] = this.toScreen(lx, ly);
-    ctx.fillStyle = '#ffe066'; ctx.font = '12px system-ui, sans-serif'; ctx.fillText(r.name, x + 10, y - 10);
-    ctx.restore();
+    // halo
+    ctx.shadowColor = 'rgba(255,224,102,0.95)'; ctx.shadowBlur = 16;
+    ctx.strokeStyle = 'rgba(255,224,102,0.35)'; ctx.lineWidth = wpx + 10;
+    path(); ctx.stroke();
+    ctx.shadowBlur = 0;
+    // calzada iluminada
+    ctx.strokeStyle = 'rgba(255,224,102,0.55)'; ctx.lineWidth = wpx;
+    path(); ctx.stroke();
+    // bordes
+    const { left, right } = this.app.edgeSamplesFor ? this.app.edgeSamplesFor(r) : { left: null, right: null };
+    if (left && right) {
+      ctx.strokeStyle = '#ffe066'; ctx.lineWidth = 2;
+      for (const arr of [left, right]) { ctx.beginPath(); arr.forEach((p, i) => { const [lx, ly] = L.toLayout(p.x, p.y); const [x, y] = this.toScreen(lx, ly); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); }); ctx.stroke(); }
+    }
+    ctx.restore(); // (la etiqueta con el nombre se dibuja junto a las de los demás atajos, en amarillo)
   }
 
   /** Auto de la cámara de juego sobre el mapa (flecha en el sentido de marcha). */
@@ -542,13 +549,14 @@ export class Editor2D {
   drawBarriers2D(L, list, pxPerM) {
     const { ctx } = this;
     const sc = this.app.state.scene;
-    const halfOf = (m) => Math.max(0.25, ((m.alt ? sc.altBarrierTile : sc.barrierTile) || 4) / 2);
+    const PE = (m) => edgeParams(sc, L.routes[m.k]); // cada atajo con sus propios parámetros
+    const halfOf = (m) => Math.max(0.25, (PE(m).barrierTile || 4) / 2);
     const S = (P, v) => { const x = (P[v * 3] + P[v * 3 + 9]) / 2, y = (P[v * 3 + 1] + P[v * 3 + 10]) / 2; const [lx, ly] = L.toLayout(x, y); return this.toScreen(lx, ly); };
     ctx.save();
     ctx.lineCap = 'butt';
     for (const m of list) {
       const P = m.positions, half = halfOf(m);
-      ctx.lineWidth = Math.max(2, ((m.alt ? sc.altBarrierThick : sc.barrierThick) || 0.25) * pxPerM * 1.4);
+      ctx.lineWidth = Math.max(2, (PE(m).barrierThick || 0.25) * pxPerM * 1.4);
       for (const col of [0, 1]) {
         ctx.strokeStyle = col ? '#f2f2f2' : '#d42a2a';
         ctx.beginPath();
@@ -913,7 +921,7 @@ export class Editor2D {
     const bsrc = this.app.bridgeTexCanvas ? this.app.bridgeTexCanvas() : src;
     const dir = sc.trackTexDir || 'vertical';
     const isAltR = r.kind === 'alt';
-    const TT = this.texStrip(isAltR && this.app.altTexCanvas ? this.app.altTexCanvas() : src, dir), TB = r.bridges && r.bridges.length ? this.texStrip(bsrc, dir) : TT;
+    const TT = this.texStrip(isAltR && this.app.altTexCanvas ? this.app.altTexCanvas(r) : src, dir), TB = r.bridges && r.bridges.length ? this.texStrip(bsrc, dir) : TT;
     const cov = st.coveredRanges || [], k = L.routes.indexOf(r);
     const TC = cov.some((c) => c.k === k) && this.app.coveredTexCanvas ? this.texStrip(this.app.coveredTexCanvas(), dir) : TT;
     const coveredAt = (sv) => { for (const c of cov) { if (c.k !== k) continue; let ss = sv; if (r.closed) { while (ss < c.s0) ss += r.L; while (ss > c.s1 + r.L) ss -= r.L; } if (ss >= c.s0 && ss <= c.s1) return true; } return false; };
@@ -1097,7 +1105,7 @@ export class Editor2D {
       const t = r.name;
       const w = ctx.measureText(t).width + 8;
       ctx.fillRect(x - w / 2, y - 22, w, 16);
-      ctx.fillStyle = '#9fd4ff';
+      ctx.fillStyle = r.altIndex === this.app.state.selAlt ? '#ffe066' : '#9fd4ff';
       ctx.fillText(t, x - w / 2 + 4, y - 10);
     });
     // marcadores de cruce

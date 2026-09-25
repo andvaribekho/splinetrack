@@ -32,10 +32,11 @@ export function buildEdgeMeshes(layout, elev, spIn = {}, opts = {}) {
   const sp = { ...DEFAULT_SCENE, ...spIn };
   const res = { dirt: [], barriers: [], dirtTris: 0, barrierTris: 0 };
   // parámetros propios de la pista y de los atajos
-  const PM = edgeParams(sp, false), PA = edgeParams(sp, true);
+  if (!layout || !elev) return res;
   const wants = (P) => ({ dirt: P.dirtSide !== 'none' && P.dirtWidth > 0, bar: P.barrierSide !== 'none' && P.barrierHeight > 0 });
-  const WM = wants(PM), WA = wants(PA);
-  if (!layout || !elev || (!WM.dirt && !WM.bar && !WA.dirt && !WA.bar)) return res;
+  const PR = layout.routes.map((r) => edgeParams(sp, r)); // cada atajo con sus propios parámetros
+  const WR = PR.map(wants);
+  if (!WR.some((w) => w.dirt || w.bar)) return res;
   const skip = opts.skip || [];
   const rowsAll = trackRows(layout, elev, sp);
   const skirt = sp.skirts && sp.terrain ? sp.terrainGap + 0.8 : 0;
@@ -65,7 +66,7 @@ export function buildEdgeMeshes(layout, elev, spIn = {}, opts = {}) {
   };
   layout.routes.forEach((r, k) => {
     const isAlt = r.kind === 'alt';
-    const P = isAlt ? PA : PM, Wt = isAlt ? WA : WM;
+    const P = PR[k], Wt = WR[k];
     const wantDirt = Wt.dirt, wantBar = Wt.bar;
     if (!wantDirt && !wantBar) return;
     const dw = Math.max(0, P.dirtWidth), bh = P.barrierHeight, bt = Math.max(0.05, P.barrierThick);

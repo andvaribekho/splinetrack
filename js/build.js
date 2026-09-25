@@ -221,6 +221,9 @@ export function buildLayout(project, gpIn = {}) {
     const r = buildAlt(alt, ai, main, gp, tw, scale, ds, warnings);
     if (r) {
       r.id = routes.length;
+      if (!alt.uid) alt.uid = `al${Date.now().toString(36)}${ai}${Math.floor(Math.random() * 1e4).toString(36)}`;
+      r.uid = alt.uid; // identificador estable (texturas propias del atajo)
+      r.edges = alt.edges || null; // camino de tierra y barrera propios del atajo
       routes.push(r);
     }
   });

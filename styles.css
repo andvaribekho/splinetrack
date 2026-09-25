@@ -303,3 +303,16 @@ h4.mini { margin: 10px 0 4px; font-size: 11px; font-weight: 600; letter-spacing:
 .collapsible.collapsed .coll-arrow { transform: rotate(-90deg); }
 .deco-card .dtoggle { background: none; border: 0; color: var(--muted); padding: 0 4px; cursor: pointer; }
 .deco-card.collapsed .dbody { display: none; }
+
+/* iconos de los botones */
+button.has-icon { display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
+button.has-icon.wide { display: flex; }
+svg.bi { width: 13px; height: 13px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; opacity: 0.85; }
+button.small svg.bi { width: 11px; height: 11px; }
+/* tarjetas de atajos: colapsables, con sus materiales y bordes */
+.alt-card.collapsed .abody { display: none; }
+.alt-card .abody { margin-top: 4px; }
+.alt-card .abody h4.mini { margin: 8px 0 3px; }
+.alt-card img.athumb.inherited { opacity: 0.45; }
+.alt-card .adirtBox.disabled, .alt-card .abarBox.disabled { opacity: 0.45; pointer-events: none; }
+.alt-card.sel { box-shadow: 0 0 0 2px #ffe066 inset, 0 0 12px rgba(255, 224, 102, 0.35); }

@@ -229,13 +229,7 @@
         <div class="field"><label>Repeticiones a lo largo <span class="val"><input type="number" id="trackTexRepsNum" min="1" step="1" style="width:72px"></span></label><input type="range" id="trackTexReps" min="1" max="1000" step="1"></div>
         <div class="field"><label>Opacidad de la textura (vistas 2D y 3D) <span class="val" id="trackTexOpacityVal"></span></label><input type="range" id="trackTexOpacity" min="0" max="1" step="0.01"></div>
         <p class="hint" id="trackTexInfo"></p>
-        <h3 id="altTexHead">Textura de los atajos</h3>
-        <div class="row gap">
-          <button id="btnAltTex">Cargar textura…</button>
-          <button id="btnAltTexRemove" disabled>Como la pista</button>
-          <img id="altTexThumb" class="thumb" hidden alt="">
-        </div>
-        <input id="fileAltTex" type="file" accept="image/*" hidden>
+        <p class="hint">Cada atajo tiene su propia textura, camino de tierra y barrera: están en su tarjeta, en <b>Rutas alternativas</b>.</p>
         <h3 id="coveredTexHead">Textura de tramos cubiertos (túneles y bajo cruces)</h3>
         <div class="row gap">
           <button id="btnCoveredTex">Cargar textura…</button>
@@ -243,7 +237,7 @@
           <img id="coveredTexThumb" class="thumb" hidden alt="">
         </div>
         <input id="fileCoveredTex" type="file" accept="image/*" hidden>
-        <p class="hint">Por defecto, la textura de la pista un 20 % más oscura. Se exportan como <code>&lt;ruta&gt;_cubierto</code> con el material <code>pista_cubierta</code>; los atajos usan <code>pista_atajo</code>.</p>
+        <p class="hint">Por defecto, la textura de la pista un 20 % más oscura. Se exportan como <code>&lt;ruta&gt;_cubierto</code> con el material <code>pista_cubierta</code>; cada atajo usa <code>pista_atajo</code> o, con textura propia, <code>pista_&lt;atajo&gt;</code>.</p>
         <h3 id="bridgeTexHead">Textura de los puentes</h3>
         <div class="row gap">
           <button id="btnBridgeTex">Cargar textura…</button>
@@ -287,27 +281,7 @@
           <div class="row gap"><button id="btnBarrierTex">Cargar textura…</button><button id="btnBarrierTexRemove" disabled>Por defecto</button><img id="barrierTexThumb" class="thumb" hidden alt=""></div>
           <input id="fileBarrierTex" type="file" accept="image/*" hidden>
         </div>
-        <div class="collapsible" id="altEdgesBlock">
-        <div class="coll-head" title="Clic para mostrar u ocultar"><span class="coll-arrow">▾</span><h3 class="subhead">Atajos (parámetros propios)</h3></div>
-        <div class="coll-body">
-        <h3 class="subhead" id="altDirtHead">Camino de tierra de los atajos</h3>
-        <div class="field"><label>Lado</label><select id="altDirtSide"><option value="none">Sin camino de tierra</option><option value="left">Izquierda</option><option value="right">Derecha</option><option value="both">Ambos lados</option></select></div>
-        <div id="altDirtBox">
-          <div class="field"><label>Ancho <span class="val"><input type="number" id="altDirtWidthNum" min="0.2" step="0.1" style="width:60px"> m</span></label><input type="range" id="altDirtWidth" min="0.5" max="15" step="0.1"></div>
-          <div class="field"><label>Repetición de la textura (a lo largo) <span class="val"><input type="number" id="altDirtTileNum" min="0.5" step="0.5" style="width:56px"> m</span></label><input type="range" id="altDirtTile" min="0.5" max="30" step="0.5"></div>
-          <div class="row gap"><button id="btnAltDirtTex">Cargar textura…</button><button id="btnAltDirtTexRemove" disabled>Por defecto</button><img id="altDirtTexThumb" class="thumb" hidden alt=""></div>
-          <input id="fileAltDirtTex" type="file" accept="image/*" hidden>
-        </div>
-        <h3 class="subhead" id="altBarrierHead">Barrera de los atajos</h3>
-        <div class="field"><label>Lado</label><select id="altBarrierSide"><option value="none">Sin barrera</option><option value="left">Izquierda</option><option value="right">Derecha</option><option value="both">Ambos lados</option></select></div>
-        <div id="altBarrierBox">
-          <div class="field"><label>Altura <span class="val"><input type="number" id="altBarrierHeightNum" min="0.1" step="0.05" style="width:60px"> m</span></label><input type="range" id="altBarrierHeight" min="0.2" max="3" step="0.05"></div>
-          <div class="field"><label>Grosor <span class="val"><input type="number" id="altBarrierThickNum" min="0.05" step="0.05" style="width:60px"> m</span></label><input type="range" id="altBarrierThick" min="0.05" max="1.5" step="0.05"></div>
-          <div class="field"><label>Tiling: largo de cada repetición <span class="val"><input type="number" id="altBarrierTileNum" min="0.5" step="0.5" style="width:56px"> m</span></label><input type="range" id="altBarrierTile" min="0.5" max="20" step="0.5"></div>
-          <div class="row gap"><button id="btnAltBarrierTex">Cargar textura…</button><button id="btnAltBarrierTexRemove" disabled>Por defecto</button><img id="altBarrierTexThumb" class="thumb" hidden alt=""></div>
-          <input id="fileAltBarrierTex" type="file" accept="image/*" hidden>
-        </div>
-        </div></div>
+        <p class="hint">Los atajos tienen sus propios bordes: en su tarjeta de <b>Rutas alternativas</b>.</p>
         <p class="hint" id="edgesInfo"></p>
       </section>
 
@@ -339,7 +313,8 @@
         <div class="field"><label>Margen alrededor de la pista <span class="val" id="terrainMarginVal"></span></label><input type="range" id="terrainMargin" min="20" max="400" step="5"></div>
         <div class="field"><label>Separación bajo la pista <span class="val" id="terrainGapVal"></span></label><input type="range" id="terrainGap" min="0.05" max="2" step="0.05"></div>
         <div class="field"><label>Transición hacia el relieve <span class="val" id="terrainFalloffVal"></span></label><input type="range" id="terrainFalloff" min="10" max="200" step="5"></div>
-        <div class="field"><label>Multiplicador en zonas pintadas <span class="val" id="paintFactorVal"></span></label><input type="range" id="paintFactor" min="1" max="25" step="0.5"></div>
+        <div class="field"><label>Subdivisiones extra del pincel <span class="val" id="paintSubdivPVal"></span></label><input type="range" id="paintSubdivP" min="1" max="6" step="1"></div>
+        <p class="hint">Cada pincelada guarda sus subdivisiones: puedes pintar zonas con distinto detalle.</p>
         <div class="row gap"><button id="btnPaintTool" title="Activa la herramienta «Pintar densidad» en el mapa">Pintar densidad…</button><button id="btnPaintClear" title="Borra todas las zonas pintadas">Borrar pintura</button></div>
         <label class="check"><input type="checkbox" id="skirts"> Faldones laterales en la pista</label>
         <h3 class="subhead" id="sculptHead">Relieve esculpido</h3>
@@ -591,6 +566,7 @@
           <label class="check small"><input type="checkbox" id="showRaw"> Trazo crudo</label>
           <span id="paintBox" class="row" hidden>
             <label class="small">Pincel <input type="range" id="paintBrush" min="3" max="200" step="1" style="width:90px"> <span class="val" id="paintBrushVal"></span></label>
+            <label class="small" id="paintSubdivLbl" title="Subdivisiones extra de las pinceladas que hagas ahora (cada lado de la celda se divide n + 1 veces)">Subdiv. <input type="range" id="paintSubdiv" min="1" max="6" step="1" style="width:70px"> <span class="val" id="paintSubdivVal"></span></label>
             <label class="check small" id="paintEraseLbl"><input type="checkbox" id="paintErase"> Borrar</label>
           </span>
           <span id="sculptBox" class="row" hidden>
@@ -601,7 +577,7 @@
             <label class="small">Altura <input type="range" id="hillHeight" min="2" max="150" step="1" style="width:90px"> <span class="val" id="hillHeightVal"></span></label>
             <select id="hillHard" style="font-size:12px"><option value="soft">Colina suave</option><option value="hard">Pared rocosa</option></select>
             <label class="small">Cima plana <input type="range" id="hillFlatBar" min="0" max="1" step="0.05" style="width:70px"></label>
-            <label class="check small" title="Un trazo que empieza sobre un cerro crea un cerro nuevo encima (también con Ctrl + arrastrar)"><input type="checkbox" id="hillStack"> Nuevo cerro encima</label>
+            <span class="small muted" title="Sobre un cerro existente: arrastrar pinta un cerro nuevo encima; con Shift agranda (o borra) el cerro original">sobre un cerro: nuevo encima · Shift = el original</span>
           </span>
           <span id="editBox" class="row" hidden>
             <button id="btnTbRadius">Radio</button>

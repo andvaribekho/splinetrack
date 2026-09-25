@@ -11,6 +11,8 @@ import { pillarGeometry } from './tunnels.js';
 import { applyRefLook } from './refmodel.js';
 import { makeBannerCanvas, makeCheckerCanvas, makeGrassCanvas, makePadCanvas, makeGlowCanvas, makeAsphaltCanvas, makeBridgeCanvas } from './gatetex.js';
 
+const BRUSH_SEGS = 72; // segmentos del aro del pincel
+
 export class Preview3D {
   constructor(container, app) {
     this.app = app;
@@ -113,7 +115,16 @@ export class Preview3D {
     dom.addEventListener('pointerdown', (e) => { down = [e.clientX, e.clientY, e.button]; this.tcUsed = !!this.tc.axis || !!(this.refTc && this.refTc.axis && this.refTc.enabled) || !!(this.hillTc && this.hillTc.axis && this.hillTc.enabled); });
     // pintar densidad o cerros directamente sobre el terreno en 3D
     this.paintMode = null;
-    this.brushRing = new THREE.Mesh(new THREE.RingGeometry(0.93, 1, 48), new THREE.MeshBasicMaterial({ color: 0xe040fb, transparent: true, opacity: 0.9, depthTest: false, side: THREE.DoubleSide }));
+    // aro del pincel: una cinta que se amolda a la superficie (se rehace en cada movimiento)
+    {
+      const N = BRUSH_SEGS, g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(new Float32Array((N + 1) * 2 * 3), 3));
+      const idx = [];
+      for (let i = 0; i < N; i++) { const a = i * 2, b = a + 2; idx.push(a, b, a + 1, a + 1, b, b + 1); }
+      g.setIndex(idx);
+      this.brushRing = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: 0xe040fb, transparent: true, opacity: 0.9, depthTest: false, side: THREE.DoubleSide }));
+    }
+    this.brushRing.frustumCulled = false;
     this.brushRing.renderOrder = 20;
     this.brushRing.visible = false;
     this.scene.add(this.brushRing);
@@ -134,8 +145,7 @@ export class Preview3D {
     const moveRing = (pt) => {
       const sc = this.app.state.scene;
       const rm = this.paintMode === 'hill' ? sc.hillBrush : this.paintMode === 'sculpt' ? sc.sculptBrush : sc.paintBrush;
-      this.brushRing.scale.setScalar(rm);
-      this.brushRing.position.set(pt.x, pt.y, pt.z + 0.3);
+      this.shapeBrushRing(pt, rm);
       this.brushRing.material.color.set(this.paintMode === 'hill' ? 0xe0a050 : this.paintMode === 'sculpt' ? 0x7ec8ff : this.paintMode === 'itemPaint' ? this.app.itemPaintColor() : 0xe040fb);
       this.brushRing.visible = true;
       this.needsFrame = true;
@@ -146,11 +156,11 @@ export class Preview3D {
       if (pt) moveRing(pt);
     });
     this.el.addEventListener('pointerdown', (e) => {
-      if (!this.paintMode || (e.button !== 0 && e.button !== 2) || e.shiftKey || (this.game && this.game.active)) return;
+      if (!this.paintMode || (e.button !== 0 && e.button !== 2) || (e.shiftKey && this.paintMode !== 'hill') || (this.game && this.game.active)) return;
       e.stopPropagation(); e.preventDefault();
       this.controls.enabled = false;
       const L = this.app.state.layout;
-      const ses = { kind: this.paintMode, erase: e.button === 2 || e.altKey || (this.paintMode !== 'sculpt' && this.app.state.paintErase), ctrl: e.ctrlKey || e.metaKey, last: null };
+      const ses = { kind: this.paintMode, erase: e.button === 2 || e.altKey || (this.paintMode !== 'sculpt' && this.app.state.paintErase), ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey, last: null };
       const pt0 = paintHit(e);
       this.app.beginPaint(ses.kind, ses, pt0 && L ? L.toLayout(pt0.x, pt0.y) : null, pt0 ? pt0.hillId : null);
       const stroke = (ev) => {
@@ -376,15 +386,42 @@ export class Preview3D {
       const tex = this.texture(this.app.state.trackTex || this.asphaltCanvas);
       if (!this.bridgeCanvas) this.bridgeCanvas = makeBridgeCanvas();
       const btex = this.texture(this.app.state.bridgeTex || this.bridgeCanvas);
-      const atex = this.texture(this.app.altTexCanvas ? this.app.altTexCanvas() : null) || tex;
+      const atex = tex; // atajos sin textura propia: la de la pista
       const ctex = this.texture(this.app.coveredTexCanvas ? this.app.coveredTexCanvas() : null) || tex;
       const ovMat = (map) => new THREE.MeshStandardMaterial({ map, side: THREE.DoubleSide, roughness: 0.9, metalness: 0, transparent: op < 0.999, opacity: op, depthWrite: op >= 0.999, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
-      // grupos: pista, atajos, tramos cubiertos (túneles y bajo cruces) y tableros de puente, cada uno con su textura
+      // grupos: pista, atajos, tramos cubiertos (túneles y bajo cruces) y tableros de puente, cada uno con su textura;
+      // cada atajo con textura propia usa su material (índices 4 en adelante)
       g.clearGroups();
-      for (const gr of tm.groups) if (gr.count) g.addGroup(gr.start, gr.count, gr.mat);
-      const ov = new THREE.Mesh(g, [ovMat(tex), ovMat(atex), ovMat(ctex), ovMat(btex)]);
+      const mats = [ovMat(tex), ovMat(atex), ovMat(ctex), ovMat(btex)];
+      for (const gr of tm.groups) {
+        if (!gr.count) continue;
+        if (gr.mat !== 1 || !tm.altGroups) { g.addGroup(gr.start, gr.count, gr.mat); continue; }
+        for (const ag of tm.altGroups) {
+          if (!ag.count) continue;
+          const own = this.app.altOwnTex ? this.app.altOwnTex(L.routes[ag.k], 'track') : null;
+          let mi = 1;
+          if (own) { mats.push(ovMat(this.texture(own))); mi = mats.length - 1; }
+          g.addGroup(ag.start, ag.count, mi);
+        }
+      }
+      const ov = new THREE.Mesh(g, mats);
       ov.userData.texOverlay = true;
       this.trackGroup.add(ov);
+    }
+    // atajo seleccionado: la calzada se ilumina en amarillo (malla compartida, solo el grupo de ese atajo)
+    {
+      const si = this.app.state.selAlt;
+      const ag = si != null && tm.altGroups ? tm.altGroups.find((q) => L.routes[q.k] && L.routes[q.k].altIndex === si) : null;
+      if (ag && ag.count) {
+        const hg = new THREE.BufferGeometry();
+        hg.setAttribute('position', g.getAttribute('position'));
+        hg.setIndex(g.getIndex());
+        hg.addGroup(ag.start, ag.count, 0);
+        const hm = new THREE.Mesh(hg, [new THREE.MeshBasicMaterial({ color: 0xffe066, transparent: true, opacity: 0.45, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 })]);
+        hm.userData.altHi = true;
+        hm.renderOrder = 6;
+        this.trackGroup.add(hm);
+      }
     }
     this.triCounts.track = tm.indices.length / 3;
     this.buildEdges(false);
@@ -585,6 +622,7 @@ export class Preview3D {
     const L = this.app.state.layout, E = this.app.state.result;
     const sp = this.app.state.scene;
     this.disposeGroup(this.extras);
+    if (this.paintOverlay) { for (const c of [...this.paintOverlay.children]) { this.paintOverlay.remove(c); if (c.userData.ownGeo) c.geometry.dispose(); } this.paintOverlay.userData.key = null; }
     // la exageración Z se aplica por vértice (applyExag): terreno y pista se estiran; cerros, túneles, árboles, hierba y pórtico no
     this.extras.scale.set(1, 1, 1);
     this.terrainData = null;
@@ -719,6 +757,7 @@ export class Preview3D {
     }
     const ground = makeGround(this.terrainData, this.hillData);
     this.groundCache = ground;
+    if (this.paintMode) this.refreshPaintOverlay();
     this.vegModels = { trees: null, grass: null };
     const hasAsset = (id) => !!(this.app.assetById && this.app.assetById(id));
     if (sp.grass) {
@@ -856,20 +895,22 @@ export class Preview3D {
       const mesh = new THREE.Mesh(g, mat);
       mesh.userData.edge = kind;
       mesh.userData.alt = !!m.alt;
+      mesh.userData.k = m.k;
       mesh.name = m.name;
       this.edgeGroup.add(mesh);
     };
-    const tx = (fn, alt) => this.texture(this.app[fn] ? this.app[fn](alt) : null);
-    if (B.dirt.length) {
-      const dm = (alt) => new THREE.MeshStandardMaterial({ map: tx('dirtTexCanvas', alt), color: 0xffffff, roughness: 1, metalness: 0, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
-      const mm = dm(false), ma = dm(true);
-      for (const m of B.dirt) mk(m, m.alt ? ma : mm, 'dirt');
-    }
-    if (B.barriers.length) {
-      const bm = (alt) => new THREE.MeshStandardMaterial({ map: tx('barrierTexCanvas', alt), color: 0xffffff, roughness: 0.6, metalness: 0.1 });
-      const mm = bm(false), ma = bm(true);
-      for (const m of B.barriers) mk(m, m.alt ? ma : mm, 'barrier');
-    }
+    // material por textura: la pista y los atajos sin textura propia comparten el suyo
+    const cache = new Map();
+    const matFor = (fn, m, make) => {
+      const cv = this.app[fn] ? this.app[fn](m.alt ? L.routes[m.k] : null) : null;
+      const key = fn + ':' + (cv ? (cv.__mid || (cv.__mid = Math.random().toString(36).slice(2))) : 'none');
+      if (!cache.has(key)) cache.set(key, make(this.texture(cv)));
+      return cache.get(key);
+    };
+    const dm = (map) => new THREE.MeshStandardMaterial({ map, color: 0xffffff, roughness: 1, metalness: 0, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+    const bm = (map) => new THREE.MeshStandardMaterial({ map, color: 0xffffff, roughness: 0.6, metalness: 0.1 });
+    for (const m of B.dirt) mk(m, matFor('dirtTexCanvas', m, dm), 'dirt');
+    for (const m of B.barriers) mk(m, matFor('barrierTexCanvas', m, bm), 'barrier');
     this.triCounts.edges = B.dirtTris + B.barrierTris;
     if (this.app.onEdgesInfo) this.app.onEdgesInfo(B);
     if (this.wire && this.wire.on) this.applyWireframe();
@@ -935,7 +976,9 @@ export class Preview3D {
     if (ud.edge) { // barrera o camino de tierra: sus parámetros
       if (this.app.state.ref3d && this.app.state.ref3d.sel) this.app.selectRef3d(false);
       this.app.selectHill(null);
-      if (this.app.focusPanel) this.app.focusPanel('edges', document.getElementById((ud.alt ? 'alt' : '') + (ud.edge === 'barrier' ? 'BarrierHead' : 'DirtHead').replace(/^./, (c) => (ud.alt ? c : c.toLowerCase()))));
+      const r = this.app.state.layout && this.app.state.layout.routes[ud.k];
+      if (ud.alt && r && this.app.focusAltEdge) this.app.focusAltEdge(r.altIndex, ud.edge); // los de un atajo: en su tarjeta
+      else if (this.app.focusPanel) this.app.focusPanel('edges', document.getElementById(ud.edge === 'barrier' ? 'barrierHead' : 'dirtHead'));
       return;
     }
     if (this.app.state.ref3d && this.app.state.ref3d.sel) this.app.selectRef3d(false);
@@ -1019,6 +1062,108 @@ export class Preview3D {
   setPaintMode(m) {
     this.paintMode = m;
     if (!m) { this.brushRing.visible = false; this.needsFrame = true; }
+    this.refreshPaintOverlay();
+  }
+
+  /** Altura visible (con la exageración Z) de la superficie en (x, y): terreno y cerros; null si no hay terreno. */
+  surfaceZ(x, y) {
+    const G = this.groundCache, T0 = this.terrainData;
+    if (!G || !T0) return null;
+    const g = G.sample(x, y), t = T0.sample(x, y);
+    if (!Number.isFinite(g)) return null;
+    return g + (Number.isFinite(t) ? t : 0) * (this.zExag - 1);
+  }
+
+  /** Coloca el aro del pincel en pt con radio r, amoldado a la superficie que hay debajo. */
+  shapeBrushRing(pt, r) {
+    const N = BRUSH_SEGS, pos = this.brushRing.geometry.getAttribute('position'), a = pos.array;
+    const w = Math.max(0.25, Math.min(r * 0.08, 3));
+    const z0 = this.surfaceZ(pt.x, pt.y);
+    const lift = Math.max(0.15, r * 0.004);
+    for (let i = 0; i <= N; i++) {
+      const t = (i / N) * Math.PI * 2, c = Math.cos(t), s = Math.sin(t);
+      for (let k = 0; k < 2; k++) {
+        const rr = k ? r : r - w;
+        const x = pt.x + c * rr, y = pt.y + s * rr;
+        let z = this.surfaceZ(x, y);
+        if (z == null || z0 == null) z = pt.z; // sin terreno: plano a la altura del punto
+        const v = (i * 2 + k) * 3;
+        a[v] = x; a[v + 1] = y; a[v + 2] = z + lift;
+      }
+    }
+    pos.needsUpdate = true;
+    this.brushRing.position.set(0, 0, 0);
+    this.brushRing.scale.setScalar(1);
+  }
+
+  /**
+   * Zonas pintadas iluminadas en 3D mientras se usa un pincel: las mismas mallas de terreno y cerros, dibujadas otra
+   * vez con una máscara (lienzo en coordenadas del mundo) que se rehace en cada toque del pincel.
+   */
+  refreshPaintOverlay() {
+    if (this._povRaf) return;
+    this._povRaf = requestAnimationFrame(() => { this._povRaf = 0; this.drawPaintOverlay(); });
+  }
+  drawPaintOverlay() {
+    const info = this.paintMode && this.app.paintOverlayStrokes ? this.app.paintOverlayStrokes() : null;
+    if (!info || !info.strokes.length) { if (this.paintOverlay) { this.paintOverlay.visible = false; this.needsFrame = true; } return; }
+    const L = this.app.state.layout;
+    if (!L) return;
+    // límites: los del terreno o, si no hay, los de la pista con margen
+    let B = this.terrainData && this.terrainData.bounds;
+    if (!B) {
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const r of L.routes) for (let i = 0; i < r.n; i++) { minX = Math.min(minX, r.x[i]); minY = Math.min(minY, r.y[i]); maxX = Math.max(maxX, r.x[i]); maxY = Math.max(maxY, r.y[i]); }
+      const m = 300;
+      B = { minX: minX - m, minY: minY - m, maxX: maxX + m, maxY: maxY + m };
+    }
+    if (!this.paintOverlay) {
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = 1024;
+      const tex = new THREE.CanvasTexture(cv);
+      tex.colorSpace = THREE.NoColorSpace;
+      tex.minFilter = THREE.LinearFilter;
+      const mat = new THREE.ShaderMaterial({
+        uniforms: { uMask: { value: tex }, uMin: { value: new THREE.Vector2() }, uSize: { value: new THREE.Vector2(1, 1) }, uColor: { value: new THREE.Color(0xe040fb) }, uTime: { value: 0 } },
+        vertexShader: 'varying vec2 vW; void main(){ vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xy; gl_Position = projectionMatrix * viewMatrix * w; }',
+        fragmentShader: 'uniform sampler2D uMask; uniform vec2 uMin; uniform vec2 uSize; uniform vec3 uColor; varying vec2 vW; void main(){ vec2 uv = (vW - uMin) / uSize; if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) discard; float a = texture2D(uMask, uv).a; if (a < 0.01) discard; gl_FragColor = vec4(uColor * (0.7 + 0.6 * a), 0.28 + 0.4 * a); }',
+        transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8, side: THREE.DoubleSide,
+      });
+      this.paintOverlay = new THREE.Group();
+      this.paintOverlay.userData.canvas = cv; this.paintOverlay.userData.tex = tex; this.paintOverlay.userData.mat = mat;
+      this.paintOverlay.renderOrder = 5;
+      this.scene.add(this.paintOverlay);
+    }
+    const ov = this.paintOverlay, cv = ov.userData.canvas, mat = ov.userData.mat;
+    // mallas sobre las que se dibuja (se comparten las geometrías: siguen la exageración Z)
+    const surf = [...(this.terrainMesh ? [this.terrainMesh] : []), ...(this.hillMeshes || [])];
+    const key = surf.map((m) => m.geometry.uuid).join(',') + (surf.length ? '' : `plane:${B.minX},${B.minY}`);
+    if (ov.userData.key !== key) {
+      for (const c of [...ov.children]) { ov.remove(c); if (c.userData.ownGeo) c.geometry.dispose(); }
+      if (surf.length) for (const m of surf) { m.updateWorldMatrix(true, false); const o = new THREE.Mesh(m.geometry, mat); o.matrixAutoUpdate = false; o.matrix.copy(m.matrixWorld); o.renderOrder = 5; ov.add(o); }
+      else { const g = new THREE.PlaneGeometry(B.maxX - B.minX, B.maxY - B.minY).translate((B.minX + B.maxX) / 2, (B.minY + B.maxY) / 2, 0.05); const o = new THREE.Mesh(g, mat); o.userData.ownGeo = true; o.renderOrder = 5; ov.add(o); }
+      ov.userData.key = key;
+    }
+    const W = B.maxX - B.minX, H = B.maxY - B.minY;
+    mat.uniforms.uMin.value.set(B.minX, B.minY);
+    mat.uniforms.uSize.value.set(W, H);
+    mat.uniforms.uColor.value.set(info.color || 0xe040fb);
+    const ctx = cv.getContext('2d');
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    // canvas: y hacia abajo; uv.y = 0 es la primera fila de la textura (flipY) → se dibuja con Y invertida
+    const sx = cv.width / W, sy = cv.height / H;
+    for (const st of info.strokes) {
+      ctx.globalCompositeOperation = st.e ? 'destination-out' : 'source-over';
+      ctx.fillStyle = `rgba(255,255,255,${st.a ?? 1})`;
+      ctx.beginPath();
+      ctx.ellipse((st.x - B.minX) * sx, (B.maxY - st.y) * sy, Math.max(1, st.r * sx), Math.max(1, st.r * sy), 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+    ov.userData.tex.needsUpdate = true;
+    ov.visible = true;
+    this.needsFrame = true;
   }
 
   setGizmoMode(m) {
