@@ -12,6 +12,8 @@ import { nearestOnSamples } from '../js/geometry.js';
 import { buildEdgeMeshes } from '../js/edges.js';
 import { edgeExtents } from '../js/tunnels.js';
 import { buildRivers } from '../js/rivers.js';
+import { sculptField } from '../js/scene.js';
+import { SCULPT_PRESETS, curveLUT, curveEval, normCurve, presetOf } from '../js/sculptcurve.js';
 
 let fails = 0, passes = 0;
 const check = (cond, msg) => { if (cond) passes++; else { fails++; console.log('  FALLA:', msg); } };
@@ -763,6 +765,33 @@ for (const [key, s] of Object.entries(SAMPLES)) {
     for (let k = 0; k < r.n; k++) { const j = (k + 1) % r.n, d = Math.hypot(r.x[j] - r.x[k], r.y[j] - r.y[k]); dmax = Math.max(dmax, d); dmin = Math.min(dmin, d); }
     check(dmax / dmin < 1.05, `puente desplazado ${side}: muestreo uniforme (${dmin.toFixed(3)}–${dmax.toFixed(3)})`);
   }
+}
+
+// ---- curva del pincel de relieve ----
+{
+  const ev = curveEval(SCULPT_PRESETS.bell.pts);
+  let err = 0;
+  for (let k = 0; k <= 20; k++) { const t = k / 20; err = Math.max(err, Math.abs(ev(t) - (1 - t * t) ** 2)); }
+  check(err < 0.03, `curva campana ≈ (1-t²)² (error ${err.toFixed(3)})`);
+  for (const [k, p] of Object.entries(SCULPT_PRESETS)) {
+    const lut = curveLUT(p.pts);
+    let mono = true;
+    for (let i = 1; i < lut.length; i++) if (lut[i] > lut[i - 1] + 1e-6) mono = false;
+    check(mono && Math.abs(lut[0] - 1) < 1e-6 && lut[lut.length - 1] === 0, `preset ${k}: monótono de 1 a 0`);
+    check(presetOf(p.pts) === k, `preset ${k} reconocido`);
+  }
+  const n = normCurve([[0.5, 0.4], [0.02, 1.2], [1, 0.3], [0.501, 0.2]]);
+  check(n[0][0] === 0 && n[n.length - 1][0] === 1 && n.every((q) => q[1] >= 0 && q[1] <= 1) && n.length === 3, `normCurve limpia la curva ${JSON.stringify(n)}`);
+  // meseta dura: cima plana (a media distancia del centro casi toda la altura); campana: ya bajó
+  const mk = (pts) => sculptField([{ x: 0, y: 0, r: 20, h: 5, lut: pts ? curveLUT(pts) : undefined }]);
+  const Fm = mk(SCULPT_PRESETS.mesa.pts), Fb = mk(SCULPT_PRESETS.bell.pts), F0 = mk(null), Fg = mk(SCULPT_PRESETS.gentle.pts);
+  check(Math.abs(Fm.sample(0, 0) - 5) < 0.05 && Fm.sample(12, 0) > 4.9 && Fm.sample(15, 0) > 4.8, `meseta: plana hasta cerca del borde (${Fm.sample(12, 0).toFixed(2)}, ${Fm.sample(15, 0).toFixed(2)})`);
+  check(Fb.sample(12, 0) < 2.2 && Math.abs(Fb.sample(10, 0) - F0.sample(10, 0)) < 0.15, `campana ≈ caída anterior (${Fb.sample(10, 0).toFixed(2)} vs ${F0.sample(10, 0).toFixed(2)})`);
+  const maxSlope = (pts) => { const l = curveLUT(pts); let m = 0; for (let i = 1; i < l.length; i++) m = Math.max(m, (l[i - 1] - l[i]) * (l.length - 1)); return m; };
+  check(maxSlope(SCULPT_PRESETS.gentle.pts) < maxSlope(SCULPT_PRESETS.bell.pts) * 0.9 && maxSlope(SCULPT_PRESETS.mesa.pts) > 3 * maxSlope(SCULPT_PRESETS.bell.pts),
+    `pendientes máx.: suave ${maxSlope(SCULPT_PRESETS.gentle.pts).toFixed(2)} < campana ${maxSlope(SCULPT_PRESETS.bell.pts).toFixed(2)} < meseta ${maxSlope(SCULPT_PRESETS.mesa.pts).toFixed(2)}`);
+  const Fs = sculptField([{ x: 0, y: 0, r: 20, h: -3, lut: curveLUT(SCULPT_PRESETS.mesa.pts) }]);
+  check(Math.abs(Fs.sample(10, 0) + 3) < 0.05, 'meseta hundida: fondo plano');
 }
 
 function hillsZeroFlat(L) {

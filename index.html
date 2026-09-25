@@ -320,9 +320,14 @@
         <div class="row gap"><button id="btnPaintTool" title="Activa la herramienta «Pintar subdivisión» en el mapa">Pintar subdivisión…</button><button id="btnPaintClear" title="Borra todas las zonas pintadas">Borrar pintura</button></div>
         <label class="check"><input type="checkbox" id="skirts"> Faldones laterales en la pista</label>
         <h3 class="subhead" id="sculptHead">Relieve esculpido</h3>
-        <div class="row gap"><button id="btnSculptTool" title="Activa «Esculpir relieve» (en el mapa o en la vista 3D): clic derecho eleva, clic izquierdo hunde">Esculpir relieve…</button><button id="btnSculptClear" title="Quita todo el relieve esculpido">Borrar relieve</button></div>
+        <div class="row gap"><button id="btnSculptTool" title="Activa «Esculpir relieve» (en el mapa o en la vista 3D): clic izquierdo eleva, clic derecho hunde">Esculpir relieve…</button><button id="btnSculptClear" title="Quita todo el relieve esculpido">Borrar relieve</button></div>
         <div class="field"><label>Tamaño del pincel <span class="val" id="sculptBrushPVal"></span></label><input type="range" id="sculptBrushP" min="2" max="200" step="1"></div>
         <div class="field"><label>Fuerza por toque <span class="val" id="sculptStrengthPVal"></span></label><input type="range" id="sculptStrengthP" min="0.1" max="10" step="0.1"></div>
+        <div id="sculptCurveBox" class="sculpt-curve">
+          <div class="row gap"><label class="small">Curva del pincel</label><select id="sculptPreset" title="Formas prearmadas de la curva; al elegir una, la curva se puede seguir ajustando"></select></div>
+          <canvas id="sculptCurveCv" title="Corte del pincel: arriba lo que eleva (clic izquierdo), abajo lo que hunde (clic derecho). Arrastra los puntos; doble clic agrega un punto, clic derecho lo quita"></canvas>
+          <p class="hint">Arrastra los puntos para cambiar la forma · doble clic agrega · clic derecho quita. Cada trazo guarda la curva con que se pintó.</p>
+        </div>
         <label class="check"><input type="checkbox" id="sculptDetail"> Más detalle en lo esculpido</label>
         <p class="hint" id="sculptInfo"></p>
         <h3 class="subhead" id="terrainTexHead">Textura del terreno</h3>
@@ -596,11 +601,12 @@
           <button id="btnCut" title="Sección socavada: los puntos seleccionados socavan el terreno (zanja con paredes) en vez de deformarlo">Sección socavada</button>
           <button id="btnHelix" title="Helix: la pista da giros alrededor de un centro, subiendo (o bajando) en cada giro, en los puntos seleccionados">Helix</button>
           <button id="btnLoop" title="Rizo: la pista da una o más vueltas sobre sí misma en los puntos seleccionados y se cruza por arriba">Rizo</button>
+          <button id="btnLine" title="Recta: alinea los puntos seleccionados (2 o más) en una línea recta en planta (X Y). Las alturas no cambian: siguen el perfil de elevación">Recta</button>
           <button data-tool="start" title="Clic sobre la pista para fijar la meta">Meta</button>
           <button data-tool="ref" title="Mover y escalar la imagen de referencia (arrastra la imagen o su esquina)">Referencia</button>
           <button data-tool="hill" title="Pinta cerros (suaves o paredes rocosas); si cubren la pista se crea un túnel. Alt o clic derecho borra">Pintar cerros</button>
           <button data-tool="paint" title="Pinta zonas del terreno (o del cerro seleccionado) que tendrán más polígonos (Alt o clic derecho borra)">Pintar subdivisión</button>
-          <button data-tool="sculpt" title="Esculpe el terreno: clic derecho eleva, clic izquierdo hunde (en el mapa o en la vista 3D). [ y ] cambian el pincel">Esculpir relieve</button>
+          <button data-tool="sculpt" title="Esculpe el terreno: clic izquierdo eleva, clic derecho hunde (en el mapa o en la vista 3D). [ y ] cambian el pincel">Esculpir relieve</button>
           <button data-tool="river" title="Pinta ríos sobre el terreno; con un cerro seleccionado, lo que pintes sobre él es una cascada. Empezar sobre un río lo extiende (y se bifurca). Alt o clic derecho borra">Ríos y cascadas</button>
           <button id="btnSusp" title="Terreno elevado: los puntos seleccionados (seguidos, ruta principal) forman un tramo suspendido; el terreno no se adapta a él y lleva pilares hasta el suelo">Terreno elevado</button>
           <button id="btnBankTop" title="Peralte: lleva a sus parámetros en la barra lateral">Peralte</button>
@@ -623,7 +629,7 @@
           </span>
           <span id="sculptBox" class="row" hidden>
             <label class="small">Fuerza <input type="range" id="sculptStrength" min="0.1" max="10" step="0.1" style="width:80px"> <span class="val" id="sculptStrengthVal"></span></label>
-            <span class="small muted">clic der. eleva · clic izq. hunde</span>
+            <span class="small muted">clic izq. eleva · clic der. hunde</span>
           </span>
           <span id="hillBox" class="row" hidden>
             <label class="small">Altura <input type="range" id="hillHeight" min="2" max="150" step="1" style="width:90px"> <span class="val" id="hillHeightVal"></span></label>
@@ -651,6 +657,15 @@
             <span class="small edit-live" id="helixEditing" hidden>editando el helix seleccionado (en vivo)</span>
             <button id="btnHelixAdd" class="primary" title="Añade el helix en los puntos seleccionados (el resto de la pista no se mueve)">Añadir helix</button>
             <span class="small muted" id="helixInfo"></span>
+          </span>
+          <span id="lineBox" class="row" hidden>
+            <span class="small muted">Alinear selección en recta:</span>
+            <button id="btnLineChord" title="Recta entre el primer y el último punto seleccionado (esos dos no se mueven)">Entre extremos</button>
+            <button id="btnLineX" title="Recta paralela al eje X, centrada entre el primer y el último punto">Eje X</button>
+            <button id="btnLineY" title="Recta paralela al eje Y, centrada entre el primer y el último punto">Eje Y</button>
+            <label class="small" title="Ángulo de la recta en planta, en grados desde el eje X (antihorario)">Ángulo <input type="number" id="lineAngle" value="45" step="1" min="-360" max="360" style="width:58px"> °</label>
+            <button id="btnLineAngle" title="Alinea la selección con el ángulo indicado, centrada entre el primer y el último punto">Aplicar ángulo</button>
+            <span class="small muted" id="lineInfo"></span>
           </span>
           <span id="loopBox" class="row" hidden>
             <label class="small" title="Cuántas vueltas da el rizo (se cruza una vez por vuelta)">Vueltas <input type="number" id="loopTurns" min="1" max="8" step="1" value="1" style="width:44px"></label>

@@ -552,7 +552,7 @@ export class Editor2D {
       const erase = (this.painting && this.painting.erase) || st.paintErase;
       ctx_stroke: {
         const ctx = this.ctx;
-        ctx.strokeStyle = tool === 'sculpt' ? (this.painting ? (this.painting.erase ? '#ffa046' : '#50a0ff') : '#7ec8ff') : erase ? '#ff8a80' : tool === 'hill' ? '#e0a050' : tool === 'river' ? '#3fa7ff' : tool === 'itemPaint' ? this.app.itemPaintColor() : '#e040fb';
+        ctx.strokeStyle = tool === 'sculpt' ? (this.painting ? (this.painting.erase ? '#50a0ff' : '#ffa046') : '#7ec8ff') : erase ? '#ff8a80' : tool === 'hill' ? '#e0a050' : tool === 'river' ? '#3fa7ff' : tool === 'itemPaint' ? this.app.itemPaintColor() : '#e040fb';
         ctx.lineWidth = 1.5;
         const rm = tool === 'hill' ? st.scene.hillBrush : tool === 'sculpt' ? st.scene.sculptBrush : tool === 'river' ? st.scene.riverBrush : st.scene.paintBrush;
         ctx.beginPath(); ctx.arc(x, y, (rm / st.layout.scale) * this.view.zoom, 0, Math.PI * 2); ctx.stroke();

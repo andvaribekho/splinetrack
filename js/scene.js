@@ -3,6 +3,7 @@
 import { SpatialGrid, rng, clamp, smoothstep, nearestOnSamples } from './geometry.js';
 import Delaunator from '../vendor/delaunator.js';
 import { riverField, subdivFactor } from './rivers.js';
+import { DEFAULT_SCULPT_CURVE } from './sculptcurve.js';
 import { hillFieldOne, detectTunnels, tunnelTop, buildTunnelGeometry, applyTunnelOverrides, portalBox, frameAt, edgeExtents, tunnelInnerWidth } from './tunnels.js';
 
 export const DEFAULT_SCENE = {
@@ -39,6 +40,7 @@ export const DEFAULT_SCENE = {
   sculptBrush: 30, // radio del pincel de relieve (m)
   sculptStrength: 1.5, // m que sube o baja cada toque en el centro
   sculptDetail: true, // lo esculpido recibe más detalle (como lo pintado con densidad)
+  sculptCurve: DEFAULT_SCULPT_CURVE, // curva de caída del pincel de relieve [[t, f], ...] (sculptcurve.js)
   // cerros y túneles
   hillBrush: 40, // m de radio
   hillHeight: 25, // m (valores para cerros nuevos)
@@ -471,13 +473,19 @@ export function terrainTint(T, hasTex) {
 }
 
 /**
- * Relieve esculpido a mano sobre el terreno: suma de toques [{x, y, r, h}] (m; h > 0 eleva, h < 0 hunde) con caída suave
- * (1 - (d/r)²)². Se rasteriza en una grilla fina y se muestrea con interpolación bilineal. null si no hay toques.
+ * Relieve esculpido a mano sobre el terreno: suma de toques [{x, y, r, h, lut?}] (m; h > 0 eleva, h < 0 hunde) con caída
+ * según la curva del pincel (lut = tabla f(d/r) de sculptcurve.js) o, sin ella, (1 - (d/r)²)².Se rasteriza en una grilla fina y se muestrea con interpolación bilineal. null si no hay toques.
  */
 export function sculptField(dabs) {
   if (!dabs || !dabs.length) return null;
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, rmin = Infinity;
-  for (const d of dabs) { x0 = Math.min(x0, d.x - d.r); x1 = Math.max(x1, d.x + d.r); y0 = Math.min(y0, d.y - d.r); y1 = Math.max(y1, d.y + d.r); rmin = Math.min(rmin, d.r); }
+  for (const d of dabs) {
+    x0 = Math.min(x0, d.x - d.r); x1 = Math.max(x1, d.x + d.r); y0 = Math.min(y0, d.y - d.r); y1 = Math.max(y1, d.y + d.r);
+    // curvas con bordes empinados (meseta) necesitan una grilla más fina para que el borde no se ablande
+    let sl = 1.6;
+    if (Array.isArray(d.lut) && d.lut.length > 2) { const n = d.lut.length - 1; for (let i = 1; i <= n; i++) sl = Math.max(sl, (d.lut[i - 1] - d.lut[i]) * n); }
+    rmin = Math.min(rmin, d.r / Math.min(6, sl / 1.6));
+  }
   let c = clamp(rmin / 5, 0.4, 3);
   while (((x1 - x0) / c) * ((y1 - y0) / c) > 4e6) c *= 1.25; // tope de memoria
   const nx = Math.ceil((x1 - x0) / c) + 2, ny = Math.ceil((y1 - y0) / c) + 2;
@@ -486,11 +494,15 @@ export function sculptField(dabs) {
     const i0 = Math.max(0, Math.floor((d.x - d.r - x0) / c)), i1 = Math.min(nx - 1, Math.ceil((d.x + d.r - x0) / c));
     const j0 = Math.max(0, Math.floor((d.y - d.r - y0) / c)), j1 = Math.min(ny - 1, Math.ceil((d.y + d.r - y0) / c));
     const r2 = d.r * d.r;
+    const lut = Array.isArray(d.lut) && d.lut.length > 2 ? d.lut : null, ln = lut ? lut.length - 1 : 0;
     for (let j = j0; j <= j1; j++) {
       const dy = y0 + j * c - d.y;
       for (let i = i0; i <= i1; i++) {
         const dx = x0 + i * c - d.x, q = (dx * dx + dy * dy) / r2;
-        if (q < 1) { const f = 1 - q; F[j * nx + i] += d.h * f * f; }
+        if (q < 1) {
+          if (lut) { const u = Math.sqrt(q) * ln, k = u | 0, a = u - k; F[j * nx + i] += d.h * (lut[k] * (1 - a) + lut[k + 1] * a); }
+          else { const f = 1 - q; F[j * nx + i] += d.h * f * f; }
+        }
       }
     }
   }

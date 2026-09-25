@@ -59,6 +59,10 @@ const P = {
   flip: 'M7 7h12l-3-3M17 17H5l3 3',
   texture: 'M4 4h16v16H4zM4 12h16M12 4v16',
   swap: 'M7 7h12l-3-3M17 17H5l3 3',
+  line: 'M4 19L20 5M4 19a1.5 1.5 0 100 .01M12 12a1.5 1.5 0 100 .01M20 5a1.5 1.5 0 100 .01',
+  axisX: 'M3 12h18M17 8l4 4-4 4',
+  axisY: 'M12 21V3M8 7l4-4 4 4',
+  angle: 'M4 20h16M4 20L16 6M10 20a6 6 0 00-2-4.5',
 };
 
 const BY_ID = {
@@ -69,6 +73,7 @@ const BY_ID = {
   btnTbRadius: 'radius', btnArcApply: 'check', btnArcDone: 'deselect', btnTbFork: 'fork', btnFork: 'fork', btnTbBridge: 'bridge', btnBridge: 'bridge',
   btnCtrlMore: 'plus', btnCtrlLess: 'minus', btnCtrlReset: 'reset', btnDice: 'dice', btnTreeDice: 'dice', btnDockAll: 'anchor',
   btnSkyLoad: 'cloud', btnSkyReset: 'reset', btnPaintTool: 'brush', btnPaintClear: 'trash', btnSculptTool: 'sculpt', btnSculptClear: 'trash',
+  btnLine: 'line', btnLineChord: 'line', btnLineX: 'axisX', btnLineY: 'axisY', btnLineAngle: 'angle',
   btnHillTool: 'mountain', btnHillClear: 'trash', btnHillDelete: 'trash', btnHillDeselect: 'deselect',
   btnRef3d: 'box', btnRef3dTop: 'box', btnRef3dCenter: 'target', btnRef3dReset: 'reset', btnRef3dSelect: 'cursor', btnRef3dRemove: 'trash',
   btnAssetLoad: 'upload', btnDecoNew: 'plus', btnExportJSON: 'code', btnExportOBJ: 'box', btnExportBlender: 'download', btnExportMax: 'download',

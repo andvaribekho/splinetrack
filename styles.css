@@ -323,8 +323,16 @@ button.small svg.bi { width: 11px; height: 11px; }
 #loopInfo.warn { color: #ffb86b; }
 /* rizo: sus parámetros ocupan su propia línea y se acomodan en varias si no caben */
 #loopBox { flex-basis: 100%; flex-wrap: wrap; gap: 6px 10px; }
+#lineBox { flex-basis: 100%; flex-wrap: wrap; gap: 6px 10px; }
 #helixBox { flex-basis: 100%; flex-wrap: wrap; gap: 6px 10px; }
 #helixInfo.warn { color: #ffb86b; }
 #helixRBox.disabled { opacity: 0.45; pointer-events: none; }
 #cutBox { flex-basis: 100%; flex-wrap: wrap; gap: 6px 10px; }
 .edit-live { color: #8fd18f; font-weight: 600; }
+
+/* curva del pincel de relieve */
+.sculpt-curve { margin: 6px 0 4px; }
+.sculpt-curve .row { flex-wrap: nowrap; align-items: center; }
+.sculpt-curve .row label { white-space: nowrap; }
+.sculpt-curve select { flex: 1 1 auto; min-width: 0; font-size: 12px; }
+#sculptCurveCv { display: block; width: 100%; height: 150px; margin-top: 6px; border-radius: 6px; background: rgba(0,0,0,0.28); border: 1px solid rgba(255,255,255,0.08); cursor: crosshair; touch-action: none; }

@@ -11,6 +11,7 @@ import { initPanels } from './panels.js';
 import { initSplitters } from './splitters.js';
 import { initHotkeys } from './hotkeys.js';
 import { DEFAULT_SCENE, terrainCell } from './scene.js';
+import { SCULPT_PRESETS, DEFAULT_SCULPT_CURVE, normCurve, curveEval, curveLUT, presetOf } from './sculptcurve.js';
 import { makeTrackThumbnail } from './thumbnail.js';
 import { parseReference, footprint } from './refmodel.js';
 import { loadAsset, builtinAsset } from './assets.js';
@@ -57,7 +58,8 @@ const state = {
   decoSets: [], // sets de elementos decorativos
   selDeco: null, // id del set seleccionado
   ref3d: null, // modelo de referencia 3D {name, inner, meshes, fp, pos, rotZ, scale, ...} (no se exporta)
-  terrainSculpt: [], // relieve esculpido en el terreno [{x,y,r,h}] (x, y, r en coords del lienzo; h en m, + eleva, - hunde)
+  terrainSculpt: [], // relieve esculpido en el terreno [{x,y,r,h,cv}] (x, y, r en coords del lienzo; h en m, + eleva, - hunde; cv = curva)
+  sculptCurves: [], // curvas de caída usadas por los toques de relieve (cada toque guarda el índice de la suya)
   hills: [], // cerros independientes [{id,name,height,hard,flat,density,maxTris,strokes:[{x,y,r,e}]}] (toques en coords del lienzo)
   selHill: null, // id del cerro seleccionado
   rivers: [], // ríos y cascadas [{id,kind:'river'|'fall',hill,mode,depth,walls,wallSubdiv,strokes:[{x,y,r,e}]}] (coords del lienzo)
@@ -90,7 +92,7 @@ const state = {
 const undoStack = [];
 function snapshot() {
   const ref = state.ref ? { x: state.ref.x, y: state.ref.y, scale: state.ref.scale, opacity: state.ref.opacity } : null;
-  return JSON.stringify({ project: state.project, flatZones: state.flatZones, profileZones: state.profileZones, suspZones: state.suspZones, cutZones: state.cutZones, overrides: state.overrides, ref, refCanvas: !!state.ref, densityPaint: state.densityPaint, terrainSculpt: state.terrainSculpt, decoSets: state.decoSets, hills: state.hills, selHill: state.selHill, rivers: state.rivers, items: state.items });
+  return JSON.stringify({ project: state.project, flatZones: state.flatZones, profileZones: state.profileZones, suspZones: state.suspZones, cutZones: state.cutZones, overrides: state.overrides, ref, refCanvas: !!state.ref, densityPaint: state.densityPaint, terrainSculpt: state.terrainSculpt, sculptCurves: state.sculptCurves, decoSets: state.decoSets, hills: state.hills, selHill: state.selHill, rivers: state.rivers, items: state.items });
 }
 function pushUndo() {
   undoStack.push(snapshot());
@@ -112,6 +114,7 @@ function undo() {
   if (o.hills) { state.hills = o.hills; state.selHill = state.hills.some((h) => h.id === o.selHill) ? o.selHill : null; if (typeof refreshHillPanel === 'function') refreshHillPanel(); }
   if (o.rivers) { state.rivers = o.rivers; if (!state.rivers.some((rv) => rv.id === state.selRiver)) state.selRiver = null; if (typeof renderRiverPanel === 'function') renderRiverPanel(); }
   if (o.decoSets) { state.decoSets = o.decoSets; if (typeof renderDecoPanel === 'function') { renderDecoPanel(); decoChanged(); } }
+  if (o.sculptCurves) state.sculptCurves = o.sculptCurves;
   if (o.terrainSculpt) { state.terrainSculpt = o.terrainSculpt; if (typeof refreshSculptInfo === 'function') refreshSculptInfo(); }
   if (o.densityPaint) { const changed = JSON.stringify(o.densityPaint) !== JSON.stringify(state.densityPaint); state.densityPaint = o.densityPaint; if (changed && typeof refreshPaintInfo === 'function') refreshPaintInfo(); }
   state.selSet = null; endArc();
@@ -983,11 +986,12 @@ const app = {
     const sc = state.scene;
     const rm = sc[brushKey(ses.kind)];
     if (ses.kind === 'sculpt') {
-      // relieve: clic derecho (o Alt) eleva, clic izquierdo hunde
+      // relieve: clic izquierdo eleva, clic derecho (o Alt) hunde; cada toque guarda la curva del pincel con que se hizo
       const rr = rm / L.scale;
       if (ses.last && Math.hypot(p[0] - ses.last[0], p[1] - ses.last[1]) < rr * 0.3) return;
       ses.last = p;
-      state.terrainSculpt.push({ x: +p[0].toFixed(2), y: +p[1].toFixed(2), r: +rr.toFixed(3), h: +((ses.erase ? 1 : -1) * sc.sculptStrength).toFixed(3) });
+      if (ses.cv == null) ses.cv = sculptCurveIndex();
+      state.terrainSculpt.push({ x: +p[0].toFixed(2), y: +p[1].toFixed(2), r: +rr.toFixed(3), h: +((ses.erase ? -1 : 1) * sc.sculptStrength).toFixed(3), cv: ses.cv });
       return;
     }
     if (ses.kind === 'itemPaint') {
@@ -1094,7 +1098,8 @@ const app = {
   sculptWorld() {
     const L = state.layout;
     if (!L || !state.terrainSculpt.length) return null;
-    return state.terrainSculpt.map((q) => { const [x, y] = L.toWorld(q.x, q.y); return { x, y, r: q.r * L.scale, h: q.h }; });
+    const luts = state.sculptCurves.map((c) => curveLUT(c));
+    return state.terrainSculpt.map((q) => { const [x, y] = L.toWorld(q.x, q.y); const d = { x, y, r: q.r * L.scale, h: q.h }; if (q.cv != null && luts[q.cv]) d.lut = luts[q.cv]; return d; });
   },
   /** Todo lo que el terreno recibe del pincel: zonas de densidad y relieve esculpido. */
   terrainPaintWorld() { const rv = this.riversWorld(); return { density: this.paintWorld(), sculpt: this.sculptWorld(), rivers: rv ? rv.filter((q) => q.kind !== 'fall') : null }; },
@@ -1763,6 +1768,67 @@ function refreshLoopInfo() {
   $('btnLoopAdd').disabled = !!P.error;
 }
 
+// ---------- recta: alinear puntos seleccionados ----------
+/** Puntos a alinear: la corrida seguida seleccionada (en orden de la ruta) o, si no son seguidos, los seleccionados en orden. */
+function lineRun() {
+  const sel = state.selSet;
+  if (!sel || !sel.idxs || sel.idxs.size < 2) return null;
+  const arr = ctrlArray(sel.key);
+  if (!arr) return null;
+  const run = contiguousRun(sel.key);
+  const idxs = run && run.length === sel.idxs.size ? run : [...sel.idxs].filter((i) => i >= 0 && i < arr.length).sort((a, b) => a - b);
+  return idxs.length >= 2 ? { key: sel.key, arr, idxs } : null;
+}
+/**
+ * Alinea en planta los puntos seleccionados sobre una recta. mode: 'chord' = entre el primer y el último punto (no se
+ * mueven); 'x' / 'y' / 'angle' = recta con esa dirección, centrada entre el primer y el último punto y del mismo largo.
+ * Los puntos interiores se reparten en la recta conservando sus distancias relativas. Las alturas (fijadas o
+ * automáticas) no se tocan: siguen el perfil de elevación.
+ */
+function alignSelection(mode = 'chord', angleDeg = 0) {
+  const R = lineRun(), L = state.layout;
+  if (!R || !L) { toast('Selecciona 2 o más puntos (Shift o arrastrando un recuadro) para alinearlos en una recta.'); return false; }
+  const W = R.idxs.map((i) => L.toWorld(R.arr[i][0], R.arr[i][1]));
+  const n = W.length, cum = [0];
+  for (let k = 1; k < n; k++) cum.push(cum[k - 1] + Math.hypot(W[k][0] - W[k - 1][0], W[k][1] - W[k - 1][1]));
+  const tot = cum[n - 1];
+  const A = W[0], B = W[n - 1], D = Math.hypot(B[0] - A[0], B[1] - A[1]);
+  let P0, P1;
+  if (mode === 'chord') {
+    if (D < 1e-6) { toast('El primer y el último punto coinciden: elige una dirección (Eje X, Eje Y o un ángulo).'); return false; }
+    P0 = A; P1 = B;
+  } else {
+    const a = ((mode === 'x' ? 0 : mode === 'y' ? 90 : +angleDeg || 0) * Math.PI) / 180;
+    let ux = Math.cos(a), uy = Math.sin(a);
+    if ((B[0] - A[0]) * ux + (B[1] - A[1]) * uy < 0) { ux = -ux; uy = -uy; } // conserva el sentido de la ruta
+    const len = D > 1e-6 ? D : tot, M = [(A[0] + B[0]) / 2, (A[1] + B[1]) / 2];
+    P0 = [M[0] - (ux * len) / 2, M[1] - (uy * len) / 2];
+    P1 = [M[0] + (ux * len) / 2, M[1] + (uy * len) / 2];
+  }
+  pushUndo();
+  R.idxs.forEach((i, k) => {
+    const w = tot > 1e-9 ? cum[k] / tot : k / (n - 1);
+    const [lx, ly] = L.toLayout(P0[0] + (P1[0] - P0[0]) * w, P0[1] + (P1[1] - P0[1]) * w);
+    R.arr[i][0] = +lx.toFixed(4); R.arr[i][1] = +ly.toFixed(4);
+  });
+  scheduleBuild();
+  editor.draw();
+  const ang = (Math.atan2(P1[1] - P0[1], P1[0] - P0[0]) * 180) / Math.PI;
+  toast(`${n} puntos alineados en una recta de ${Math.hypot(P1[0] - P0[0], P1[1] - P0[1]).toFixed(1)} m a ${ang.toFixed(1)}°. Las alturas siguen el perfil.`);
+  refreshLineInfo();
+  return true;
+}
+function refreshLineInfo() {
+  const el = document.getElementById('lineInfo');
+  if (!el) return;
+  const R = lineRun(), L = state.layout;
+  const ok = !!(R && L);
+  for (const id of ['btnLineChord', 'btnLineX', 'btnLineY', 'btnLineAngle']) if ($(id)) $(id).disabled = !ok;
+  if (!ok) { el.textContent = 'selecciona 2 o más puntos'; return; }
+  const A = L.toWorld(R.arr[R.idxs[0]][0], R.arr[R.idxs[0]][1]), B = L.toWorld(R.arr[R.idxs[R.idxs.length - 1]][0], R.arr[R.idxs[R.idxs.length - 1]][1]);
+  el.textContent = `${R.idxs.length} puntos · extremos a ${Math.hypot(B[0] - A[0], B[1] - A[1]).toFixed(1)} m, ${((Math.atan2(B[1] - A[1], B[0] - A[0]) * 180) / Math.PI).toFixed(1)}°`;
+}
+
 function fitRadiusMeters(key, run) {
   const arr = ctrlArray(key), L = state.layout;
   if (!run || run.length < 3 || !L) return null;
@@ -1981,6 +2047,7 @@ function refreshArcBox() {
   if (typeof app !== 'undefined' && app.refreshLoopInfo && document.getElementById('loopBox') && !document.getElementById('loopBox').hidden) setTimeout(() => app.refreshLoopInfo(), 0);
   if (typeof app !== 'undefined' && app.refreshHelixInfo && document.getElementById('helixBox') && !document.getElementById('helixBox').hidden) setTimeout(() => app.refreshHelixInfo(), 0);
   refreshForkBox();
+  if (document.getElementById('lineBox') && !document.getElementById('lineBox').hidden) setTimeout(refreshLineInfo, 0);
   const ctl = $('arcControls');
   if (!ctl) return;
   const sel = state.selSet;
@@ -3090,6 +3157,20 @@ function bindControls() {
     $(id + 'File').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) loadTexture(f, key); });
     $(id + 'Remove').addEventListener('click', () => { state[key] = null; syncSceneControls(); sceneChanged(); });
   }
+  // recta: el botón alinea al tiro la selección entre sus extremos y muestra las opciones (eje X, eje Y, ángulo)
+  $('btnLine').addEventListener('click', () => {
+    const box = $('lineBox');
+    if (state.tool !== 'edit') setTool('edit');
+    if (lineRun()) { box.hidden = false; alignSelection('chord'); }
+    else { box.hidden = !box.hidden; if (!box.hidden) toast('Recta: selecciona 2 o más puntos (Shift o arrastrando) y vuelve a apretar «Recta», o elige una dirección.'); }
+    $('btnLine').classList.toggle('active', !box.hidden);
+    refreshLineInfo();
+  });
+  $('btnLineChord').addEventListener('click', () => alignSelection('chord'));
+  $('btnLineX').addEventListener('click', () => alignSelection('x'));
+  $('btnLineY').addEventListener('click', () => alignSelection('y'));
+  $('btnLineAngle').addEventListener('click', () => alignSelection('angle', parseFloat($('lineAngle').value) || 0));
+  $('lineAngle').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); alignSelection('angle', parseFloat($('lineAngle').value) || 0); } });
   // helix: igual que el rizo (botón de la barra con sus parámetros)
   $('btnHelix').addEventListener('click', () => {
     const box = $('helixBox');
@@ -3144,6 +3225,7 @@ function bindControls() {
   $('btnLoopAdd').addEventListener('click', () => { if (addLoop(parseFloat($('loopTurns').value), parseFloat($('loopSep').value), $('loopSide').value, parseFloat($('loopRadius').value) || 0)) refreshLoopInfo(); });
   $('loopSepVal').textContent = `${$('loopSep').value} m`;
   app.refreshLoopInfo = refreshLoopInfo;
+  app.alignSelection = alignSelection;
   $('btnTbFork').addEventListener('click', () => {
     focusPanel('arc');
     const sel = state.selSet;
@@ -3451,6 +3533,7 @@ function saveProject() {
     scene: state.scene,
     densityPaint: state.densityPaint,
     terrainSculpt: state.terrainSculpt,
+    sculptCurves: state.sculptCurves,
     decoSets: state.decoSets,
     assets: (() => { let tot = 0; return state.assets.map((a) => { tot += a.buffer.byteLength; return { id: a.id, name: a.name, data: tot <= 60 * 1048576 ? bufToB64(a.buffer) : null }; }); })(),
     ref3d: state.ref3d ? { name: state.ref3d.name, settings: ref3dSettings(), data: state.ref3d.buffer.byteLength <= 40 * 1048576 ? bufToB64(state.ref3d.buffer) : null } : null,
@@ -3662,6 +3745,7 @@ async function openProject(text) {
   state.fallWallTex = await toCanvas(d.fallWallTex);
   state.densityPaint = d.densityPaint || [];
   state.terrainSculpt = d.terrainSculpt || [];
+  state.sculptCurves = d.sculptCurves || [];
   refreshSculptInfo();
   // biblioteca de assets y sets de decoración
   state.assets = [];
@@ -3840,6 +3924,7 @@ function syncSceneControls() {
   if ($('sculptStrengthVal')) $('sculptStrengthVal').textContent = `${sc.sculptStrength} m`;
   if ($('sculptStrengthPVal')) $('sculptStrengthPVal').textContent = `${sc.sculptStrength} m`;
   if ($('sculptBrushPVal')) $('sculptBrushPVal').textContent = `${sc.sculptBrush} m`;
+  if (typeof syncSculptCurveUI === 'function' && $('sculptPreset') && $('sculptPreset').options.length) syncSculptCurveUI();
   refreshHillPanel();
   for (const k of ['tunnelShape', 'tunnelType', 'tunnelOpen', 'tunnelHeight', 'caveSize', 'tunnelPillars', 'tunnelDensity', 'portalFrame', 'portalDepth', 'startGateHeight']) set(k, sc[k]);
   set('caveRocks', sc.caveRocks !== false);
@@ -4164,8 +4249,121 @@ function refreshSculptInfo() {
   if (!el) return;
   const n = state.terrainSculpt.length;
   const up = state.terrainSculpt.filter((q) => q.h > 0).length;
-  el.textContent = n ? `${n} toques (${up} elevan, ${n - up} hunden). Son parte de la misma malla del terreno; junto a la pista se desvanecen para no taparla.` : 'Sin relieve esculpido. Con «Esculpir relieve», clic derecho eleva y clic izquierdo hunde (en el mapa o en la vista 3D).';
+  el.textContent = n ? `${n} toques (${up} elevan, ${n - up} hunden). Son parte de la misma malla del terreno; junto a la pista se desvanecen para no taparla.` : 'Sin relieve esculpido. Con «Esculpir relieve», clic izquierdo eleva y clic derecho hunde (en el mapa o en la vista 3D).';
   if ($('btnSculptClear')) $('btnSculptClear').disabled = !n;
+}
+/** Índice de la curva actual del pincel de relieve en state.sculptCurves (la agrega si es nueva). */
+function sculptCurveIndex() {
+  const c = normCurve(state.scene.sculptCurve || DEFAULT_SCULPT_CURVE), key = JSON.stringify(c);
+  let i = state.sculptCurves.findIndex((q) => JSON.stringify(q) === key);
+  if (i < 0) { state.sculptCurves.push(c); i = state.sculptCurves.length - 1; }
+  return i;
+}
+// ---------- editor de la curva del pincel de relieve ----------
+// Corte del pincel: centro al medio, borde a los lados. Arriba (naranja) lo que eleva el clic izquierdo, abajo (azul,
+// tenue) lo que hunde el clic derecho. Los puntos de control se arrastran; doble clic agrega uno, clic derecho lo quita.
+const sculptCurveUI = { drag: -1, hover: -1 };
+function sculptCurveGeom(cv) {
+  const W = cv.clientWidth || 260, H = cv.clientHeight || 150;
+  const padX = 10, mid = H * 0.56, amp = Math.min(mid - 12, (H - mid) * 1.6);
+  return { W, H, padX, mid, amp, cx: W / 2, half: W / 2 - padX };
+}
+function drawSculptCurve() {
+  const cv = $('sculptCurveCv');
+  if (!cv || cv.offsetParent === null) return;
+  const dpr = window.devicePixelRatio || 1;
+  const G = sculptCurveGeom(cv);
+  if (cv.width !== Math.round(G.W * dpr) || cv.height !== Math.round(G.H * dpr)) { cv.width = Math.round(G.W * dpr); cv.height = Math.round(G.H * dpr); }
+  const g = cv.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, G.W, G.H);
+  const pts = normCurve(state.scene.sculptCurve || DEFAULT_SCULPT_CURVE), f = curveEval(pts);
+  const str = state.scene.sculptStrength || 1;
+  // rejilla
+  g.strokeStyle = 'rgba(255,255,255,0.08)'; g.lineWidth = 1;
+  for (let k = 0; k <= 4; k++) { const x = G.cx - G.half + (k / 4) * 2 * G.half; g.beginPath(); g.moveTo(x + 0.5, 4); g.lineTo(x + 0.5, G.H - 4); g.stroke(); }
+  g.beginPath(); g.moveTo(G.padX, G.mid - G.amp + 0.5); g.lineTo(G.W - G.padX, G.mid - G.amp + 0.5); g.stroke();
+  // suelo
+  g.strokeStyle = 'rgba(200,170,120,0.55)'; g.beginPath(); g.moveTo(0, G.mid + 0.5); g.lineTo(G.W, G.mid + 0.5); g.stroke();
+  const prof = (sgn, scale) => {
+    g.beginPath(); g.moveTo(G.padX, G.mid);
+    for (let k = 0; k <= 160; k++) { const u = -1 + (2 * k) / 160; g.lineTo(G.cx + u * G.half, G.mid - sgn * scale * G.amp * f(Math.abs(u))); }
+    g.lineTo(G.W - G.padX, G.mid); g.closePath();
+  };
+  // hundir (abajo, tenue)
+  prof(-1, 0.55); g.fillStyle = 'rgba(80,160,255,0.12)'; g.fill(); g.strokeStyle = 'rgba(80,160,255,0.45)'; g.stroke();
+  // elevar (arriba)
+  prof(1, 1); g.fillStyle = 'rgba(255,160,70,0.22)'; g.fill(); g.strokeStyle = '#ffa046'; g.lineWidth = 2; g.stroke(); g.lineWidth = 1;
+  // puntos de control (lado derecho, reflejo tenue a la izquierda)
+  pts.forEach(([t, v], i) => {
+    const y = G.mid - v * G.amp;
+    g.fillStyle = 'rgba(255,160,70,0.35)'; g.beginPath(); g.arc(G.cx - t * G.half, y, 2.5, 0, Math.PI * 2); g.fill();
+    const hot = i === sculptCurveUI.drag || i === sculptCurveUI.hover;
+    g.fillStyle = hot ? '#fff' : '#ffd2a8'; g.strokeStyle = '#7a3f10';
+    g.beginPath(); g.arc(G.cx + t * G.half, y, hot ? 5 : 4, 0, Math.PI * 2); g.fill(); g.stroke();
+  });
+  g.fillStyle = 'rgba(255,255,255,0.55)'; g.font = '10px system-ui, sans-serif';
+  g.textAlign = 'center'; g.fillText('centro', G.cx, G.H - 3);
+  g.textAlign = 'right'; g.fillText(`+${str} m`, G.W - 4, G.mid - G.amp - 2);
+  g.textAlign = 'left'; g.fillText('borde', 3, G.H - 3); g.textAlign = 'right'; g.fillText('borde', G.W - 3, G.H - 3);
+  g.textAlign = 'left'; g.fillStyle = 'rgba(80,160,255,0.8)'; g.fillText('hunde', 4, G.mid + 12); g.fillStyle = 'rgba(255,160,70,0.9)'; g.fillText('eleva', 4, G.mid - 4);
+}
+function syncSculptCurveUI() {
+  const sel = $('sculptPreset');
+  if (sel) { const k = presetOf(state.scene.sculptCurve || DEFAULT_SCULPT_CURVE); sel.value = k || 'custom'; }
+  drawSculptCurve();
+}
+function setSculptCurve(pts) {
+  state.scene.sculptCurve = normCurve(pts);
+  syncSculptCurveUI();
+  editor.draw();
+}
+function initSculptCurveEditor() {
+  const cv = $('sculptCurveCv'), sel = $('sculptPreset');
+  if (!cv || !sel) return;
+  sel.innerHTML = Object.entries(SCULPT_PRESETS).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('') + '<option value="custom" disabled>Personalizada</option>';
+  sel.addEventListener('change', () => { const p = SCULPT_PRESETS[sel.value]; if (p) setSculptCurve(p.pts.map((q) => q.slice())); });
+  const toCurve = (e) => { const r = cv.getBoundingClientRect(), G = sculptCurveGeom(cv); return { t: Math.abs(e.clientX - r.left - G.cx) / G.half, v: (G.mid - (e.clientY - r.top)) / G.amp, G, px: e.clientX - r.left, py: e.clientY - r.top }; };
+  const hit = (e) => {
+    const { G, px, py } = toCurve(e), pts = normCurve(state.scene.sculptCurve);
+    let best = -1, bd = 9;
+    pts.forEach(([t, v], i) => { for (const sx of [1, -1]) { const d = Math.hypot(G.cx + sx * t * G.half - px, G.mid - v * G.amp - py); if (d < bd) { bd = d; best = i; } } });
+    return best;
+  };
+  cv.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    const i = hit(e);
+    if (i < 0) return;
+    sculptCurveUI.drag = i; cv.setPointerCapture(e.pointerId); e.preventDefault(); drawSculptCurve();
+  });
+  cv.addEventListener('pointermove', (e) => {
+    if (sculptCurveUI.drag < 0) { const h = hit(e); if (h !== sculptCurveUI.hover) { sculptCurveUI.hover = h; cv.style.cursor = h >= 0 ? 'grab' : 'crosshair'; drawSculptCurve(); } return; }
+    const pts = normCurve(state.scene.sculptCurve), i = sculptCurveUI.drag, n = pts.length;
+    const { t, v } = toCurve(e);
+    const vv = Math.max(0, Math.min(1, v));
+    if (i === 0 || i === n - 1) pts[i][1] = i === n - 1 ? 0 : vv; // extremos: t fijo (el borde siempre llega a 0)
+    else { pts[i][0] = Math.max(pts[i - 1][0] + 0.01, Math.min(pts[i + 1][0] - 0.01, t)); pts[i][1] = vv; }
+    state.scene.sculptCurve = pts.map((q) => [+q[0].toFixed(4), +q[1].toFixed(4)]);
+    syncSculptCurveUI();
+  });
+  const end = () => { if (sculptCurveUI.drag >= 0) { sculptCurveUI.drag = -1; setSculptCurve(state.scene.sculptCurve); } };
+  cv.addEventListener('pointerup', end);
+  cv.addEventListener('pointercancel', end);
+  cv.addEventListener('pointerleave', () => { if (sculptCurveUI.hover >= 0 && sculptCurveUI.drag < 0) { sculptCurveUI.hover = -1; drawSculptCurve(); } });
+  cv.addEventListener('dblclick', (e) => {
+    const { t, v } = toCurve(e);
+    if (t <= 0.01 || t >= 0.99) return;
+    const pts = normCurve(state.scene.sculptCurve);
+    pts.push([t, Math.max(0, Math.min(1, v))]);
+    setSculptCurve(pts);
+  });
+  cv.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    const i = hit(e), pts = normCurve(state.scene.sculptCurve);
+    if (i > 0 && i < pts.length - 1) { pts.splice(i, 1); sculptCurveUI.hover = -1; setSculptCurve(pts); }
+  });
+  new ResizeObserver(() => drawSculptCurve()).observe(cv);
+  syncSculptCurveUI();
 }
 function refreshSkyThumb() {
   if (state.skyTex) $('skyThumb').src = state.skyTex.toDataURL('image/jpeg', 0.7);
@@ -4216,13 +4414,15 @@ const PANEL_FOR_BUTTON = {
   btnGame: 'sky', btnExportBlender: 'export', btnExportMax: 'export', btnExportJSON: 'export', btnExportOBJ: 'export',
   btnExportGLB2: 'export', btnExportFBX2: 'export', btnTbRadius: 'arc', btnTbFork: 'arc', btnGenTerrain: 'terrain', btnGenTrees: 'trees',
 };
+const PANEL_SUB = { 'tool:sculpt': 'sculptCurveBox', btnSculptTool: 'sculptCurveBox' }; // elemento interior al que se baja
 function bindPanelFocus() {
   document.addEventListener('click', (e) => {
     const b = e.target.closest && e.target.closest('button');
     if (!b || b.closest('#sidebar') || b.closest('.panel.floating')) return;
     const key = b.dataset.tool ? `tool:${b.dataset.tool}` : b.id;
     const pid = PANEL_FOR_BUTTON[key];
-    if (pid) setTimeout(() => focusPanel(pid), 0); // después de la acción del botón (por si crea algo en la sección)
+    const sub = PANEL_SUB[key] ? $(PANEL_SUB[key]) : null;
+    if (pid) setTimeout(() => { focusPanel(pid, sub); if (sub) drawSculptCurve(); }, 0); // después de la acción del botón (por si crea algo en la sección)
   });
 }
 /** Botones de la barra: activa el terreno / los árboles con los valores por defecto (si estaban apagados). */
@@ -4336,12 +4536,13 @@ function bindSceneControls() {
   $('btnPaintTool').addEventListener('click', () => { if (!sc.terrain) { sc.terrain = true; syncSceneControls(); sceneChanged(); } setTool('paint'); });
   // relieve esculpido en el terreno
   $('btnSculptTool').addEventListener('click', () => { if (!sc.terrain) { sc.terrain = true; syncSceneControls(); sceneChanged(); } setTool('sculpt'); });
-  $('btnSculptClear').addEventListener('click', () => { if (!state.terrainSculpt.length) return; pushUndo(); state.terrainSculpt = []; refreshSculptInfo(); editor.draw(); sceneChanged(); });
+  $('btnSculptClear').addEventListener('click', () => { if (!state.terrainSculpt.length) return; pushUndo(); state.terrainSculpt = []; state.sculptCurves = []; refreshSculptInfo(); editor.draw(); sceneChanged(); });
   const sStr = (v) => { if (!(v > 0)) return; sc.sculptStrength = Math.round(Math.min(50, v) * 100) / 100; syncSceneControls(); };
   $('sculptStrength').addEventListener('input', (e) => sStr(parseFloat(e.target.value)));
   $('sculptStrengthP').addEventListener('input', (e) => sStr(parseFloat(e.target.value)));
   $('sculptBrushP').addEventListener('input', (e) => { sc.sculptBrush = Math.round(parseFloat(e.target.value)); syncSceneControls(); editor.draw(); });
   $('sculptDetail').addEventListener('change', (e) => { sc.sculptDetail = e.target.checked; sceneChanged(); });
+  initSculptCurveEditor();
   refreshSculptInfo();
   // decoración: biblioteca y sets
   $('btnAssetLoad').addEventListener('click', () => $('fileAssets').click());
@@ -4754,11 +4955,11 @@ const HINTS = {
   btnBarrierTex: 'Carga una textura para la barrera: U a lo largo, V de abajo hacia arriba.', btnDirtTex: 'Carga una textura para el camino de tierra: U a lo ancho, V a lo largo.',
   tunnelMaxTris: 'Tope de triángulos de cada túnel (paredes, techo y veredas): manda sobre la densidad.', tunnelMaxTrisNum: 'Tope exacto de triángulos por túnel.',
   tunnelAdapt: 'Solo en «Optimizado»: al mínimo, las curvas tienen apenas algo más de secciones que las rectas; al máximo, las rectas tienen muchas menos.',
-  sculptStrength: 'Cuántos metros sube (clic derecho) o baja (clic izquierdo) cada toque del pincel en su centro; al pasar varias veces se acumula.',
+  sculptStrength: 'Cuántos metros sube (clic izquierdo) o baja (clic derecho) cada toque del pincel en su centro; al pasar varias veces se acumula.',
   sculptStrengthP: 'Cuántos metros sube o baja cada toque del pincel de relieve en su centro.',
   sculptBrushP: 'Radio del pincel de relieve en metros (también con [ y ] mientras esculpes).',
   sculptDetail: 'Las zonas esculpidas reciben más polígonos (como lo pintado con «Pintar subdivisión»), para que el relieve se vea definido.',
-  btnSculptTool: 'Activa «Esculpir relieve» en el mapa y en la vista 3D: clic derecho eleva y clic izquierdo hunde el terreno. Es parte de la misma malla del terreno.',
+  btnSculptTool: 'Activa «Esculpir relieve» en el mapa y en la vista 3D: clic izquierdo eleva y clic derecho hunde el terreno. Es parte de la misma malla del terreno.',
   btnSculptClear: 'Quita todo el relieve esculpido (Ctrl+Z lo recupera).',
   paintErase: 'Pinta borrando (también con Alt o clic derecho).',
   wireOn: 'Muestra el wireframe de pista, terreno y árboles en la vista 3D (F3 lo muestra u oculta).',
