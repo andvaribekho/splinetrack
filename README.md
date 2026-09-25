@@ -1,0 +1,168 @@
+# Track Spline Generator
+
+Aplicación local con interfaz web que convierte un layout 2D de pista (minimapa o trazo a mano) en un spline 3D. Los cruces del layout se resuelven como pasos sobre/bajo nivel. El resto de la pista recibe colinas suaves controladas por un slider. Se exporta como curvas para **Blender** y **3ds Max**, donde se genera la geometría.
+
+## Cómo iniciarla
+
+Requisito: **Node.js 18+** (recomendado) o **Python 3**. No hay dependencias que instalar: three.js viene incluido en `vendor/`.
+
+| Sistema | Doble clic en | O desde una terminal |
+| --- | --- | --- |
+| Windows | `iniciar.bat` | `node server.js` |
+| macOS | `iniciar.command` | `node server.js` |
+| Linux | `iniciar.sh` | `node server.js` |
+
+Se abre `http://localhost:5173` en el navegador. Si el puerto está ocupado: `PORT=5174 node server.js`. También funciona `python3 -m http.server 5173` dentro de la carpeta.
+
+## Flujo de trabajo
+
+1. **Entrada.** Elige una de estas opciones:
+   - Copia un minimapa (clic derecho → *Copiar imagen*, o una captura de pantalla) y pégalo con **Ctrl+V** (⌘V en Mac). La app lo traza sola.
+   - Carga una imagen de minimapa con **Cargar imagen…**. La app la traza sola: prueba varias formas de separar la pista del fondo (pista clara, oscura, con borde oscuro y relleno claro, solo relleno) y usa la que da el circuito más limpio. Si falla, elige el modo a mano en *Pista en la imagen*.
+   - Usa **Dibujar** para trazar la pista a mano sobre el lienzo (puedes calcar la imagen cargada). El control *Suavizado del dibujo* de la barra corrige el pulso de la mano: la línea gruesa muestra el resultado mientras dibujas.
+   - Usa **Extender** para completar o corregir la pista actual sin dibujar una nueva. Si la ruta está abierta, empieza el trazo en uno de sus extremos (círculos verdes) para continuarla; si terminas sobre el otro extremo, el circuito se cierra. Si empiezas y terminas sobre la pista, ese tramo se redibuja con tu trazo.
+   - Elige un layout del menú **Ejemplos…**.
+   - **Imagen de referencia:** con *Imagen de referencia…* (o con la herramienta **Referencia** activa y Ctrl+V) agregas una segunda imagen solo para calcar. No se traza. Con la herramienta **Referencia** la arrastras para moverla y tiras de su esquina lila para escalarla. En el panel ajustas la opacidad, la escala exacta, si se muestra y si va encima o debajo de la pista. Se guarda con el proyecto.
+2. **Trazado.** Ajusta el largo de vuelta (define la escala en metros), el ancho, el detalle y el suavizado. **Meta** fija la línea de salida (s = 0) y **Invertir sentido** cambia la dirección de carrera.
+3. **Editar el spline.** Con **Editar puntos** (o con doble clic sobre la pista en modo *Navegar*, que además selecciona el punto más cercano) aparecen los puntos de control de la ruta principal y de los atajos en las tres vistas.
+   - **Mapa 2D:** arrastra un punto para moverlo. El spline pasa exactamente por los puntos y todo se recalcula al instante. Doble clic sobre la pista agrega un punto. Clic derecho, Alt+clic o Supr lo borran.
+   - **Selección múltiple:** Shift+arrastrar dibuja un cuadro que selecciona varios puntos y Shift+clic suma o quita uno. Funciona en el mapa, en el perfil y en la vista 3D (Ctrl+Shift agrega a la selección actual). Al arrastrar uno de los puntos seleccionados se mueven todos juntos: en el mapa en planta, en el perfil en altura y en 3D con el gizmo, en el centro del grupo y respetando Libre, Plano XY o Solo Z.
+   - **Curva de radio fijo:** con varios puntos seleccionados. En el panel *Puntos seleccionados* eliges el radio en metros, con el control deslizante o escribiendo el valor, y los puntos quedan sobre una circunferencia perfecta. *Transición* define cuántos puntos vecinos se reacomodan a cada lado para que la entrada y la salida queden fluidas. Si el radio es menor que la mitad de la distancia entre los extremos, se usa el mínimo posible (media circunferencia) y se avisa.
+   - **Bifurcar la pista:** con 2 o más puntos de la ruta principal seleccionados, *Bifurcar selección* (panel *Puntos seleccionados*) crea una ruta alternativa que sale en el primer punto y vuelve a juntarse en el último. Eliges el lado (izquierda, derecha o **por el centro**: la nueva ruta sale hacia un lado y la pista original se abre hacia el otro, cada una la mitad de la separación) y la separación máxima; en el interior de una curva la separación se limita para que la nueva ruta no se cruce sola. Sus puntos quedan editables.
+   - **Perfil de elevación:** arrastra un punto en vertical para fijar su altura; queda marcado con ◆. Doble clic agrega un punto nuevo con esa altura. Clic derecho o Alt+clic devuelven el punto a altura automática.
+   - **Vista 3D:** clic en una esfera para seleccionarla y muévela con el gizmo. **Libre** mueve en X, Y y Z. **Plano XY** bloquea la altura. **Solo Z** cambia solo la altura.
+   - **Editar solo este punto** (casilla en el perfil y en la vista 3D, activada por defecto): al cambiar una altura solo se mueve el tramo hasta los puntos vecinos y el resto de la pista queda igual. Si el cambio es tan grande que rompería la pendiente máxima o el radio vertical, los vecinos se mueven lo mínimo necesario. Sin la casilla, el cambio se reparte en una zona más amplia.
+   - Al editar puntos la escala queda fija: mover un punto no reescala la pista, y el largo de vuelta pasa a mostrar el largo real. Mover ese control reescala toda la pista.
+   - Las alturas fijadas se respetan con suavidad: las colinas aleatorias se ajustan alrededor del punto y el resto de la vuelta no cambia. Los límites de pendiente, radio vertical y holgura en cruces tienen prioridad; si una altura no se puede alcanzar, aparece un aviso con la altura lograda.
+   - **Menos puntos** / **Más puntos** redistribuyen los puntos siguiendo la forma actual y conservan las alturas fijadas. **Descartar cambios** vuelve al trazo original.
+   - Mientras hay puntos editados, «Detalle» y «Suavizado del trazo» no se aplican a esas rutas. Puntos y alturas se guardan con el proyecto.
+4. **Cruces.** Cada intersección del layout se detecta y numera. El algoritmo elige qué tramo va arriba minimizando el desnivel. Haz clic en el número del cruce (o usa la lista) para invertirlo, y elige *Puente*, *Túnel* o *Mixto*.
+5. **Colinas.** El slider **Colinas** controla la amplitud de las ondulaciones aleatorias. *Colinas por vuelta* controla la frecuencia, **Semilla** / *Aleatoria* cambian la forma, y *Suavizado* deja las colinas más largas y redondas.
+6. **Límites.** *Pendiente máxima* y los *radios verticales mínimos* (cresta y valle) son límites duros del optimizador: garantizan colinas suaves y que el kart no despegue en las crestas.
+7. **Zonas planas.** La herramienta **Zona plana** aplana tramos arrastrando sobre la pista. La meta ya es plana por defecto.
+8. **Rutas alternativas.** Los atajos se detectan al trazar la imagen o se dibujan con **Dibujar atajo**, empezando y terminando sobre la ruta principal. Cada uno se puede mantener, descartar, eliminar o invertir (⇄). Salen y entran desde el **borde** de la pista (no desde el eje), tangentes a ella: el borde del atajo queda pegado al borde de la pista, a la misma altura (incluido el peralte), sin tramos superpuestos. Un atajo más angosto se conecta del lado hacia el que sale. Por defecto tienen el ancho de la pista. Desmarcando *Atajos con el mismo ancho que la pista* (en *Trazado*) les das un *Ancho de los atajos* general, y cada atajo puede tener además su *Ancho propio* en la lista (casilla, número y control deslizante). Con *Atajos con el ancho de la pista en la salida y la llegada* (desactivado por defecto) el atajo empieza y termina con el ancho de la pista y pasa gradualmente al suyo. Clic sobre un atajo (mapa o 3D, con *Navegar*) lo selecciona y lleva el panel a sus parámetros.
+9. **Escena 3D.** Tres categorías más preparan una escena lista para usar:
+   - **Textura de la pista:** trae una textura de asfalto por defecto (bordes blancos y línea central amarilla); puedes cargar otra seamless o volver a la de por defecto. *Opacidad de la textura* (se aplica en el mapa 2D y en la vista 3D; en 2D la textura se dibuja en una capa aparte, sin costuras ni parpadeo contra los colores de abajo) deja ver debajo los colores por altura. El mapeado va a lo largo (según la longitud recorrida) y a lo ancho (una vez de borde a borde); eliges si el tiling es *vertical* u *horizontal* y cuántas repeticiones hay por vuelta.
+   - **Terreno:** una malla en grilla bajo la pista. Con *Densidad* eliges qué tan fina es y con *Máximo de polígonos* pones un tope (si la densidad pide más, las celdas se agrandan). En cada punto el terreno queda bajo la superficie de la pista, al menos a *Separación bajo la pista*, así que la pista nunca lo atraviesa; con densidad alta queda más pegado. En un puente, el terreno sigue el tramo de abajo. *Transición hacia el relieve* define cómo se suaviza lejos de la pista, y los *faldones* bajan desde los bordes de la pista para tapar el espacio. En su misma sección está *Textura del terreno*: carga una textura tileable con repeticiones independientes en X e Y.
+   - **Pintar densidad:** con la herramienta **Pintar densidad** pintas en el mapa las zonas del terreno que necesitan más detalle. Alt, clic derecho o la casilla *Borrar* borran, y el tamaño del pincel está en la barra. Esas zonas reciben *Multiplicador en zonas pintadas* veces más polígonos por m² que el resto, siempre dentro del tope de polígonos: el terreno pasa de grilla uniforme a una triangulación adaptativa (Delaunay).
+   - **Pintar en 3D:** con **Pintar densidad** o **Cerros** activos, también puedes pintar directo sobre la vista 3D. Un anillo sigue al cursor sobre el terreno (o sobre la pista, o el plano base si no hay terreno). Arrastrar pinta, y para orbitar cambias a Navegar o usas el clic central.
+   - **Cerros:** cada cerro es una malla propia, separada del terreno. El radio del pincel se elige en el panel (control deslizante o número), en la barra, o con [ y ] mientras pintas. Con **Pintar cerros** (en el mapa o en la vista 3D), un trazo que empieza fuera de los cerros crea uno nuevo; si empieza sobre un cerro, lo agranda. Un clic sin arrastrar lo selecciona, y con *Navegar* también se selecciona con un clic, en 2D o en 3D. Esc deselecciona y Supr elimina. Alt o clic derecho borra, en todos los cerros que toque.
+     - El panel *Cerro seleccionado* edita ese cerro: *Altura*, *Perfil* (colina suave o pared rocosa), *Parte superior plana* (0 = cima redondeada, al máximo = meseta plana), *Densidad de geometría* y *Máximo de triángulos*. El tope manda sobre la densidad. Sin selección, esos controles fijan los valores de los cerros nuevos.
+     - Donde un cerro cruza la pista sin altura para un túnel, la pista lo corta en trinchera. Fuera de los túneles ni el terreno ni los cerros quedan nunca sobre la pista.
+   - **Túneles:** se crean donde un cerro cubre la pista con altura suficiente (altura libre + techo). Cada túnel es independiente y se arma con mallas separadas: *paredes*, *techo* (para texturas distintas), *veredas*, *boca de entrada* y *boca de salida*.
+     - *Forma*: cuadrado, círculo, ovalado o cuadrado con esquinas redondeadas. *Ancho* y *Altura libre* libres. *Densidad de polígonos* define los lados de la sección y la distancia entre secciones.
+     - *Artificial*: sección regular. *Natural (caverna)*: sección irregular; *Tamaño de la caverna* va de un túnel apenas irregular (0) a una gran bóveda con estalactitas y rocas (1).
+     - *Costado abierto*: cerrado, o abierto a la izquierda o a la derecha con *N pilares* (cubos estirados con el pivote en el centro de su base).
+     - *Bocas*: un marco alrededor de la sección, con *Grosor del marco* y *Cuánto sobresale* por fuera del cerro. El cerro se recorta justo al contorno exterior del marco.
+   - **Árboles y hierba** (misma categoría, misma mecánica):
+     - Se reparten a los costados de la pista con *Lado*, *Densidad* (por 100 m y por lado), *Escala*, *Distancia al borde* y *Dispersión*. Nunca quedan encima de un tramo de pista.
+     - *También sobre cerros*: **En laderas** y/o **En la cima** (sobre el 85 % de la altura del cerro). Sin marcar ninguno, van solo sobre el terreno. *Densidad en cerros* agrega más, repartidos por área sobre los cerros permitidos.
+     - *Inclinación según el suelo*: 0 = rectos hacia arriba; 100 = alineados con la normal de la superficie donde están. Se hunden lo justo para que la base no flote en pendiente.
+     - La **hierba** son dos planos cruzados por mata, con una textura con transparencia (trae una por defecto; puedes cargar un PNG propio). Se exporta como una sola malla `hierba` con recorte por alfa.
+     - Los árboles se exportan cada uno como objeto, con el pivote en el centro de la base y la inclinación como rotación del objeto.
+   - **Pórtico de salida:** un arco con cartel (texto editable, «START» por defecto) y línea a cuadros en la meta de la ruta principal. Se mueve con la herramienta *Meta*.
+   - **Elementos de pista** (categoría *Elementos de pista*): charcos, turbo pads y nitro strips, organizados en grupos. **+ Nuevo grupo** (o los botones *+ Charcos*, *+ Turbo pads* y *+ Nitro strips* de la barra) crea otro grupo (A, B, C…). Los grupos nuevos usan la cantidad y las medidas del primer grupo; marcando *Parámetros propios* (custom parameters) se despliegan valores únicos para ese grupo. Distribución, zonas pintadas y semilla son siempre de cada grupo. Cada elemento se llama `puddlesA-1…N`, `puddlesB-1…N`, `turbopadA-1…N` o `nitrostripA-1…N`.
+     - *Distribución*: al azar sobre la pista, o solo en zonas que pintas con *Pintar zonas* (en el mapa o en 3D; Alt o clic derecho borra). Los nitro strips al azar privilegian las curvas.
+     - *Cantidad máxima* (número) y *Cantidad* (control deslizante para bajarla sin cambiar la posición de los que quedan). *Semilla* cambia el reparto.
+     - Charcos: discos azules, todos del mismo *Diámetro*. Turbo pads: rectángulos amarillos con flechas negras hacia adelante, todos del mismo *Ancho* y *Largo*, orientados con la pista. Nitro strips: franjas verdes que siguen la curvatura, con *Largo máximo* / *Largo*, *Ancho* (por defecto 10 % del ancho de la pista) y *Posición* (centro, cara interna o externa de la curva, o mezcla).
+     - Todos quedan un poco por encima de la calzada (sin z-fighting) y paralelos a su superficie, con peralte y pendiente.
+     - Con *Navegar*: clic sobre un elemento para seleccionarlo, arrástralo en el mapa, o en 3D con el gizmo (solo X e Y). Siempre se reajusta a la pista; un nitro strip se desliza a lo largo de ella y toma su forma. *Restablecer movidos* devuelve un grupo a su reparto automático.
+     - Texturas: charcos, turbo pads y nitro strips tienen coordenadas UV y cada tipo acepta su propia textura (charcos: planas; pads: u hacia adelante; strips: u a lo ancho y v a lo largo, en baldosas cuadradas).
+     - *Borde en los nitro strips (glow)*: paredes sin espesor que suben desde el contorno de cada franja (una cara hacia afuera, sin techo), con *Altura del borde* y textura propia (por defecto un degradado verde que se desvanece hacia arriba). Todos los strips comparten el borde; se exporta como `<nitrostrip>_borde`, hijo de su franja.
+     - En el .glb van en `elementos_pista/<grupo>/<elemento>`, cada uno como objeto propio con el pivote en su base sobre la calzada.
+   - **Escena .glb:** todo sale como objetos independientes: pista (un objeto por ruta), terreno, `cerros/cerro_NN`, `tuneles/tunel_XX/…` (`_paredes`, `_techo`, `_veredas`, `_boca_entrada`, `_boca_salida`, `_estalactitas`, `_rocas`, `_pilar_NN`), `portico_salida` (estructura, cartel y línea) y `arboles`. Cada parte de túnel tiene su propio material, así que puedes texturizarlas por separado. Los pilares, los árboles y el pórtico tienen el pivote en el centro de su base. Todo va con UV y texturas incrustadas, en un solo glTF binario en metros con Z arriba. Se importa en Blender (*File > Import > glTF 2.0*) y en 3ds Max 2023+ (*Import > glTF*). Los splines se siguen exportando aparte (.py / .ms).
+   - **Escena .fbx:** la misma escena en FBX binario 7.4 (botón *Escena .fbx* arriba o *Exportar escena 3D (.fbx)*): la misma jerarquía y los mismos nombres, pivotes, materiales y texturas incrustadas, en metros y con Z arriba. Probado importando en Blender y con Assimp; usa la estructura estándar del FBX SDK, así que debería abrir en 3ds Max, Maya, Unity y Unreal (no probados aquí). Los splines siguen yendo en .py / .ms (el FBX lleva solo mallas).
+10. **Vista 3D.** *Exagerar Z* estira solo la pista y el terreno; cerros, túneles, árboles, hierba y pórtico conservan su forma y se apoyan en el suelo exagerado. Abajo a la izquierda muestra los triángulos de la pista, del terreno, de cerros + túneles (con cuántos hay de cada uno), de los árboles, de la hierba y el total. Si hay un cerro o un túnel seleccionado, muestra también sus triángulos. Los túneles se seleccionan con un clic en 3D (modo *Navegar*) o en su nombre dentro del panel de túneles. **Wireframe** superpone las aristas con el color y la opacidad que elijas.
+11. **Cámara de juego.** Un auto recorre la ruta principal solo, siguiendo curvas, pendientes y peralte. Tiene cámara en tercera persona (baja y detrás, estilo arcade) o en primera persona, con el capó y el tablero a la vista; la tecla C alterna entre ambas. La velocidad se elige en la barra (control deslizante o número); con velocidad negativa el auto va marcha atrás. También hay Pausa (barra espaciadora), Reiniciar, Pantalla completa y Salir (Esc). Un panel muestra velocidad, posición, pendiente, peralte, altura y tiempo de vuelta, y el auto aparece como una flecha roja moviéndose en la vista 2D. Mientras se maneja la escala Z es la real. El cielo (categoría *Cielo*) solo se ve en esta cámara: trae un cielo de día con nubes y puedes cargar otro panorama equirectangular.
+12. **Exportar.** **Blender .py**, **3ds Max .ms**, **JSON**, **OBJ**, y la escena 3D en **.glb** o **.fbx**. **Guardar** crea un `.tsg.json` con todo el proyecto, incluida la imagen, para seguir después, y con una miniatura de la pista en planta (colores por altura, puentes en café). **Abrir** muestra las miniaturas antes de cargar: puedes elegir varios archivos a la vez o, en Chrome/Edge, *Abrir carpeta…* para ver todos los proyectos de una carpeta; clic para elegir, doble clic o Enter para abrir, Esc para cancelar. Los proyectos guardados con versiones anteriores muestran un dibujo de sus puntos.
+
+**Divisores:** arrastra el borde entre el panel lateral y las vistas, entre la vista 2D y la 3D, o sobre el perfil de elevación para cambiar sus tamaños. Doble clic en un borde vuelve al tamaño por defecto. Los tamaños se recuerdan en ese navegador.
+
+**Atajos de teclado propios:** clic derecho sobre cualquier botón y presiona una tecla o combinación (con Ctrl, Alt o Shift). El atajo aparece en el botón y se recuerda en ese navegador. Esc cancela; Supr quita el atajo. No se activan mientras escribes en un campo de texto o número.
+
+**Cruces:** cada cruce se marca en el mapa con un círculo numerado; clic en el número lleva a sus parámetros en *Cruces*: *Separación entre pistas (altura del puente)* con número y control deslizante (propia de ese cruce; si no, la general = altura libre + tablero), cuál tramo pasa arriba (⇅) y el tipo. Si editas a mano la altura de puntos del spline cerca de un cruce, esas alturas mandan sobre la separación (círculo violeta).
+
+**Atajos desde el eje o desde el borde:** *Atajos salen desde el eje de la pista* (activado por defecto) los hace salir y llegar al eje, con su calzada unos centímetros por debajo de la principal donde se superponen (no la corta). Desactivado, salen desde el borde, pegados borde con borde.
+
+**Abrir y puentes:** en *Editar puntos*, la casilla *Abrir* (barra de la vista 2D) hace que al borrar un punto de un circuito cerrado éste quede abierto en ese lugar. Seleccionando con Shift los dos extremos abiertos, *Puente* (barra) o *Crear puente* (panel *Puntos seleccionados*) los une con un puente de ancho propio que vuelve a cerrar el circuito. Los puentes se listan en *Puntos del spline* (ancho editable, quitar). Se seleccionan con un clic en la lista, en el mapa o en la vista 3D (*Navegar*): quedan iluminados en amarillo y Supr los quita. *Desplazamiento lateral* (control deslizante o botones Izquierda / Centro / Derecha) corre un puente más angosto que la pista hacia un borde, según el sentido de marcha; el límite es el borde de la pista, y en el extremo el borde del puente sigue en línea con el de la pista. En el mapa también puedes arrastrar el puente seleccionado hacia los lados (flecha doble). El tablero del puente tiene su propia textura (*Textura de los puentes*, en la sección de la textura de la pista; café por defecto) y se exporta como `puentes/puente_NN`; las transiciones que se angostan siguen con la textura de la pista; bajo un puente el terreno no sube hasta la calzada y, si queda en altura, lleva pilares (se exportan como `puentes/puente_NN_pilar_MM`).
+
+**Doble clic** en el mapa, en la vista 3D o en el perfil de elevación entra a *Editar puntos* con el punto más cercano. Clic en el terreno (vista 3D, *Navegar*) lleva a sus parámetros; clic en la pista (mapa o vista 3D) lleva a *Textura de la pista*.
+
+**Panel lateral automático:** cualquier botón con parámetros en el panel lateral (herramientas, cámara de juego, exportar, generar, agregar elementos) lleva el panel a esa sección y la marca con borde y fondo amarillos. Hacer clic en un cerro, un túnel o un elemento de pista también abre su sección (y su grupo).
+
+**Supr** borra lo seleccionado: uno o varios puntos (en *Editar puntos*), un atajo, un elemento de pista (se recupera con *Restablecer* de su grupo) o un cerro. **Ctrl+clic** (o Shift+clic) suma un punto suelto a la selección, y sobre un punto ya seleccionado lo quita; funciona en el mapa, el perfil y la vista 3D. **Alt+arrastrar** dibuja un cuadro rojo que quita de la selección los puntos que encierra (Alt+clic sobre un punto sigue borrándolo).
+
+**Gizmo 2D:** en *Editar puntos*, el punto seleccionado (o el centro de la selección múltiple) muestra un gizmo: la flecha roja mueve solo en X, la verde solo en Y y el cuadrado amarillo mueve libre.
+
+**Esc** equivale al botón *Navegar* y quita cualquier selección (puntos, cerros, túneles, elementos, puentes) y el resaltado amarillo del panel lateral. En la cámara de juego, Esc sale del juego.
+
+**Editar puntos** lleva el panel lateral a *Puntos seleccionados* y muestra en la barra los botones **Radio** (curva de radio fijo con el radio del panel) y **Bifurcar** (con el lado y la separación del panel).
+
+**Generar terreno / Generar árboles** (barra de la vista 2D): activan el terreno o los árboles con los valores por defecto (si ya estaban activos, conservan tus valores), llevan el panel lateral a esa sección y la marcan con un borde amarillo fino.
+
+**Paneles:** las opciones están agrupadas por categoría en el panel lateral. Cada categoría se pliega con ▾ y se desancla con ⧉ (o con doble clic en su título) para dejarla como ventana flotante. La ventana se mueve arrastrando su título y se redimensiona desde la esquina inferior derecha. ⇲ la vuelve a anclar y **Anclar ventanas** (barra superior) ancla todas. La disposición se recuerda en ese navegador.
+
+Cada parámetro tiene un ícono **?**: pasa el mouse encima (o sobre el control) para ver qué hace.
+
+El panel inferior lista avisos y errores: pendientes fuera de rango, holgura insuficiente en un cruce, horquillas más cerradas que el medio ancho o tramos superpuestos sin cruce.
+
+## Importar en Blender (3.x / 4.x)
+
+1. `Scripting` → `Open` → `track_spline_blender.py` → **Run Script**.
+2. Se crea la colección **Track Spline** con:
+   - `ruta_principal` y `atajo_XX`: curvas Bézier 3D. Cada nudo guarda `radius` = semiancho (m) y `tilt` = peralte (rad).
+   - `*_borde_izq` / `*_borde_der`: bordes con peralte (si activaste la opción).
+   - `TSG_perfil_pista`: un perfil de −1 a 1 asignado como *bevel*. La pista se ve de inmediato con su ancho y peralte reales. Para convertirla en malla: `Object → Convert → Mesh`.
+3. Con Geometry Nodes: `Curve to Mesh` con un perfil de línea de −1 a 1, y el atributo *radius* conectado a *Scale*.
+
+Si el peralte aparece invertido en tu flujo, marca *Blender: invertir signo del peralte* antes de exportar.
+
+## Importar en 3ds Max
+
+1. `Scripting` → `Run Script…` → `track_spline_3dsmax.ms`.
+2. Se crean SplineShapes Bézier en la capa **Track Spline**. Los metros se convierten a las unidades del sistema con `units.decodeValue "1m"`.
+3. Max no guarda ancho ni peralte por nudo, así que:
+   - Los **bordes izquierdo y derecho** salen como splines aparte. Úsalos con *Cross Section + Surface*, o como referencia para *Sweep* / *Loft*.
+   - Los anchos y peraltes por nudo quedan en las *User Properties* del objeto (`anchos_m`, `peraltes_grados`).
+
+## Formatos de salida
+
+- **JSON**: todas las muestras por ruta (`s, x, y, z, width, roll_rad, grade`), la lista de cruces (tramo superior/inferior, tipo, holgura), los parámetros y el proyecto fuente. Sirve para scripts propios, para Unity o Godot, o para reimportar.
+- **OBJ**: polilíneas 3D (en Y arriba, la convención OBJ). Con los ejes por defecto del importador quedan en Z arriba en Blender y Max.
+
+Convención común: metros, Z arriba y el plano XY en planta, con Y positivo hacia arriba de la imagen.
+
+## Cómo funciona
+
+- **Imagen → trazado:** binarizado (Otsu, con detección automática de pista clara u oscura), cierre morfológico y esqueleto Zhang-Suen. Luego se arma un grafo de nodos y aristas. Las uniones cercanas se fusionan en cruces de grado 4. En cada cruce el recorrido sigue la rama más recta. Las bifurcaciones (grado 3) definen la ruta principal (el lazo más largo) y las rutas alternativas.
+- **Spline:** Catmull-Rom centrípeto, remuestreado a paso uniforme en longitud de arco.
+- **Cruces:** intersección de segmentos y ventana de muestras solapadas en planta. Se exige `z_arriba − z_abajo ≥ altura libre + tablero` en toda la zona de solape, no solo en el punto.
+- **Elevación:** ruido periódico de pocas armónicas (la vuelta cierra sin escalón), más rampas de coseno en los cruces. Encima corre un **QP** (ADMM tipo OSQP, con Cholesky en banda + Woodbury) que minimiza la segunda derivada. Está sujeto a pendiente máxima, radios verticales, holguras y continuidad de los atajos. Tarda 10–80 ms por recálculo.
+
+## Estructura
+
+```
+index.html, styles.css      interfaz
+server.js                   servidor local sin dependencias
+js/app.js                   controlador de la interfaz
+js/trace.js                 imagen → grafo → rutas (también en js/trace-worker.js)
+js/build.js                 rutas en metros, cruces, solapes, horquillas
+js/elevation.js             modelo de elevación + validación
+js/solver.js                solver QP
+js/export.js                Blender / 3ds Max / JSON / OBJ
+js/scene.js, tunnels.js     terreno, cerros, túneles, árboles y pórtico
+js/export-glb.js            escena .glb (y la escena compartida con el FBX)
+js/export-fbx.js            escritor FBX binario 7.4
+js/gamecam.js               cámara de juego
+js/editor2d.js, profile.js, preview3d.js   vistas
+test/run-tests.js           tests del núcleo: npm test
+```
+
+## Límites conocidos
+
+- Sin secciones antigravedad: todos los cruces son puentes o túneles.
+- En espirales, donde dos tramos se superponen en planta sin cruzarse, se avisa pero no se resuelve solo. Separa más los tramos en el layout.
+- Minimapas con íconos, texto o flechas encima de la pista pueden necesitar ajustar el umbral, o limpiar la imagen antes de cargarla.
+- Los parámetros de túnel (forma, ancho, tipo, lado abierto, pilares) son globales: se aplican a todos los túneles.
+- Un cerro más bajo que el umbral de túnel no forma túnel: la pista lo corta como trinchera.
+- Los cerros son mallas de altura (sin voladizos): una pared rocosa es muy empinada pero no totalmente vertical, y su nitidez depende de la densidad del cerro.

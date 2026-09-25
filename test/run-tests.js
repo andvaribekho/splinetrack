@@ -1,0 +1,296 @@
+// Tests del núcleo (sin navegador): node test/run-tests.js
+import { SAMPLES } from '../js/samples.js';
+import { buildLayout, deriveControlPoints } from '../js/build.js';
+import { computeElevation } from '../js/elevation.js';
+import { traceImage } from '../js/trace.js';
+import { exportBlender, exportMax, exportJSON, exportOBJ, routeSamples, bezierKnots, bezierError } from '../js/export.js';
+import { rasterize } from './raster.js';
+import { buildTerrain, buildTrees, buildTrackMesh, buildHills, buildStartGate, buildGrass, makeGround } from '../js/scene.js';
+import { edgeSamples } from '../js/export.js';
+import { computeItems, defaultGroup, itemAt } from '../js/items.js';
+import { nearestOnSamples } from '../js/geometry.js';
+
+let fails = 0, passes = 0;
+const check = (cond, msg) => { if (cond) passes++; else { fails++; console.log('  FALLA:', msg); } };
+
+const EXPECTED = { oval: 0, figure8: 1, loop: 1, trefoil: 3, shortcut: 0, star: 4 };
+for (const [key, s] of Object.entries(SAMPLES)) {
+  console.log(`· ${s.name}`);
+  const proj = s.build();
+  const L = buildLayout(proj, { lapLength: s.lap || 1000 });
+  check(L && Math.abs(L.routes[0].L - (s.lap || 1000)) < 2, `${key}: largo de vuelta`);
+  check(L.crossings.length === EXPECTED[key], `${key}: cruces ${L.crossings.length} != ${EXPECTED[key]}`);
+  for (const hills of [0, 0.5, 1]) {
+    for (const crossType of ['mixed', 'bridge', 'tunnel']) {
+      const E = computeElevation(L, { hills, crossType, seed: 7 });
+      const v = E.validation;
+      const req = E.ep.clearance + E.ep.deck;
+      check(E.solver.status === 'solved', `${key} h=${hills} ${crossType}: solver ${E.solver.status}`);
+      check(v.maxGrade <= E.ep.maxGrade / 100 * 1.06, `${key} h=${hills} ${crossType}: pendiente ${(v.maxGrade * 100).toFixed(2)}%`);
+      check(E.crossings.every((c) => c.clearance >= req - 0.25), `${key} h=${hills} ${crossType}: holgura`);
+      // continuidad del cierre
+      const z = E.routes[0].z;
+      check(!L.routes[0].closed || Math.abs(z[0] - z[z.length - 1]) < 0.5, `${key}: cierre continuo`);
+      // atajos: extremos pegados a la principal
+      L.routes.slice(1).forEach((r, k) => {
+        const za = E.routes[k + 1].z;
+        const zm0 = z[Math.round(r.forkS / L.routes[0].ds) % L.routes[0].n];
+        const zm1 = z[Math.round(r.mergeS / L.routes[0].ds) % L.routes[0].n];
+        check(Math.abs(za[0] - zm0) < 0.3 && Math.abs(za[za.length - 1] - zm1) < 0.3, `${key}: atajo unido en altura`);
+      });
+    }
+  }
+  if (hillsZeroFlat(L)) passes++; else { fails++; console.log('  FALLA: sin colinas ni cruces debería ser plano'); }
+  // trazado por imagen
+  const tr = traceImage(rasterize(proj));
+  check(tr.main && tr.main.closed, `${key}: trazado cerrado`);
+  const LT = buildLayout({ main: tr.main, alts: tr.alts }, { lapLength: s.lap || 1000 });
+  check(LT.crossings.length === EXPECTED[key], `${key}: cruces desde imagen ${LT.crossings.length}`);
+  check(tr.alts.length === proj.alts.length, `${key}: atajos desde imagen ${tr.alts.length}`);
+  // exportación
+  const E = computeElevation(L, { hills: 0.5, bank: true });
+  const py = exportBlender(L, E), ms = exportMax(L, E), js = exportJSON(L, E, proj, {}), obj = exportOBJ(L, E);
+  check(py.includes('CURVAS = {') && py.includes('def main'), `${key}: script Blender`);
+  check(ms.includes('addKnot') && (ms.match(/crearSpline "/g) || []).length === L.routes.length * 3, `${key}: script Max`);
+  check(JSON.parse(js).routes.length === L.routes.length, `${key}: JSON`);
+  check(obj.split('\n').filter((l) => l.startsWith('l ')).length === L.routes.length * 3, `${key}: OBJ`);
+  // terreno: nunca por encima de la superficie de la pista (centro y bordes)
+  for (const terrainDensity of [35, 75]) {
+    const T = buildTerrain(L, E, { terrain: true, terrainDensity, terrainMaxPolys: 150000 });
+    let worst = -Infinity;
+    L.routes.forEach((r, kk) => {
+      const { left, right } = edgeSamples(L, E, kk);
+      for (let i = 0; i < r.n; i++) for (const q of [{ x: r.x[i], y: r.y[i], z: E.routes[kk].z[i] }, left[i], right[i]]) worst = Math.max(worst, T.sample(q.x, q.y) - q.z);
+    });
+    check(worst <= -0.29, `${key}: terreno atraviesa la pista (${worst.toFixed(3)} m)`);
+    check(T.tris <= 150000 * 1.02, `${key}: tope de polígonos del terreno`);
+    const tr = buildTrees(L, E, { treeDensity: 10 }, T);
+    check(tr.count > 10, `${key}: árboles`);
+  }
+  // terreno adaptativo con zona pintada
+  {
+    const c0 = { x: L.routes[0].x[0], y: L.routes[0].y[0] };
+    const T = buildTerrain(L, E, { terrain: true, terrainDensity: 45, terrainMaxPolys: 60000, paintFactor: 9 }, [{ x: c0.x, y: c0.y, r: 90, e: false }]);
+    let worst = -Infinity;
+    L.routes.forEach((r, kk) => { const { left, right } = edgeSamples(L, E, kk);
+      for (let i = 0; i < r.n; i++) for (const q of [{ x: r.x[i], y: r.y[i], z: E.routes[kk].z[i] }, left[i], right[i]]) worst = Math.max(worst, T.sample(q.x, q.y) - q.z); });
+    check(T.adaptive && worst <= -0.29, `${key}: terreno adaptativo atraviesa la pista (${worst.toFixed(3)})`);
+    check(T.tris <= 60000 * 1.1, `${key}: tope de polígonos adaptativo (${T.tris})`);
+    check(T.cellFine && T.cellFine < T.cell * 0.4, `${key}: celdas finas en lo pintado`);
+  }
+  // cerros como mallas propias: fuera de los túneles ni terreno ni cerros quedan sobre la pista; donde cubren la pista, túnel
+  {
+    const r0 = L.routes[0], i0 = Math.floor(r0.n * 0.3), i1 = Math.floor(r0.n * 0.7);
+    const hills = [
+      { id: 1, height: 40, hard: false, flat: 0.2, density: 55, maxTris: 30000, strokes: [{ x: r0.x[i0], y: r0.y[i0], r: 45, e: false }] },
+      { id: 2, height: 35, hard: true, flat: 1, density: 60, maxTris: 30000, strokes: [{ x: r0.x[i1], y: r0.y[i1], r: 35, e: false }, { x: r0.x[i1] + 20, y: r0.y[i1], r: 25, e: false }] },
+    ];
+    for (const tunnelOpen of ['none', 'left']) {
+      const sp = { terrain: true, terrainDensity: 45, terrainMaxPolys: 80000, tunnelOpen, tunnelType: tunnelOpen === 'none' ? 'artificial' : 'natural', tunnelShape: tunnelOpen === 'none' ? 'circle' : 'rounded' };
+      const T = buildTerrain(L, E, sp);
+      const HS = buildHills(L, E, sp, T, hills);
+      const runs = HS.tunnels;
+      const inTun = (kk, s) => runs.some((t) => { if (t.k !== kk) return false; const r = L.routes[kk]; let ss = s;
+        if (r.closed) { while (ss < t.e0) ss += r.L; while (ss > t.e1 + r.L) ss -= r.L; } return ss >= t.e0 - 3 && ss <= t.e1 + 3; });
+      let worst = -Infinity, worstT = -Infinity;
+      L.routes.forEach((r, kk) => { const { left, right } = edgeSamples(L, E, kk);
+        for (let i = 0; i < r.n; i++) {
+          const pts3 = [{ x: r.x[i], y: r.y[i], z: E.routes[kk].z[i] }, left[i], right[i]];
+          for (const q of pts3) worstT = Math.max(worstT, T.sample(q.x, q.y) - q.z);
+          if (inTun(kk, r.s[i])) continue;
+          for (const q of pts3) worst = Math.max(worst, HS.sample(q.x, q.y) - q.z);
+        } });
+      check(worstT <= -0.29, `${key}: terreno sobre la pista con cerros (${worstT.toFixed(3)})`);
+      check(worst <= -0.29, `${key}: cerros atraviesan la pista fuera de túneles (${worst.toFixed(3)}, ${tunnelOpen})`);
+      check(runs.length >= 1, `${key}: túnel detectado bajo cerro (${tunnelOpen})`);
+      check(HS.hills.length === 2 && HS.hills.every((h) => h.tris > 50 && h.tris <= 30000 * 1.15), `${key}: mallas de cerros (${HS.hills.map((h) => h.tris).join(', ')})`);
+      const g = HS.tunnelGeo[0];
+      check(g && g.walls.indices.length && g.ceiling.indices.length && g.portals.length === 2 && g.portals.every((p) => p.geo.indices.length), `${key}: túnel con paredes, techo y bocas`);
+    }
+    // densidad por cerro: bajar el máximo de triángulos reduce la malla
+    {
+      const sp = { terrain: true, terrainDensity: 30 };
+      const T = buildTerrain(L, E, sp);
+      const lo = buildHills(L, E, sp, T, [{ ...hills[0], id: 7, maxTris: 1500 }]);
+      const hi = buildHills(L, E, sp, T, [{ ...hills[0], id: 7, maxTris: 1500, density: 90 }]);
+      check(lo.hills[0].tris <= 1500 * 1.2, `${key}: tope de triángulos por cerro (${lo.hills[0].tris})`);
+      check(hi.hills[0].tris >= lo.hills[0].tris * 0.8, `${key}: el tope manda sobre la densidad`);
+    }
+    // árboles y hierba: solo terreno, laderas, cimas; inclinación según la normal
+    {
+      const sp = { terrain: true, terrainDensity: 35, treeDensity: 12, treeSpread: 60, grassDensity: 60 };
+      const T = buildTerrain(L, E, sp);
+      const HS = buildHills(L, E, sp, T, hills);
+      const G = makeGround(T, HS);
+      const t0 = buildTrees(L, E, sp, G);
+      check(t0.count > 10 && t0.trees.every((t) => t.where === 'terrain' && t.up[2] === 1), `${key}: árboles solo en el terreno y rectos`);
+      const tTop = buildTrees(L, E, { ...sp, treeOnTops: true, treeHillDensity: 10 }, G);
+      check(tTop.trees.some((t) => t.where === 'top') && !tTop.trees.some((t) => t.where === 'slope'), `${key}: árboles en cimas (${tTop.trees.filter((t) => t.where === 'top').length})`);
+      const tSl = buildTrees(L, E, { ...sp, treeOnSlopes: true, treeHillDensity: 10, treeTilt: 100 }, G);
+      const onSl = tSl.trees.filter((t) => t.where === 'slope');
+      check(onSl.length > 3 && !tSl.trees.some((t) => t.where === 'top'), `${key}: árboles en laderas (${onSl.length})`);
+      check(onSl.some((t) => t.up[2] < 0.97), `${key}: árboles inclinados según la ladera`);
+      const onSlZ = onSl.every((t) => Math.abs(t.z - G.sample(t.x, t.y)) < 1e-6);
+      check(onSlZ, `${key}: árboles apoyados en el cerro`);
+      const gr = buildGrass(L, E, { ...sp, grassOnSlopes: true, grassOnTops: true }, G);
+      const gr0 = buildGrass(L, E, sp, G);
+      check(gr.count > gr0.count && gr0.count > 50 && gr.indices.length === gr.count * 12 && gr.uvs.length === gr.count * 16, `${key}: hierba (${gr0.count} / ${gr.count})`);
+    }
+  }
+  // atajos: salen desde el borde de la pista (borde con borde, a la misma altura), no desde el eje
+  if (L.routes.some((r) => r.kind === 'alt')) {
+    for (const gp0 of [{}, { altWidthSame: false, altWidth: 7 }, { altWidthSame: false, altWidth: 7, altInheritWidth: true }]) {
+      const gp = { ...gp0, altFromCenter: false };
+      const LA = buildLayout(proj, { lapLength: s.lap || 1000, ...gp });
+      const EA = computeElevation(LA, { hills: 0.5, bank: true });
+      const m = LA.routes[0], em = edgeSamples(LA, EA, 0);
+      LA.routes.forEach((a, ka) => {
+        if (a.kind !== 'alt') return;
+        const ea = edgeSamples(LA, EA, ka);
+        for (const [end, i, sM, u] of [['salida', 0, a.forkS, a.forkU], ['llegada', a.n - 1, a.mergeS, a.mergeU]]) {
+          const side = Math.sign(u);
+          const ai = side > 0 ? ea.right[i] : ea.left[i];
+          const im = Math.round(sM / m.ds) % m.n;
+          const mi = side > 0 ? em.left[im] : em.right[im];
+          const gap = Math.hypot(ai.x - mi.x, ai.y - mi.y), dz = Math.abs(ai.z - mi.z);
+          check(gap < 0.6 && dz < 0.08, `${key}: ${a.name} empalma borde con borde en la ${end} (${gap.toFixed(2)} m, dz ${dz.toFixed(3)}) ${JSON.stringify(gp)}`);
+        }
+        const wantMid = gp.altWidth || LA.routes[0].w[0];
+        const wantEnd = gp.altInheritWidth ? LA.routes[0].w[0] : wantMid;
+        check(Math.abs(a.w[Math.floor(a.n / 2)] - wantMid) < 0.01 && Math.abs(a.w[0] - wantEnd) < 0.01, `${key}: ancho del atajo ${JSON.stringify(gp)}`);
+      });
+    }
+  }
+  // atajos desde el eje (por defecto): su calzada queda bajo la principal donde se superponen
+  if (L.routes.some((r) => r.kind === 'alt')) {
+    for (const gp of [{}, { altWidthSame: false, altWidth: 7 }]) {
+      const LA = buildLayout(proj, { lapLength: s.lap || 1000, ...gp });
+      const EA = computeElevation(LA, { hills: 0.5, bank: true });
+      const m = LA.routes[0], em = EA.routes[0];
+      let worst = -Infinity;
+      LA.routes.forEach((a, ka) => {
+        if (a.kind !== 'alt') return;
+        const ea = EA.routes[ka];
+        for (let i = 0; i < a.n; i++) {
+          if (a.s[i] > 100 && a.L - a.s[i] > 100) continue;
+          for (const v of [-a.w[i] / 2, 0, a.w[i] / 2]) {
+            const px = a.x[i] - a.ty[i] * v, py = a.y[i] + a.tx[i] * v;
+            const nn = nearestOnSamples(m, px, py), jm = Math.min(m.n - 1, nn.i);
+            const u = (px - nn.x) * -m.ty[jm] + (py - nn.y) * m.tx[jm];
+            if (Math.abs(u) > m.w[jm] / 2) continue;
+            worst = Math.max(worst, ea.z[i] + Math.sin(ea.roll[i]) * v - (em.z[jm] + Math.sin(em.roll[jm]) * u));
+          }
+        }
+      });
+      check(worst <= 0.02, `${key}: atajo desde el eje queda bajo la principal (${worst.toFixed(3)} m) ${JSON.stringify(gp)}`);
+    }
+  }
+  // elementos de pista: charcos, turbo pads y nitro strips
+  {
+    const groups = { puddle: [defaultGroup('puddle', 'A', 3)], pad: [defaultGroup('pad', 'A', 3)], strip: [{ ...defaultGroup('strip', 'A', 3), lane: 'outer' }] };
+    const I = computeItems(L, E, groups);
+    const names = I.flatMap((g) => g.items.map((it) => it.name));
+    check(names.includes('puddlesA-1') && names.includes('turbopadA-1') && names.includes('nitrostripA-1'), `${key}: nombres de elementos`);
+    const inside = I.every((g) => g.items.every((it) => { const r = L.routes[it.k]; const i = Math.round(((it.s % r.L) + r.L) % r.L / r.ds) % r.n; return Math.abs(it.u) <= r.w[i] / 2; }));
+    check(inside, `${key}: elementos dentro de la calzada`);
+    const pads = I.find((g) => g.type === 'pad').items;
+    const fewer = computeItems(L, E, { pad: [{ ...groups.pad[0], count: 3 }] })[0].items;
+    check(fewer.length === Math.min(3, pads.length) && fewer.every((it, q) => it.s === pads[q].s), `${key}: bajar la cantidad conserva las posiciones`);
+    const it0 = pads[0];
+    const f = it0.basis;
+    const dot = f[2][0] * f[0][0] + f[2][1] * f[0][1] + f[2][2] * f[0][2];
+    check(Math.abs(dot) < 1e-6 && f[2][2] > 0.8, `${key}: turbo pad paralelo a la calzada`);
+    // los grupos sin parámetros propios usan los del primer grupo
+    {
+      const A = { ...defaultGroup('puddle', 'A', 3), max: 5, count: 4, size: 6 };
+      const B = { ...defaultGroup('puddle', 'B', 9), max: 12, count: 12, size: 2 };
+      const Ic = computeItems(L, E, { puddle: [A, B] });
+      check(Ic[1].items.length === Ic[0].items.length && Ic[1].items[0].footprint.r === 3, `${key}: grupo B usa los parámetros de A`);
+      const Id = computeItems(L, E, { puddle: [A, { ...B, custom: true }] });
+      check(Id[1].items.length > 4 && Id[1].items[0].footprint.r === 1, `${key}: grupo B con parámetros propios`);
+    }
+    {
+      const Ib = computeItems(L, E, { strip: [groups.strip[0]] }, (q) => q, { border: { h: 0.8 } });
+      const st = Ib[0].items[0];
+      check(st && st.border && st.border.indices.length === (2 * (st.positions.length / 6 - 1) + 2) * 6 && st.border.uvs.length === st.border.positions.length / 3 * 2, `${key}: borde de nitro strip (paredes sin techo, con UV)`);
+      check(st && st.uvs.length === st.positions.length / 3 * 2, `${key}: UV del nitro strip`);
+    }
+    const hit = itemAt(I, it0.origin[0], it0.origin[1]);
+    check(hit && hit.type === 'pad' && hit.idx === 0, `${key}: selección por posición`);
+  }
+  const tmesh = buildTrackMesh(L, E, { trackTexReps: 50 });
+  check(tmesh.uvs.length / 2 === tmesh.positions.length / 3, `${key}: UV de la pista`);
+  for (let k = 0; k < L.routes.length; k++) {
+    const pts = routeSamples(L, E, k);
+    const kn = bezierKnots(pts, L.routes[k].closed, 10, L.routes[k].k);
+    check(bezierError(pts, kn, L.routes[k].closed) < 0.25, `${key}: error Bézier ruta ${k}`);
+  }
+}
+
+// puentes: tramo entre dos puntos de control con ancho propio
+{
+  const proj = SAMPLES.oval.build();
+  const L0 = buildLayout(proj, { lapLength: 1000 });
+  proj.main.ctrl = deriveControlPoints(proj.main.pts, true, 30 / L0.scale, 3);
+  const c = proj.main.ctrl;
+  proj.main.bridges = [{ a: c[5].slice(), b: c[7].slice(), w: 24 }];
+  const LB = buildLayout(proj, { lapLength: 1000 });
+  const r = LB.routes[0], b = r.bridges[0];
+  check(b && b.s1 - b.s0 > 20, `puente: tramo detectado (${b ? (b.s1 - b.s0).toFixed(0) : 0} m)`);
+  const mid = Math.round(((b.s0 + b.s1) / 2) / r.ds) % r.n;
+  const far = (mid + Math.round(r.n / 2)) % r.n;
+  check(Math.abs(r.w[mid] - 24) < 0.01 && Math.abs(r.w[far] - 14) < 0.01, `puente: ancho propio (${r.w[mid].toFixed(1)} / ${r.w[far].toFixed(1)})`);
+  const EB = computeElevation(LB, { hills: 0.5 });
+  const T = buildTerrain(LB, EB, { terrain: true, terrainDensity: 40 });
+  let worst = -Infinity;
+  const { left, right } = edgeSamples(LB, EB, 0);
+  for (let i = 0; i < r.n; i++) for (const q of [{ x: r.x[i], y: r.y[i], z: EB.routes[0].z[i] }, left[i], right[i]]) worst = Math.max(worst, T.sample(q.x, q.y) - q.z);
+  check(worst <= -0.29, `puente: el terreno no atraviesa el puente (${worst.toFixed(3)})`);
+  // tablero aparte (textura propia) en la malla
+  const TM = buildTrackMesh(LB, EB, {});
+  check(TM.bridgeParts.length === 1 && TM.bridgeParts[0].name === 'puente_01' && TM.bridgeParts[0].indices.length > 0, 'puente: tablero como malla propia');
+  check(TM.trackCount > 0 && TM.trackCount < TM.indices.length, 'puente: índices de pista y de tablero separados');
+  const tpart = TM.parts[0];
+  check(tpart.indices.every((i) => i < tpart.positions.length / 3) && TM.bridgeParts[0].indices.every((i) => i < TM.bridgeParts[0].positions.length / 3), 'puente: mallas compactadas válidas');
+}
+
+// puentes desplazados hacia un borde: el borde del puente sigue el borde de la pista
+{
+  const proj = SAMPLES.oval.build();
+  const L0 = buildLayout(proj, { lapLength: 1000 });
+  proj.main.ctrl = deriveControlPoints(proj.main.pts, true, 30 / L0.scale, 3);
+  const c = proj.main.ctrl;
+  const base = JSON.parse(JSON.stringify(proj));
+  base.main.bridges = [{ a: c[5].slice(), b: c[8].slice(), w: 6 }];
+  const LC = buildLayout(base, { lapLength: 1000, width: 14 });
+  for (const side of [-1, 1]) {
+    const pj = JSON.parse(JSON.stringify(base));
+    pj.main.bridges[0].off = side;
+    const LO = buildLayout(pj, { lapLength: 1000, width: 14 });
+    const r = LO.routes[0], b = r.bridges[0], rc = LC.routes[0], bc = rc.bridges[0];
+    check(b && Math.abs(b.off - side) < 1e-9 && Math.abs((b.s1 - b.s0) - (bc.s1 - bc.s0)) < 3, `puente desplazado ${side}: tramo conservado (${(b.s1 - b.s0).toFixed(1)} vs ${(bc.s1 - bc.s0).toFixed(1)} m)`);
+    // en el centro del puente: el borde del lado elegido coincide con el borde de la pista original
+    const mid = Math.round(((b.s0 + b.s1) / 2) / r.ds) % r.n;
+    const nc = nearestOnSamples(rc, r.x[mid], r.y[mid]);
+    const i = nc.i;
+    // borde de la pista centrada (ancho 14 fuera del puente → usar 7 m del eje original sin puente)
+    const lx = -rc.ty[i], ly = rc.tx[i];
+    const sgn = side < 0 ? 1 : -1; // izquierda = +normal
+    const shift = (r.x[mid] - rc.x[i]) * lx + (r.y[mid] - rc.y[i]) * ly;
+    check(Math.abs(shift - sgn * 4) < 0.35, `puente desplazado ${side}: eje movido ${shift.toFixed(2)} m (esperado ${sgn * 4})`);
+    check(Math.abs(r.w[mid] - 6) < 0.05, `puente desplazado ${side}: ancho ${r.w[mid].toFixed(2)}`);
+    // muestreo uniforme tras el desplazamiento
+    let dmax = 0, dmin = Infinity;
+    for (let k = 0; k < r.n; k++) { const j = (k + 1) % r.n, d = Math.hypot(r.x[j] - r.x[k], r.y[j] - r.y[k]); dmax = Math.max(dmax, d); dmin = Math.min(dmin, d); }
+    check(dmax / dmin < 1.05, `puente desplazado ${side}: muestreo uniforme (${dmin.toFixed(3)}–${dmax.toFixed(3)})`);
+  }
+}
+
+function hillsZeroFlat(L) {
+  if (L.crossings.length) return true;
+  const E = computeElevation(L, { hills: 0 });
+  return E.validation.zMax - E.validation.zMin < 0.08; // los atajos pueden quedar unos cm bajo la principal donde se superponen
+}
+
+console.log(`\n${passes} correctas, ${fails} fallas`);
+process.exit(fails ? 1 : 0);

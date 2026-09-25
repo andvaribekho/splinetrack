@@ -1,0 +1,507 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Track Spline Generator</title>
+  <link rel="stylesheet" href="styles.css">
+  <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Track Spline Generator</div>
+    <div class="top-actions">
+      <select id="sampleSelect" title="Cargar un layout de ejemplo">
+        <option value="">Ejemplos…</option>
+      </select>
+      <button id="btnNew" title="Empezar de cero">Nuevo</button>
+      <button id="btnOpen" title="Abrir proyecto .tsg.json">Abrir</button>
+      <button id="btnSave" title="Guardar proyecto .tsg.json">Guardar</button>
+      <input id="fileProject" type="file" accept=".json,application/json" multiple hidden>
+      <span class="sep"></span>
+      <button id="btnUndo" title="Deshacer (Ctrl+Z)">Deshacer</button>
+      <button id="btnDockAll">Anclar ventanas</button>
+      <span class="sep"></span>
+      <button class="primary" id="btnExportBlender" title="Script Python para Blender">Blender .py</button>
+      <button class="primary" id="btnExportMax" title="MAXScript para 3ds Max">3ds Max .ms</button>
+      <button id="btnExportJSON">JSON</button>
+      <button id="btnExportOBJ">OBJ</button>
+      <button id="btnExportGLB2" title="Escena 3D completa: pista con UV, terreno y árboles (.glb)">Escena .glb</button>
+      <button id="btnExportFBX2">Escena .fbx</button>
+    </div>
+  </header>
+
+  <div class="app">
+    <aside class="sidebar" id="sidebar">
+      <section class="panel" data-panel="input">
+        <h2>Entrada</h2>
+        <div class="row gap">
+          <button id="btnLoadImage" title="También puedes pegar una imagen con Ctrl+V">Cargar imagen…</button>
+          <button id="btnTestImage" title="Rasteriza el ejemplo elegido para probar el trazado por imagen">Imagen de prueba</button>
+          <input id="fileImage" type="file" accept="image/*" hidden>
+        </div>
+        <div class="field">
+          <label>Umbral <span class="val" id="thrVal">auto</span></label>
+          <div class="row"><input type="checkbox" id="thrAuto" checked title="Umbral automático (Otsu)"><input type="range" id="thr" min="1" max="254" value="128" disabled></div>
+        </div>
+        <div class="field">
+          <label>Pista en la imagen</label>
+          <select id="invert">
+            <option value="auto">Detectar automáticamente</option>
+            <option value="bgdiff">Pista con borde (todo lo distinto del fondo)</option>
+            <option value="false">Pista clara sobre fondo oscuro</option>
+            <option value="true">Pista oscura sobre fondo claro</option>
+            <option value="top">Solo el relleno más claro</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Opacidad de la imagen <span class="val" id="imgOpVal">50%</span></label>
+          <input type="range" id="imgOpacity" min="0" max="100" value="50">
+        </div>
+        <button class="primary wide" id="btnTrace" disabled>Trazar imagen</button>
+        <p class="hint" id="traceInfo">Atajo: copia un minimapa y pégalo aquí con <b>Ctrl+V</b> (⌘V en Mac). También puedes dibujar el trazado a mano con «Dibujar».</p>
+      </section>
+
+      <section class="panel" data-panel="ref">
+        <h2>Imagen de referencia</h2>
+        <div class="row gap">
+          <button id="btnRefLoad" title="Agrega una imagen solo de referencia: se puede mover, escalar y transparentar; no se traza. También puedes elegir la herramienta «Referencia» y pegarla con Ctrl+V.">Cargar imagen de referencia…</button>
+          <button id="btnRefRemove" title="Quitar la imagen de referencia" disabled>Quitar</button>
+        </div>
+        <input id="fileRef" type="file" accept="image/*" hidden>
+        <div id="refBox" hidden>
+          <div class="field"><label>Opacidad <span class="val" id="refOpacityVal">50%</span></label><input type="range" id="refOpacity" min="0" max="100" value="50"></div>
+          <div class="field"><label>Escala (%)</label><input type="number" id="refScale" min="1" step="1" value="100"></div>
+          <label class="check"><input type="checkbox" id="refVisible" checked> Mostrar</label>
+          <label class="check"><input type="checkbox" id="refAbove"> Encima de la pista</label>
+        </div>
+        <p class="hint">Herramienta «Referencia»: arrastra la imagen para moverla y su esquina lila para escalarla. No se traza.</p>
+      </section>
+
+      <section class="panel" data-panel="trace">
+        <h2>Trazado</h2>
+        <div class="field"><label>Largo de vuelta <span class="val" id="lapLengthVal"></span></label><input type="range" id="lapLength" min="300" max="3000" step="10"></div>
+        <div class="field"><label>Ancho de pista <span class="val" id="widthVal"></span></label><input type="range" id="width" min="6" max="30" step="0.5"></div>
+        <label class="check"><input type="checkbox" id="useImageWidth"> Usar ancho medido en la imagen</label>
+        <label class="check"><input type="checkbox" id="altWidthSame"> Atajos con el mismo ancho que la pista</label>
+        <div class="field" id="altWidthBox"><label>Ancho de los atajos <span class="val" id="altWidthVal"></span></label><input type="range" id="altWidth" min="3" max="30" step="0.5"></div>
+        <label class="check"><input type="checkbox" id="altInheritWidth"> Atajos con el ancho de la pista en la salida y la llegada</label>
+        <label class="check"><input type="checkbox" id="altFromCenter"> Atajos salen desde el eje de la pista (quedan bajo la pista)</label>
+        <div class="field"><label>Detalle (m entre puntos de control) <span class="val" id="detailVal"></span></label><input type="range" id="detail" min="4" max="40" step="1"></div>
+        <div class="field"><label>Suavizado del trazo <span class="val" id="sketchSmoothVal"></span></label><input type="range" id="sketchSmooth" min="0" max="12" step="1"></div>
+        <label class="check"><input type="checkbox" id="closed" checked> Circuito cerrado</label>
+        <label class="check"><input type="checkbox" id="reverse"> Invertir sentido</label>
+      </section>
+
+      <section class="panel" data-panel="ctrl">
+        <h2>Puntos del spline</h2>
+        <div id="ctrlBox">
+          <div class="meta" id="ctrlInfo"></div>
+          <div class="meta">Mapa: arrastra un punto para moverlo · doble clic sobre la pista agrega uno · clic derecho, Alt+clic o Supr lo borran · Shift+arrastrar selecciona varios (Shift+clic suma o quita uno) para darles un radio fijo.</div>
+          <div class="meta">Perfil: arrastra un punto en vertical para fijar su altura (◆) · doble clic agrega un punto con esa altura · clic derecho o Alt+clic la vuelve automática.</div>
+          <div class="meta">3D: clic en una esfera para seleccionarla y muévela con el gizmo (Libre, Plano XY o Solo Z).</div>
+          <div class="meta">Varios puntos: Shift+clic suma o quita uno y Shift+arrastrar dibuja un cuadro, en el mapa, el perfil o la vista 3D. Al arrastrar uno de los seleccionados se mueven todos juntos.</div>
+          <div class="row gap">
+            <button id="btnCtrlLess" title="Menos puntos siguiendo la forma actual">Menos puntos</button>
+            <button id="btnCtrlMore" title="Más puntos siguiendo la forma actual">Más puntos</button>
+            <button id="btnCtrlReset" title="Descarta los cambios y regenera los puntos desde el trazo original">Descartar cambios</button>
+          </div>
+          <h3 class="subhead">Puentes</h3>
+          <div id="bridgeList" class="list"></div>
+        </div>
+      </section>
+
+      <section class="panel" data-panel="arc">
+        <h2>Puntos seleccionados</h2>
+        <h3 class="subhead" style="margin-top:4px">Curva de radio fijo</h3>
+        <div class="meta" id="arcInfo"></div>
+        <div id="arcControls">
+          <div class="field"><label>Radio <span class="val"><input type="number" id="arcRadiusNum" min="1" step="0.5" style="width:72px"> m</span></label><input type="range" id="arcRadius" min="5" max="400" step="1"></div>
+          <div class="field"><label>Transición (puntos vecinos) <span class="val" id="arcTransVal">3</span></label><input type="range" id="arcTrans" min="1" max="6" step="1" value="3"></div>
+          <div class="row gap">
+            <button id="btnArcApply" title="Aplica el radio escrito">Aplicar radio</button>
+            <button id="btnArcDone" title="Terminar y quitar la selección">Quitar selección</button>
+          </div>
+          <div class="meta" id="arcMin"></div>
+        </div>
+        <h3 class="subhead">Bifurcar la pista</h3>
+        <div id="forkControls">
+          <div class="field">
+            <label>Lado de la bifurcación</label>
+            <select id="forkSide"><option value="left">A la izquierda</option><option value="right">A la derecha</option><option value="center">Por el centro (la pista original también se abre)</option></select>
+          </div>
+          <div class="field"><label>Separación máxima (entre las dos rutas) <span class="val" id="forkSepVal"></span></label><input type="range" id="forkSep" min="10" max="250" step="1" value="45"></div>
+          <div class="row gap"><button id="btnFork">Bifurcar selección</button></div>
+        </div>
+        <div class="meta" id="forkInfo"></div>
+        <h3 class="subhead">Puente</h3>
+        <div id="bridgeControls">
+          <div class="field"><label>Ancho del puente <span class="val"><input type="number" id="bridgeWidthNum" min="2" max="80" step="0.5" style="width:60px"> m</span></label><input type="range" id="bridgeWidth" min="3" max="40" step="0.5"></div>
+          <div class="row gap"><button id="btnBridge">Crear puente</button></div>
+        </div>
+        <div class="meta" id="bridgeInfo"></div>
+      </section>
+
+      <section class="panel" data-panel="elev">
+        <h2>Elevación</h2>
+        <div class="field big"><label>Colinas <span class="val" id="hillsVal"></span></label><input type="range" id="hills" min="0" max="1" step="0.01"></div>
+        <div class="field"><label>Colinas por vuelta <span class="val" id="hillCountVal"></span></label><input type="range" id="hillCount" min="1" max="8" step="0.5"></div>
+        <div class="field"><label>Amplitud máxima <span class="val" id="hillsMaxVal"></span></label><input type="range" id="hillsMax" min="2" max="40" step="1"></div>
+        <div class="field"><label>Longitud de onda mínima <span class="val" id="lambdaMinVal"></span></label><input type="range" id="lambdaMin" min="20" max="250" step="5"></div>
+        <div class="field">
+          <label>Semilla</label>
+          <div class="row"><input type="number" id="seed" min="0" step="1"><button id="btnDice" title="Semilla aleatoria">Aleatoria</button></div>
+        </div>
+        <div class="field"><label>Suavizado <span class="val" id="smoothVal"></span></label><input type="range" id="smooth" min="0" max="1" step="0.01"></div>
+        <div class="field"><label>Pendiente máxima <span class="val" id="maxGradeVal"></span></label><input type="range" id="maxGrade" min="3" max="25" step="0.5"></div>
+        <div class="field"><label>Radio vertical mín. en cresta <span class="val" id="rCrestVal"></span></label><input type="range" id="rCrest" min="15" max="300" step="5"></div>
+        <div class="field"><label>Radio vertical mín. en valle <span class="val" id="rSagVal"></span></label><input type="range" id="rSag" min="10" max="300" step="5"></div>
+        <div class="field"><label>Plano a cada lado de la meta <span class="val" id="startFlatVal"></span></label><input type="range" id="startFlat" min="0" max="150" step="5"></div>
+        <p class="hint">Usa la herramienta «Zona plana» para aplanar otros tramos.</p>
+        <div id="flatZoneList" class="list"></div>
+      </section>
+
+      <section class="panel" data-panel="cross">
+        <h2>Cruces <span class="badge" id="crossCount">0</span></h2>
+        <div class="field"><label>Altura libre bajo el puente (general) <span class="val" id="clearanceVal"></span></label><input type="range" id="clearance" min="2" max="15" step="0.5"></div>
+        <div class="field"><label>Espesor del tablero <span class="val" id="deckVal"></span></label><input type="range" id="deck" min="0" max="4" step="0.25"></div>
+        <div class="field">
+          <label>Tipo por defecto</label>
+          <select id="crossType">
+            <option value="mixed">Mixto (una sube, otra baja)</option>
+            <option value="bridge">Puente (solo sube el tramo de arriba)</option>
+            <option value="tunnel">Túnel (solo baja el tramo de abajo)</option>
+          </select>
+        </div>
+        <p class="hint">Cada cruce se marca en el mapa con un círculo numerado: haz clic en él para ver sus parámetros aquí (separación entre pistas, cuál pasa arriba, tipo). Si editas a mano la altura de los puntos cerca de un cruce, esas alturas mandan (círculo violeta).</p>
+        <div id="crossList" class="list"></div>
+      </section>
+
+      <section class="panel" data-panel="alts">
+        <h2>Rutas alternativas <span class="badge" id="altCount">0</span></h2>
+        <p class="hint">Se detectan al trazar la imagen o se dibujan con «Dibujar atajo».</p>
+        <div id="altList" class="list"></div>
+      </section>
+
+      <section class="panel" data-panel="bank">
+        <h2>Peralte</h2>
+        <label class="check"><input type="checkbox" id="bank"> Peraltar curvas</label>
+        <div class="field"><label>Peralte máximo <span class="val" id="bankMaxVal"></span></label><input type="range" id="bankMax" min="0" max="30" step="1"></div>
+        <div class="field"><label>Velocidad de diseño <span class="val" id="designSpeedVal"></span></label><input type="range" id="designSpeed" min="30" max="200" step="5"></div>
+      </section>
+
+      <section class="panel" data-panel="tracktex">
+        <h2>Textura de la pista</h2>
+        <div class="row gap">
+          <button id="btnTrackTex">Cargar textura…</button>
+          <button id="btnTrackTexRemove" disabled>Por defecto</button>
+          <img id="trackTexThumb" class="thumb" hidden alt="">
+        </div>
+        <input id="fileTrackTex" type="file" accept="image/*" hidden>
+        <div class="field">
+          <label>Dirección del tiling</label>
+          <select id="trackTexDir">
+            <option value="vertical">Vertical (la textura avanza en V a lo largo de la pista)</option>
+            <option value="horizontal">Horizontal (la textura avanza en U a lo largo de la pista)</option>
+          </select>
+        </div>
+        <div class="field"><label>Repeticiones a lo largo <span class="val"><input type="number" id="trackTexRepsNum" min="1" step="1" style="width:72px"></span></label><input type="range" id="trackTexReps" min="1" max="1000" step="1"></div>
+        <div class="field"><label>Opacidad de la textura (vistas 2D y 3D) <span class="val" id="trackTexOpacityVal"></span></label><input type="range" id="trackTexOpacity" min="0" max="1" step="0.01"></div>
+        <p class="hint" id="trackTexInfo"></p>
+        <h3 id="bridgeTexHead">Textura de los puentes</h3>
+        <div class="row gap">
+          <button id="btnBridgeTex">Cargar textura…</button>
+          <button id="btnBridgeTexRemove" disabled>Por defecto</button>
+          <img id="bridgeTexThumb" class="thumb" hidden alt="">
+        </div>
+        <input id="fileBridgeTex" type="file" accept="image/*" hidden>
+        <p class="hint">El tablero de cada puente (el tramo con el ancho del puente) usa esta textura, café por defecto; las transiciones que se angostan usan la de la pista. Mismo tiling que la pista. Se exporta como <code>puentes/puente_NN</code>.</p>
+      </section>
+
+      <section class="panel" data-panel="terrain">
+        <h2>Terreno</h2>
+        <label class="check"><input type="checkbox" id="terrain"> Agregar terreno bajo la pista</label>
+        <div class="field"><label>Densidad del mesh <span class="val" id="terrainDensityVal"></span></label><input type="range" id="terrainDensity" min="1" max="100" step="1"></div>
+        <div class="field"><label>Máximo de polígonos</label><input type="number" id="terrainMaxPolys" min="500" step="1000"></div>
+        <div class="field"><label>Margen alrededor de la pista <span class="val" id="terrainMarginVal"></span></label><input type="range" id="terrainMargin" min="20" max="400" step="5"></div>
+        <div class="field"><label>Separación bajo la pista <span class="val" id="terrainGapVal"></span></label><input type="range" id="terrainGap" min="0.05" max="2" step="0.05"></div>
+        <div class="field"><label>Transición hacia el relieve <span class="val" id="terrainFalloffVal"></span></label><input type="range" id="terrainFalloff" min="10" max="200" step="5"></div>
+        <div class="field"><label>Multiplicador en zonas pintadas <span class="val" id="paintFactorVal"></span></label><input type="range" id="paintFactor" min="1" max="25" step="0.5"></div>
+        <div class="row gap"><button id="btnPaintTool" title="Activa la herramienta «Pintar densidad» en el mapa">Pintar densidad…</button><button id="btnPaintClear" title="Borra todas las zonas pintadas">Borrar pintura</button></div>
+        <label class="check"><input type="checkbox" id="skirts"> Faldones laterales en la pista</label>
+        <h3 class="subhead" id="terrainTexHead">Textura del terreno</h3>
+        <div class="row gap">
+          <button id="btnTerrainTex">Cargar textura…</button>
+          <button id="btnTerrainTexRemove" disabled>Quitar</button>
+          <img id="terrainTexThumb" class="thumb" hidden alt="">
+        </div>
+        <input id="fileTerrainTex" type="file" accept="image/*" hidden>
+        <div class="field"><label>Tiling X <span class="val"><input type="number" id="terrainTexRepXNum" min="0.1" step="0.5" style="width:66px"></span></label><input type="range" id="terrainTexRepX" min="1" max="200" step="0.5"></div>
+        <div class="field"><label>Tiling Y <span class="val"><input type="number" id="terrainTexRepYNum" min="0.1" step="0.5" style="width:66px"></span></label><input type="range" id="terrainTexRepY" min="1" max="200" step="0.5"></div>
+        <p class="hint" id="terrainInfo"></p>
+      </section>
+
+      <section class="panel" data-panel="hills">
+        <h2>Cerros y túneles</h2>
+        <div class="row gap"><button id="btnHillTool">Pintar cerros…</button><button id="btnHillClear">Borrar todos</button></div>
+        <div class="field"><label>Tamaño del pincel (radio) <span class="val"><input type="number" id="hillBrushNum" min="1" max="1000" step="1" style="width:60px"> m</span></label><input type="range" id="hillBrush" min="2" max="250" step="1"></div>
+        <div class="hill-sel" id="hillSelBox">
+          <div class="row gap" style="align-items:center">
+            <b id="hillSelName">Valores para cerros nuevos</b>
+            <span style="flex:1"></span>
+            <button id="btnHillDeselect" class="small">Deseleccionar</button>
+            <button id="btnHillDelete" class="small danger">Eliminar</button>
+          </div>
+          <div class="field"><label>Altura <span class="val"><input type="number" id="hillHNum" min="1" max="400" step="1" style="width:60px"> m</span></label><input type="range" id="hillH" min="2" max="150" step="1"></div>
+          <div class="field">
+            <label>Perfil</label>
+            <select id="hillProfile"><option value="soft">Colina suave</option><option value="hard">Pared rocosa</option></select>
+          </div>
+          <div class="field"><label>Parte superior plana <span class="val" id="hillFlatVal"></span></label><input type="range" id="hillFlat" min="0" max="1" step="0.05"></div>
+          <div class="field"><label>Densidad de geometría <span class="val" id="hillDensityVal"></span></label><input type="range" id="hillDensity" min="1" max="100" step="1"></div>
+          <div class="field"><label>Máximo de triángulos</label><input type="number" id="hillMaxTris" min="50" step="500"></div>
+          <p class="hint" id="hillInfo"></p>
+        </div>
+        <h3 class="subhead">Túneles</h3>
+        <div class="field">
+          <label>Forma del túnel</label>
+          <select id="tunnelShape">
+            <option value="rounded">Cuadrado con esquinas redondeadas</option>
+            <option value="square">Cuadrado</option>
+            <option value="circle">Círculo</option>
+            <option value="oval">Ovalado</option>
+          </select>
+        </div>
+        <div class="field"><label>Ancho del túnel <span class="val"><input type="number" id="tunnelWidthNum" min="4" step="0.5" style="width:66px"> m</span></label><input type="range" id="tunnelWidth" min="6" max="40" step="0.5"></div>
+        <div class="field"><label>Altura libre <span class="val" id="tunnelHeightVal"></span></label><input type="range" id="tunnelHeight" min="4" max="20" step="0.5"></div>
+        <div class="field"><label>Densidad de polígonos <span class="val" id="tunnelDensityVal"></span></label><input type="range" id="tunnelDensity" min="1" max="100" step="1"></div>
+        <div class="field">
+          <label>Tipo</label>
+          <select id="tunnelType">
+            <option value="artificial">Artificial (sección regular)</option>
+            <option value="natural">Natural (caverna)</option>
+          </select>
+        </div>
+        <div class="field" id="caveBox"><label>Tamaño de la caverna <span class="val" id="caveSizeVal"></span></label><input type="range" id="caveSize" min="0" max="1" step="0.05"></div>
+        <div class="field">
+          <label>Costado abierto</label>
+          <select id="tunnelOpen">
+            <option value="none">Cerrado</option>
+            <option value="left">Abierto a la izquierda (con pilares)</option>
+            <option value="right">Abierto a la derecha (con pilares)</option>
+          </select>
+        </div>
+        <div class="field" id="pillarBox"><label>Pilares por túnel <span class="val" id="tunnelPillarsVal"></span></label><input type="range" id="tunnelPillars" min="1" max="40" step="1"></div>
+        <div class="field"><label>Grosor del marco de la boca <span class="val" id="portalFrameVal"></span></label><input type="range" id="portalFrame" min="0.2" max="5" step="0.1"></div>
+        <div class="field"><label>Cuánto sobresale la boca <span class="val" id="portalDepthVal"></span></label><input type="range" id="portalDepth" min="0" max="5" step="0.1"></div>
+        <p class="hint" id="tunnelInfo"></p>
+      </section>
+
+      <section class="panel" data-panel="items">
+        <h2>Elementos de pista</h2>
+        <p class="hint">Charcos, turbo pads y nitro strips, en grupos. Clic en un elemento (mapa o 3D, con «Navegar») para seleccionarlo; arrástralo en el mapa o con el gizmo en 3D. Siempre queda sobre la pista y paralelo a su superficie.</p>
+        <div class="item-sel" id="itemSelInfo"></div>
+        <h3 class="subhead">Charcos (water puddles)</h3>
+        <div id="groups-puddle" class="list"></div>
+        <button id="btnNewPuddle">+ Nuevo grupo de charcos</button>
+        <div class="field"><label>Textura de los charcos (UV planas)</label>
+          <div class="row gap"><img id="itemTexThumb-puddle" class="thumb checker" alt=""><button id="btnItemTex-puddle">Cargar…</button><button id="btnItemTexRemove-puddle">Por defecto</button><input type="file" id="fileItemTex-puddle" accept="image/*" hidden></div>
+        </div>
+
+        <h3 class="subhead">Turbo pads</h3>
+        <div id="groups-pad" class="list"></div>
+        <button id="btnNewPad">+ Nuevo grupo de turbo pads</button>
+        <div class="field"><label>Textura de los turbo pads (u hacia adelante)</label>
+          <div class="row gap"><img id="itemTexThumb-pad" class="thumb checker" alt=""><button id="btnItemTex-pad">Cargar…</button><button id="btnItemTexRemove-pad">Por defecto</button><input type="file" id="fileItemTex-pad" accept="image/*" hidden></div>
+        </div>
+
+        <h3 class="subhead">Nitro strips</h3>
+        <div id="groups-strip" class="list"></div>
+        <button id="btnNewStrip">+ Nuevo grupo de nitro strips</button>
+        <div class="field"><label>Textura de los nitro strips (u a lo ancho, v a lo largo)</label>
+          <div class="row gap"><img id="itemTexThumb-strip" class="thumb checker" alt=""><button id="btnItemTex-strip">Cargar…</button><button id="btnItemTexRemove-strip">Por defecto</button><input type="file" id="fileItemTex-strip" accept="image/*" hidden></div>
+        </div>
+        <label class="check"><input type="checkbox" id="stripBorder"> Borde en los nitro strips (glow)</label>
+        <div class="field" id="stripBorderBox"><label>Altura del borde <span class="val"><input type="number" id="stripBorderHeightNum" min="0.05" max="20" step="0.05" style="width:60px"> m</span></label><input type="range" id="stripBorderHeight" min="0.05" max="5" step="0.05"></div>
+        <div class="field" id="stripBorderTexBox"><label>Textura del borde (v = 0 abajo, 1 arriba; usa transparencia)</label>
+          <div class="row gap"><img id="itemTexThumb-border" class="thumb checker" alt=""><button id="btnItemTex-border">Cargar…</button><button id="btnItemTexRemove-border">Por defecto</button><input type="file" id="fileItemTex-border" accept="image/*" hidden></div>
+        </div>
+        <p class="hint">El borde son paredes sin espesor que suben desde el contorno de cada franja, con una sola cara hacia afuera y sin techo. Todos los nitro strips comparten el mismo borde.</p>
+
+      </section>
+
+      <section class="panel" data-panel="gate">
+        <h2>Pórtico de salida</h2>
+        <label class="check"><input type="checkbox" id="startGate"> Pórtico en el punto de partida</label>
+        <div class="field"><label>Texto del cartel</label><input type="text" id="startText" maxlength="24" style="width:100%"></div>
+        <div class="field"><label>Altura libre <span class="val" id="startGateHeightVal"></span></label><input type="range" id="startGateHeight" min="4" max="15" step="0.5"></div>
+        <p class="hint">Se ubica en la línea de meta de la ruta principal (herramienta «Meta» para moverla). Se exporta en el .glb con el pivote en la base, al centro de la calzada.</p>
+      </section>
+
+      <section class="panel" data-panel="trees">
+        <h2>Árboles y hierba</h2>
+        <label class="check"><input type="checkbox" id="trees"> Agregar árboles (conos)</label>
+        <div class="field">
+          <label>Lado</label>
+          <select id="treeSide">
+            <option value="both">Ambos lados</option>
+            <option value="left">Solo a la izquierda</option>
+            <option value="right">Solo a la derecha</option>
+          </select>
+        </div>
+        <div class="field"><label>Densidad (por 100 m y por lado) <span class="val" id="treeDensityVal"></span></label><input type="range" id="treeDensity" min="0.5" max="40" step="0.5"></div>
+        <div class="field"><label>Escala <span class="val" id="treeScaleVal"></span></label><input type="range" id="treeScale" min="0.3" max="3" step="0.05"></div>
+        <div class="field"><label>Distancia al borde <span class="val" id="treeOffsetVal"></span></label><input type="range" id="treeOffset" min="1" max="40" step="0.5"></div>
+        <div class="field"><label>Dispersión <span class="val" id="treeSpreadVal"></span></label><input type="range" id="treeSpread" min="0" max="60" step="1"></div>
+        <div class="field">
+          <label>También sobre cerros</label>
+          <div class="row gap"><label class="check small"><input type="checkbox" id="treeOnSlopes"> En laderas</label><label class="check small"><input type="checkbox" id="treeOnTops"> En la cima</label></div>
+        </div>
+        <div class="field" id="treeHillBox"><label>Densidad en cerros (por 1000 m²) <span class="val" id="treeHillDensityVal"></span></label><input type="range" id="treeHillDensity" min="0" max="40" step="0.5"></div>
+        <div class="field"><label>Inclinación según el suelo <span class="val" id="treeTiltVal"></span></label><input type="range" id="treeTilt" min="0" max="100" step="1"></div>
+        <p class="hint" id="treesInfo"></p>
+        <h3 class="subhead">Hierba</h3>
+        <label class="check"><input type="checkbox" id="grass"> Agregar hierba (dos planos cruzados)</label>
+        <div class="field">
+          <label>Lado</label>
+          <select id="grassSide">
+            <option value="both">Ambos lados</option>
+            <option value="left">Solo a la izquierda</option>
+            <option value="right">Solo a la derecha</option>
+          </select>
+        </div>
+        <div class="field"><label>Densidad (por 100 m y por lado) <span class="val" id="grassDensityVal"></span></label><input type="range" id="grassDensity" min="1" max="1000" step="1"></div>
+        <div class="field"><label>Escala <span class="val" id="grassScaleVal"></span></label><input type="range" id="grassScale" min="0.2" max="4" step="0.05"></div>
+        <div class="field"><label>Distancia al borde <span class="val" id="grassOffsetVal"></span></label><input type="range" id="grassOffset" min="0" max="30" step="0.5"></div>
+        <div class="field"><label>Dispersión <span class="val" id="grassSpreadVal"></span></label><input type="range" id="grassSpread" min="0" max="80" step="1"></div>
+        <div class="field">
+          <label>También sobre cerros</label>
+          <div class="row gap"><label class="check small"><input type="checkbox" id="grassOnSlopes"> En laderas</label><label class="check small"><input type="checkbox" id="grassOnTops"> En la cima</label></div>
+        </div>
+        <div class="field" id="grassHillBox"><label>Densidad en cerros (por 1000 m²) <span class="val" id="grassHillDensityVal"></span></label><input type="range" id="grassHillDensity" min="0" max="600" step="5"></div>
+        <div class="field"><label>Inclinación según el suelo <span class="val" id="grassTiltVal"></span></label><input type="range" id="grassTilt" min="0" max="100" step="1"></div>
+        <div class="field">
+          <label>Textura de la hierba (PNG con transparencia)</label>
+          <div class="row gap"><img id="grassTexThumb" class="thumb checker" alt=""><button id="btnGrassTex">Cargar…</button><button id="btnGrassTexRemove">Por defecto</button><input type="file" id="fileGrassTex" accept="image/png,image/webp,image/*" hidden></div>
+        </div>
+        <p class="hint" id="grassInfo"></p>
+        <div class="field">
+          <label>Semilla (árboles y hierba)</label>
+          <div class="row"><input type="number" id="treeSeed" min="0" step="1"><button id="btnTreeDice">Aleatoria</button></div>
+        </div>
+      </section>
+
+      <section class="panel" data-panel="sky">
+        <h2>Cielo (cámara de juego)</h2>
+        <div class="row gap">
+          <button id="btnSkyLoad" title="Imagen panorámica equirectangular (2:1) o cualquier imagen de cielo">Cargar cielo…</button>
+          <button id="btnSkyReset" title="Volver al cielo de día por defecto">Cielo por defecto</button>
+          <img id="skyThumb" class="thumb wide-thumb" alt="">
+        </div>
+        <input id="fileSky" type="file" accept="image/*" hidden>
+        <p class="hint">Solo se ve en la cámara de juego. Lo ideal es un panorama equirectangular (el doble de ancho que de alto).</p>
+      </section>
+
+      <section class="panel" data-panel="export">
+        <h2>Exportación</h2>
+        <div class="field"><label>Separación de nudos Bézier <span class="val" id="knotSpacingVal"></span></label><input type="range" id="knotSpacing" min="3" max="40" step="1"></div>
+        <label class="check"><input type="checkbox" id="edges"> Exportar bordes izquierdo/derecho</label>
+        <label class="check"><input type="checkbox" id="blenderMesh"> Blender: perfil como bevel (pista visible)</label>
+        <label class="check"><input type="checkbox" id="bankFlip"> Blender: invertir signo del peralte</label>
+        <button class="primary wide" id="btnExportGLB" title="Pista con UV, terreno y árboles con texturas incrustadas, en un solo archivo glTF binario. Se importa en Blender (File > Import > glTF 2.0) y en 3ds Max 2023+ (Import > glTF).">Exportar escena 3D (.glb)</button>
+        <button class="primary wide" id="btnExportFBX" style="margin-top:6px">Exportar escena 3D (.fbx)</button>
+        <p class="hint" id="exportInfo"></p>
+      </section>
+    </aside>
+
+    <main class="workspace">
+      <div class="view view2d">
+        <div class="toolbar" id="toolbar">
+          <button data-tool="pan" title="Mover y hacer zoom (también con rueda y botón derecho)">Navegar</button>
+          <button data-tool="edit" title="Mover, agregar y borrar puntos del spline">Editar puntos</button>
+          <button data-tool="draw" title="Dibujar la ruta principal a mano alzada">Dibujar</button>
+          <button data-tool="extend" title="Continúa la pista desde un extremo (círculo verde) o redibuja un tramo empezando y terminando sobre la pista">Extender</button>
+          <button data-tool="alt" title="Dibujar una ruta alternativa: empieza y termina sobre la principal">Dibujar atajo</button>
+          <button data-tool="start" title="Clic sobre la pista para fijar la meta">Meta</button>
+          <button data-tool="ref" title="Mover y escalar la imagen de referencia (arrastra la imagen o su esquina)">Referencia</button>
+          <button data-tool="hill" title="Pinta cerros (suaves o paredes rocosas); si cubren la pista se crea un túnel. Alt o clic derecho borra">Pintar cerros</button>
+          <button data-tool="paint" title="Pinta zonas del terreno que tendrán más polígonos (Alt o clic derecho borra)">Pintar densidad</button>
+          <button data-tool="flat" title="Arrastra sobre la pista para marcar un tramo plano">Zona plana</button>
+          <span class="sep"></span>
+          <button id="btnGenTerrain" class="gen">Generar terreno</button>
+          <button id="btnGenTrees" class="gen">Generar árboles</button>
+          <span class="sep"></span>
+          <button id="btnTbPuddle" class="gen">+ Charcos</button>
+          <button id="btnTbPad" class="gen">+ Turbo pads</button>
+          <button id="btnTbStrip" class="gen">+ Nitro strips</button>
+          <span class="sep"></span>
+          <button id="btnFit" title="Encuadrar">Encuadrar</button>
+          <label class="check small"><input type="checkbox" id="showRaw"> Trazo crudo</label>
+          <span id="paintBox" class="row" hidden>
+            <label class="small">Pincel <input type="range" id="paintBrush" min="3" max="200" step="1" style="width:90px"> <span class="val" id="paintBrushVal"></span></label>
+            <label class="check small"><input type="checkbox" id="paintErase"> Borrar</label>
+          </span>
+          <span id="hillBox" class="row" hidden>
+            <label class="small">Altura <input type="range" id="hillHeight" min="2" max="150" step="1" style="width:90px"> <span class="val" id="hillHeightVal"></span></label>
+            <select id="hillHard" style="font-size:12px"><option value="soft">Colina suave</option><option value="hard">Pared rocosa</option></select>
+            <label class="small">Cima plana <input type="range" id="hillFlatBar" min="0" max="1" step="0.05" style="width:70px"></label>
+          </span>
+          <span id="editBox" class="row" hidden>
+            <button id="btnTbRadius">Radio</button>
+            <button id="btnTbFork">Bifurcar</button>
+            <button id="btnTbBridge">Puente</button>
+            <label class="check small"><input type="checkbox" id="openOnDelete"> Abrir</label>
+          </span>
+          <label class="small" id="drawSmoothBox" hidden>Suavizado del dibujo <input type="range" id="drawSmooth" min="0" max="10" step="1" value="4" style="width:90px"> <span class="val" id="drawSmoothVal">4</span></label>
+        </div>
+        <canvas id="canvas2d"></canvas>
+        <div class="overlay-msg" id="emptyMsg">
+          <strong>Empieza aquí</strong>
+          <span>Pega un minimapa con <b>Ctrl+V</b>, carga una imagen, elige un ejemplo arriba o usa «Dibujar» para trazar la pista a mano.</span>
+        </div>
+        <div class="busy" id="busy" hidden>Trazando imagen…</div>
+      </div>
+      <div class="view view3d">
+        <div class="toolbar">
+          <span class="label">Vista 3D</span>
+          <label class="small">Exagerar Z <input type="range" id="zExag" min="1" max="4" step="0.25" value="1.5"></label>
+          <button id="btnView3dReset">Reencuadrar</button>
+          <label class="check small"><input type="checkbox" id="wireOn"> Wireframe</label>
+          <input type="color" id="wireColor" value="#ffffff" class="color-in">
+          <input type="range" id="wireOpacity" min="0.05" max="1" step="0.05" value="0.35" style="width:70px">
+          <button id="btnGame" class="primary" title="Un auto recorre la pista solo, con cámara en tercera o primera persona">Cámara de juego</button>
+          <span id="gizmoBox" class="row" hidden>
+            <span class="label" style="margin:0 2px 0 6px">Mover</span>
+            <button data-gizmo="free" class="active" title="Mover en X, Y y Z">Libre</button>
+            <button data-gizmo="xy" title="Bloquear al plano XY (no cambia la altura)">Plano XY</button>
+            <button data-gizmo="z" title="Solo altura (Z)">Solo Z</button>
+            <label class="check small" style="margin-left:6px"><input type="checkbox" id="pinLocal3d" checked> Solo este punto</label>
+          </span>
+        </div>
+        <div class="toolbar" id="gameBar" hidden>
+          <span class="label">Cámara de juego</span>
+          <button data-cam="third" class="active" title="Detrás del auto, baja, estilo arcade (tecla C alterna)">Tercera persona</button>
+          <button data-cam="first" title="Desde el asiento, con el capó a la vista (tecla C alterna)">Primera persona</button>
+          <label class="small">Velocidad <input type="range" id="gameSpeed" min="-200" max="320" step="5" style="width:130px"> <input type="number" id="gameSpeedNum" min="-400" max="600" step="5" style="width:58px"> <span class="val" id="gameSpeedVal"></span></label>
+          <button id="btnGamePause" title="Pausa (barra espaciadora)">Pausa</button>
+          <button id="btnGameRestart" title="Volver a la meta">Reiniciar</button>
+          <button id="btnGameFull" title="Pantalla completa">Pantalla completa</button>
+          <button id="btnGameExit" title="Salir de la cámara de juego (Esc)">Salir</button>
+        </div>
+        <div id="view3d"></div>
+      </div>
+      <div class="view viewProfile">
+        <div class="toolbar">
+          <span class="label">Perfil de elevación z(s)</span>
+          <label class="check small"><input type="checkbox" id="pinLocal" checked> Editar solo este punto</label>
+          <span class="stats" id="stats"></span>
+        </div>
+        <canvas id="canvasProfile"></canvas>
+      </div>
+      <div class="validation" id="validation"></div>
+    </main>
+  </div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
