@@ -618,6 +618,12 @@ function validate(layout, out, crossings, ep, sol, Hreq) {
       const iu = c.up === 'a' ? i : j, id = c.up === 'a' ? j : i;
       m = Math.min(m, out[upR].z[iu] - out[dnR].z[id]);
     }
+    if (c.pinned) {
+      // con alturas editadas a mano, la pasada de arriba es la que quedó arriba (aunque no sea la elegida al principio)
+      let mr = Infinity;
+      for (const [i, j] of src.pairs) { const iu = c.up === 'a' ? i : j, id = c.up === 'a' ? j : i; mr = Math.min(mr, out[dnR].z[id] - out[upR].z[iu]); }
+      if (mr > m) { c.up = c.up === 'a' ? 'b' : 'a'; m = mr; }
+    }
     c.clearance = m;
     if (c.pinned) {
       if (m < 0.5) msgs.push({ level: 'warn', route: c.ra, s: c.sa, msg: `Cruce ${ci + 1}: las alturas editadas a mano dejan ${m.toFixed(1)} m de separación (definida por los puntos editados).` });

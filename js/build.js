@@ -235,7 +235,7 @@ export function buildLayout(project, gpIn = {}) {
     warnings.push({ level: 'warn', route: h.route, s: h.s, msg: `Horquilla muy cerrada en ${routes[h.route].name} (s≈${h.s.toFixed(0)} m): radio ${h.radius.toFixed(1)} m < medio ancho. La malla se autointersectará; baja el ancho o abre la curva.` });
   }
   for (const o of overlaps) {
-    warnings.push({ level: 'warn', route: o.ra, s: o.sa0, msg: `Tramos superpuestos sin cruce: ${routes[o.ra].name} s≈${o.sa0.toFixed(0)}–${o.sa1.toFixed(0)} m con ${routes[o.rb].name} s≈${o.sb0.toFixed(0)}–${o.sb1.toFixed(0)} m (espiral o tramos paralelos demasiado cerca).` });
+    warnings.push({ level: 'warn', route: o.ra, s: o.sa0, overlap: o, msg: `Tramos superpuestos sin cruce: ${routes[o.ra].name} s≈${o.sa0.toFixed(0)}–${o.sa1.toFixed(0)} m con ${routes[o.rb].name} s≈${o.sb0.toFixed(0)}–${o.sb1.toFixed(0)} m (espiral o tramos paralelos demasiado cerca).` });
   }
 
   return {
@@ -439,6 +439,7 @@ function crossingPairs(routes, c) {
   const ib0 = Math.round(c.sb / B.ds);
   const nB = Math.ceil((R * 1.5) / B.ds);
   const idx = (r, i) => (r.closed ? ((i % r.n) + r.n) % r.n : i);
+  const self = c.ra === c.rb;
   for (let k = -nA; k <= nA; k++) {
     const i = idx(A, ia0 + k);
     if (i < 0 || i >= A.n) continue;
@@ -446,6 +447,7 @@ function crossingPairs(routes, c) {
     for (let m = -nB; m <= nB; m++) {
       const j = idx(B, ib0 + m);
       if (j < 0 || j >= B.n) continue;
+      if (self) { const da = Math.abs(A.s[i] - A.s[j]); if (Math.min(da, A.closed ? A.L - da : da) < R) continue; } // la misma pasada no se cruza consigo misma
       const d = Math.hypot(A.x[i] - B.x[j], A.y[i] - B.y[j]);
       if (d < bd) { bd = d; best = j; }
     }

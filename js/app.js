@@ -660,22 +660,9 @@ const app = {
     if (!za) return false;
     pushUndo();
     for (const q of list) za[q.idx] = makePin(avg);
-    // puntos seguidos de la ruta principal: el tramo entre ellos también queda plano (perfil horizontal)
-    let flatTramo = false;
-    if (sel.key === 'main' && state.layout) {
-      const ids = [...sel.idxs].sort((u, v) => u - v);
-      const consecutive = ids.every((v, k) => k === 0 || v === ids[k - 1] + 1);
-      const ss = list.map((q) => q.s);
-      const a = Math.min(...ss), b = Math.max(...ss);
-      if (consecutive && b - a > 3 && b - a < state.layout.routes[0].L * 0.9) {
-        const cur = app.profileZonesS();
-        state.profileZones = state.profileZones.filter((Z, i) => { const c = cur.find((q) => q.idx === i); return !c || c.s1 < a || c.s0 > b; });
-        state.profileZones.push({ a: app.mainLayoutAt(a), b: app.mainLayoutAt(b), pts: [[0, +avg.toFixed(3)], [1, +avg.toFixed(3)]], flat: true });
-        flatTramo = true;
-      }
-    }
+    // una sola vez: los puntos quedan con esa altura, pero se pueden volver a editar (no se fuerza nada)
     scheduleElev();
-    toast(`${list.length} puntos a ${avg.toFixed(2)} m (su altura promedio)${flatTramo ? '; el tramo entre ellos queda plano' : ''}.`);
+    toast(`${list.length} puntos a ${avg.toFixed(2)} m (su altura promedio). Puedes seguir editándolos.`);
     return true;
   },
   addFlatZone(a, b) {
@@ -1339,6 +1326,133 @@ function contiguousRun(key) {
   }
   return best;
 }
+/** ¿Un tramo superpuesto está apilado (una pasada sobre otra) con altura libre suficiente en todo su largo? */
+function stackedOK(L, E, o) {
+  const ra = L.routes[o.ra], rb = L.routes[o.rb];
+  if (!ra || !rb || !E.routes[o.ra] || !E.routes[o.rb]) return false;
+  const need = Math.max(2.5, (state.elev.clearance || 6) * 0.8);
+  const n = Math.max(4, Math.ceil((o.sa1 - o.sa0) / 3));
+  for (let q = 0; q <= n; q++) {
+    const sv = o.sa0 + ((o.sa1 - o.sa0) * q) / n;
+    const i = Math.min(ra.n - 1, Math.max(0, Math.round(sv / ra.ds))) % ra.n;
+    const near = nearestOnSamples(rb, ra.x[i], ra.y[i]);
+    if (near.d > (ra.w[i] + rb.w[near.i]) / 2 + 1) continue;
+    if (Math.abs(E.routes[o.ra].z[i] - E.routes[o.rb].z[near.i]) < need) return false;
+  }
+  return true;
+}
+
+// ---------- helix ----------
+/**
+ * Plan de un helix (espiral) sobre los puntos seleccionados: desde el primer punto la pista da «turns» giros
+ * alrededor de un centro al costado, con el radio pasando de «r0» a «r1», y sube (o baja) «pitch» metros por giro;
+ * después sigue hacia el último punto seleccionado (con uno solo, el siguiente). El resto de los puntos no se mueve.
+ */
+function helixPlan(turns, r0, r1, pitch, dirMode = 'up', sideMode = 'auto') {
+  const L = state.layout, E = state.result;
+  if (!L || !E) return { error: 'Primero crea o carga una pista.' };
+  const sel = state.selSet && state.selSet.idxs.size ? state.selSet : state.sel ? { key: state.sel.key, idxs: new Set([state.sel.idx]) } : null;
+  if (!sel) return { error: 'Selecciona uno o más puntos seguidos (Editar puntos) donde irá el helix.' };
+  const key = sel.key, arr = ctrlArray(key);
+  if (!arr) return { error: 'Esa ruta no tiene puntos editables.' };
+  const n = arr.length;
+  const closed = key === 'main' ? state.project.main.closed !== false : false;
+  let run = sel.idxs.size > 1 ? (state.selSet ? contiguousRun(key) : null) : [[...sel.idxs][0]];
+  if (!run || (sel.idxs.size > 1 && run.length !== sel.idxs.size)) return { error: 'Los puntos del helix deben ser seguidos.' };
+  if (run.length === 1) {
+    const i = run[0];
+    if (closed) run = [i, (i + 1) % n];
+    else if (i < n - 1) run = [i, i + 1];
+    else return { error: 'El helix necesita un punto después del seleccionado.' };
+  }
+  const i0 = run[0], i1 = run[run.length - 1];
+  const k = key === 'main' ? 0 : L.routes.findIndex((r) => r.kind === 'alt' && r.altIndex === key);
+  const r = L.routes[k];
+  if (!r) return { error: 'No se encontró la ruta.' };
+  const cp = app.ctrlPoints().filter((q) => q.key === key);
+  const q0 = cp.find((c) => c.idx === i0);
+  const [ax, ay] = L.toWorld(arr[i0][0], arr[i0][1]);
+  // dirección de la pista en el primer punto
+  const si = q0 ? Math.min(r.n - 1, Math.max(0, Math.round(q0.s / r.ds))) % r.n : nearestOnSamples(r, ax, ay).i;
+  const tx = r.tx[si], ty = r.ty[si];
+  const N = Math.max(1, Math.min(10, Math.round(turns)));
+  const w = (r.w && r.w[0]) || state.geom.width;
+  const R0 = Math.max(w * 0.9, r0), R1 = Math.max(w * 0.9, r1 > 0 ? r1 : r0);
+  let side = sideMode === 'left' ? 1 : sideMode === 'right' ? -1 : 0;
+  if (!side) {
+    const r0r = L.routes[0];
+    let cx = 0, cy = 0; for (let i = 0; i < r0r.n; i++) { cx += r0r.x[i]; cy += r0r.y[i]; } cx /= r0r.n; cy /= r0r.n;
+    side = (ax - cx) * -ty + (ay - cy) * tx >= 0 ? 1 : -1; // hacia afuera del circuito
+  }
+  const nx = -ty * side, ny = tx * side; // normal hacia el centro del helix
+  const Cx = ax + nx * R0, Cy = ay + ny * R0;
+  const T = 2 * Math.PI * N;
+  const Rof = (ph) => R0 + ((R1 - R0) * ph) / T;
+  const Pof = (ph) => { // posición: parte en el primer punto (vector centro→punto = −n) y gira hacia el lado elegido
+    const c = Math.cos(side * ph), s = Math.sin(side * ph);
+    const ex = -nx * c + ny * s, ey = -ny * c - nx * s; // −n rotado side·ph (sentido antihorario si side = +1)
+    const R = Rof(ph);
+    return [Cx + ex * R, Cy + ey * R];
+  };
+  const dir = dirMode === 'down' ? -1 : 1;
+  const z0 = q0 ? q0.z : 0;
+  // largo y pendiente
+  let len = 0, prev = Pof(0);
+  const K = Math.max(16, Math.round(16 * N * Math.max(1, Math.max(R0, R1) / 30)));
+  const pts = [], zs = [];
+  for (let j = 1; j <= K; j++) {
+    const ph = (T * j) / K;
+    const p = Pof(ph);
+    len += Math.hypot(p[0] - prev[0], p[1] - prev[1]);
+    prev = p;
+    // el último punto (con el mismo radio) cae sobre el primero, más arriba: la pista vuelve a pasar por ahí
+    const [lx, ly] = L.toLayout(p[0], p[1]);
+    pts.push([+lx.toFixed(3), +ly.toFixed(3)]);
+    zs.push(+(z0 + (dir * pitch * ph) / (2 * Math.PI)).toFixed(3));
+  }
+  const grade = (pitch * N) / len;
+  // giros apilados: si el radio cambia más que el ancho por giro, ya no quedan uno sobre otro (espiral plana)
+  const stacked = Math.abs(R1 - R0) / N < w * 1.1;
+  const clearOK = !stacked || pitch >= (state.elev.clearance || 6) + (state.elev.deck || 1) - 0.01;
+  return { key, run, i0, i1, pts, zs, z0, zEnd: z0 + dir * pitch * N, R0, R1, N, len, grade, side, stacked, clearOK };
+}
+function addHelix(turns, r0, r1, pitch, dirMode, sideMode) {
+  const P = helixPlan(turns, r0, r1, pitch, dirMode, sideMode);
+  if (P.error) { toast(P.error); return false; }
+  const arr = ctrlArray(P.key), za = zArray(P.key);
+  pushUndo();
+  const inner = new Set(P.run.slice(1, -1));
+  const nA = [], nZ = [], newSel = [];
+  for (let i = 0; i < arr.length; i++) {
+    if (inner.has(i)) continue;
+    nA.push(arr[i]);
+    // el primer punto queda a su altura y el último a la altura de salida del helix (el resto de la pista se adapta)
+    // alturas fijadas con influencia amplia: la subida (y la bajada después) se reparte en la pista vecina
+    nZ.push(i === P.i0 ? +P.z0.toFixed(3) : za[i]);
+    if (i === P.i0) P.pts.forEach((q, j) => { nA.push(q); nZ.push(P.zs[j]); newSel.push(nA.length - 1); });
+  }
+  arr.length = 0; arr.push(...nA);
+  za.length = 0; za.push(...nZ);
+  state.sel = null; state.selSet = { key: P.key, idxs: new Set(newSel) }; endArc(); refreshArcBox();
+  scheduleBuild();
+  toast(`Helix de ${P.N} giro${P.N > 1 ? 's' : ''} (radio ${P.R0.toFixed(0)}${Math.abs(P.R1 - P.R0) > 0.5 ? `→${P.R1.toFixed(0)}` : ''} m, ${P.zEnd >= P.z0 ? 'sube' : 'baja'} ${Math.abs(P.zEnd - P.z0).toFixed(1)} m, +${P.len.toFixed(0)} m de pista).`);
+  return true;
+}
+function helixInputs() {
+  const r = parseFloat($('helixRadius').value) || 30;
+  const diff = $('helixDiff').checked;
+  return [parseFloat($('helixTurns').value) || 1, diff ? parseFloat($('helixR0').value) || r : r, diff ? parseFloat($('helixR1').value) || r : r, parseFloat($('helixPitch').value) || 7, $('helixDir').value, $('helixSide').value];
+}
+function refreshHelixInfo() {
+  const el = document.getElementById('helixInfo');
+  if (!el) return;
+  const P = helixPlan(...helixInputs());
+  const warnG = !P.error && P.grade * 100 > state.elev.maxGrade;
+  el.textContent = P.error ? P.error : `+${P.len.toFixed(0)} m · ${P.zEnd >= P.z0 ? 'sube' : 'baja'} ${Math.abs(P.zEnd - P.z0).toFixed(1)} m · pendiente ≈ ${(P.grade * 100).toFixed(1)} %${warnG ? ' (sube la pendiente máxima)' : ''}${!P.clearOK ? ' · giros apilados con poca separación (menos que la altura libre + tablero)' : ''}${!P.stacked ? ' · espiral plana (los giros no quedan uno sobre otro)' : ''}`;
+  el.classList.toggle('warn', !P.error && (warnG || !P.clearOK));
+  $('btnHelixAdd').disabled = !!P.error;
+}
+
 // ---------- rizos ----------
 /**
  * Plan de un rizo sobre los puntos seleccionados: la pista describe «turns» vueltas (trocoide) entre el primer y el
@@ -1676,6 +1790,7 @@ function forkSelection(side, sepM) {
 }
 function refreshArcBox() {
   if (typeof app !== 'undefined' && app.refreshLoopInfo && document.getElementById('loopBox') && !document.getElementById('loopBox').hidden) setTimeout(() => app.refreshLoopInfo(), 0);
+  if (typeof app !== 'undefined' && app.refreshHelixInfo && document.getElementById('helixBox') && !document.getElementById('helixBox').hidden) setTimeout(() => app.refreshHelixInfo(), 0);
   refreshForkBox();
   const ctl = $('arcControls');
   if (!ctl) return;
@@ -2611,7 +2726,7 @@ function refreshPanels() {
   const val = $('validation');
   val.innerHTML = '';
   const msgs = [];
-  if (L) msgs.push(...L.warnings);
+  if (L) msgs.push(...L.warnings.filter((w) => !(w.overlap && E && stackedOK(L, E, w.overlap)))); // tramos apilados (helix) con altura libre: no es problema
   if (E) msgs.push(...E.validation.msgs);
   if (L && E && msgs.length === 0) msgs.push({ level: 'info', msg: 'Sin problemas: pendientes, radios verticales y holguras dentro de los límites.' });
   for (const m of msgs) {
@@ -2736,7 +2851,6 @@ function bindControls() {
   $('forkSep').addEventListener('input', () => { $('forkSepVal').textContent = `${$('forkSep').value} m`; });
   $('forkSepVal').textContent = `${$('forkSep').value} m`;
   // botones de la barra: radio fijo y bifurcar con los valores del panel «Puntos seleccionados»
-  $('btnTbFlatten').addEventListener('click', () => { app.flattenSelected(); });
   $('btnTbRadius').addEventListener('click', () => {
     focusPanel('arc');
     const sel = state.selSet, run = sel ? contiguousRun(sel.key) : null;
@@ -2753,12 +2867,36 @@ function bindControls() {
     if (!openEndsSelected()) { toast('Para un puente: abre el circuito (borra un punto con «Abrir» activado) y selecciona los dos extremos con Shift.'); return; }
     createBridge(parseFloat($('bridgeWidthNum').value) || state.geom.width);
   });
+  // helix: igual que el rizo (botón de la barra con sus parámetros)
+  $('btnHelix').addEventListener('click', () => {
+    const box = $('helixBox');
+    box.hidden = !box.hidden;
+    $('btnHelix').classList.toggle('active', !box.hidden);
+    if (!box.hidden) { $('loopBox').hidden = true; $('btnLoop').classList.remove('active'); if (state.tool !== 'edit') setTool('edit'); }
+    refreshHelixInfo();
+  });
+  const helixSync = () => {
+    const r = parseFloat($('helixRadius').value) || 30;
+    $('helixRadiusR').value = Math.min(+$('helixRadiusR').max, r);
+    $('helixRBox').classList.toggle('disabled', !$('helixDiff').checked);
+    if (!$('helixDiff').checked) { $('helixR0').value = r; $('helixR1').value = r; }
+    $('helixPitchVal').textContent = `${$('helixPitch').value} m`;
+    refreshHelixInfo();
+  };
+  $('helixRadiusR').addEventListener('input', (e) => { $('helixRadius').value = e.target.value; helixSync(); });
+  for (const id of ['helixRadius', 'helixTurns', 'helixDiff', 'helixR0', 'helixR1', 'helixPitch', 'helixDir', 'helixSide']) $(id).addEventListener('input', helixSync);
+  $('helixDiff').addEventListener('change', helixSync);
+  $('btnHelixAdd').addEventListener('click', () => { if (addHelix(...helixInputs())) refreshHelixInfo(); });
+  helixSync();
+  app.refreshHelixInfo = refreshHelixInfo;
+  // aplanar (en la barra del perfil): una sola vez, los puntos siguen editables
+  $('btnFlatten').addEventListener('click', () => { app.flattenSelected(); });
   // rizo: el botón de la barra muestra sus parámetros; «Añadir rizo» lo crea en los puntos seleccionados
   $('btnLoop').addEventListener('click', () => {
     const box = $('loopBox');
     box.hidden = !box.hidden;
     $('btnLoop').classList.toggle('active', !box.hidden);
-    if (!box.hidden && state.tool !== 'edit') setTool('edit');
+    if (!box.hidden) { $('helixBox').hidden = true; $('btnHelix').classList.remove('active'); if (state.tool !== 'edit') setTool('edit'); }
     refreshLoopInfo();
   });
   // radio: barra deslizable (0 = automático) y número (acepta más que la barra), sincronizados

@@ -181,7 +181,7 @@
         <p class="hint">Usa la herramienta «Zona plana» para aplanar otros tramos.</p>
         <div id="flatZoneList" class="list"></div>
         <h3 class="subhead" id="profileZonesHead">Perfiles dibujados</h3>
-        <p class="hint">Con <b>Perfil de tramo</b> (en la barra del gráfico de perfil): arrastra sobre la pista en el mapa (o con Shift en el gráfico de perfil) para elegir un tramo y dibuja en el gráfico de perfil la forma de la elevación. Sin tramo elegido, el trazo define su propio tramo. Con <b>Editar puntos</b>, <b>Aplanar</b> deja los puntos seleccionados a su altura promedio.</p>
+        <p class="hint">Con <b>Perfil de tramo</b> (en la barra del gráfico de perfil): arrastra sobre la pista en el mapa (o con Shift en el gráfico de perfil) para elegir un tramo y dibuja en el gráfico de perfil la forma de la elevación. Sin tramo elegido, el trazo define su propio tramo. Con <b>Editar puntos</b>, <b>Aplanar</b> (barra del gráfico de perfil) deja los puntos seleccionados a su altura promedio una sola vez: después puedes volver a editarlos.</p>
         <div id="profileZoneList" class="list"></div>
 
       <section class="panel" data-panel="cross">
@@ -581,6 +581,7 @@
           <button data-tool="draw" title="Dibujar la ruta principal a mano alzada">Dibujar</button>
           <button data-tool="extend" title="Continúa la pista desde un extremo (círculo verde) o redibuja un tramo empezando y terminando sobre la pista">Extender</button>
           <button data-tool="alt" title="Dibujar una ruta alternativa: empieza y termina sobre la principal">Dibujar atajo</button>
+          <button id="btnHelix" title="Helix: la pista da giros alrededor de un centro, subiendo (o bajando) en cada giro, en los puntos seleccionados">Helix</button>
           <button id="btnLoop" title="Rizo: la pista da una o más vueltas sobre sí misma en los puntos seleccionados y se cruza por arriba">Rizo</button>
           <button data-tool="start" title="Clic sobre la pista para fijar la meta">Meta</button>
           <button data-tool="ref" title="Mover y escalar la imagen de referencia (arrastra la imagen o su esquina)">Referencia</button>
@@ -616,6 +617,20 @@
             <label class="small">Cima plana <input type="range" id="hillFlatBar" min="0" max="1" step="0.05" style="width:70px"></label>
             <span class="small muted" title="Sobre un cerro existente: arrastrar pinta un cerro nuevo encima; con Shift agranda (o borra) el cerro original">sobre un cerro: nuevo encima · Shift = el original</span>
           </span>
+          <span id="helixBox" class="row" hidden>
+            <label class="small" title="Radio de los giros en metros">Radio <input type="range" id="helixRadiusR" min="5" max="150" step="1" value="30" style="width:90px"> <input type="number" id="helixRadius" min="5" max="1000" step="1" value="30" style="width:58px"> m</label>
+            <label class="small" title="Número de giros">Giros <input type="number" id="helixTurns" min="1" max="10" step="1" value="2" style="width:44px"></label>
+            <label class="check small" title="Radio distinto al empezar y al terminar (espiral)"><input type="checkbox" id="helixDiff"> Radio inicio / fin</label>
+            <span id="helixRBox" class="row disabled" style="gap:6px">
+              <label class="small">inicio <input type="number" id="helixR0" min="5" max="1000" step="1" value="30" style="width:54px"></label>
+              <label class="small">fin <input type="number" id="helixR1" min="5" max="1000" step="1" value="30" style="width:54px"></label>
+            </span>
+            <label class="small" title="Cuánto sube (o baja) la pista en cada giro: la separación entre giros apilados">Z por giro <input type="range" id="helixPitch" min="2" max="20" step="0.5" value="7" style="width:70px"> <span class="val" id="helixPitchVal"></span></label>
+            <select id="helixDir" style="font-size:12px"><option value="up">Sube</option><option value="down">Baja</option></select>
+            <select id="helixSide" style="font-size:12px" title="Hacia qué lado gira"><option value="auto">Hacia afuera</option><option value="left">Izquierda</option><option value="right">Derecha</option></select>
+            <button id="btnHelixAdd" class="primary" title="Añade el helix en los puntos seleccionados (el resto de la pista no se mueve)">Añadir helix</button>
+            <span class="small muted" id="helixInfo"></span>
+          </span>
           <span id="loopBox" class="row" hidden>
             <label class="small" title="Cuántas vueltas da el rizo (se cruza una vez por vuelta)">Vueltas <input type="number" id="loopTurns" min="1" max="8" step="1" value="1" style="width:44px"></label>
             <label class="small" title="Distancia vertical entre la pasada de abajo y la de arriba en el cruce">Separación Z <input type="range" id="loopSep" min="2" max="20" step="0.5" value="7" style="width:80px"> <span class="val" id="loopSepVal"></span></label>
@@ -635,7 +650,6 @@
             <span class="small muted">cerro seleccionado = cascada</span>
           </span>
           <span id="editBox" class="row" hidden>
-            <button id="btnTbFlatten" title="Deja todos los puntos seleccionados a la elevación promedio que tenían">Aplanar</button>
             <button id="btnTbRadius">Radio</button>
             <button id="btnTbFork">Bifurcar</button>
             <button id="btnTbBridge">Puente</button>
@@ -690,6 +704,7 @@
       <div class="view viewProfile">
         <div class="toolbar">
           <span class="label">Perfil de elevación z(s)</span>
+          <button id="btnFlatten" title="Aplana los puntos seleccionados (Editar puntos) a su elevación promedio. Es una sola vez: después puedes volver a editarlos">Aplanar</button>
           <button data-tool="profile" id="btnProfileTool" title="Elige un tramo (arrastrando sobre la pista en el mapa, o con Shift en el gráfico de perfil) y dibuja en el gráfico de perfil cómo varía su elevación">Perfil de tramo</button>
           <label class="check small"><input type="checkbox" id="pinLocal" checked> Editar solo este punto</label>
           <span class="stats" id="stats"></span>
