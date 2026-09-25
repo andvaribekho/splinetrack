@@ -53,6 +53,8 @@ const state = {
   terrainSculpt: [], // relieve esculpido en el terreno [{x,y,r,h}] (x, y, r en coords del lienzo; h en m, + eleva, - hunde)
   hills: [], // cerros independientes [{id,name,height,hard,flat,density,maxTris,strokes:[{x,y,r,e}]}] (toques en coords del lienzo)
   selHill: null, // id del cerro seleccionado
+  rivers: [], // ríos y cascadas [{id,kind:'river'|'fall',hill,mode,depth,walls,wallSubdiv,strokes:[{x,y,r,e}]}] (coords del lienzo)
+  selRiver: null,
   selTunnel: null, // id del túnel seleccionado
   selAlt: null, // índice del atajo seleccionado
   selCross: null, // id del cruce seleccionado
@@ -80,7 +82,7 @@ const state = {
 const undoStack = [];
 function snapshot() {
   const ref = state.ref ? { x: state.ref.x, y: state.ref.y, scale: state.ref.scale, opacity: state.ref.opacity } : null;
-  return JSON.stringify({ project: state.project, flatZones: state.flatZones, overrides: state.overrides, ref, refCanvas: !!state.ref, densityPaint: state.densityPaint, terrainSculpt: state.terrainSculpt, decoSets: state.decoSets, hills: state.hills, selHill: state.selHill, items: state.items });
+  return JSON.stringify({ project: state.project, flatZones: state.flatZones, overrides: state.overrides, ref, refCanvas: !!state.ref, densityPaint: state.densityPaint, terrainSculpt: state.terrainSculpt, decoSets: state.decoSets, hills: state.hills, selHill: state.selHill, rivers: state.rivers, items: state.items });
 }
 function pushUndo() {
   undoStack.push(snapshot());
@@ -97,6 +99,7 @@ function undo() {
   if (o.ref && state.ref) Object.assign(state.ref, o.ref);
   if (o.items) { state.items = o.items; if (typeof itemsChanged === 'function') { renderItemsPanel(); itemsChanged(); } }
   if (o.hills) { state.hills = o.hills; state.selHill = state.hills.some((h) => h.id === o.selHill) ? o.selHill : null; if (typeof refreshHillPanel === 'function') refreshHillPanel(); }
+  if (o.rivers) { state.rivers = o.rivers; if (!state.rivers.some((rv) => rv.id === state.selRiver)) state.selRiver = null; if (typeof renderRiverPanel === 'function') renderRiverPanel(); }
   if (o.decoSets) { state.decoSets = o.decoSets; if (typeof renderDecoPanel === 'function') { renderDecoPanel(); decoChanged(); } }
   if (o.terrainSculpt) { state.terrainSculpt = o.terrainSculpt; if (typeof refreshSculptInfo === 'function') refreshSculptInfo(); }
   if (o.densityPaint) { const changed = JSON.stringify(o.densityPaint) !== JSON.stringify(state.densityPaint); state.densityPaint = o.densityPaint; if (changed && typeof refreshPaintInfo === 'function') refreshPaintInfo(); }
@@ -118,16 +121,77 @@ function hillContainsL(h, p) {
   for (const q of h.strokes) if ((p[0] - q.x) ** 2 + (p[1] - q.y) ** 2 <= q.r * q.r) inside = !q.e;
   return inside;
 }
+// ---------- ríos y cascadas ----------
+function newRiver(kind, hill = null) {
+  const sc = state.scene;
+  const id = state.rivers.reduce((m, rv) => Math.max(m, rv.id), 0) + 1;
+  return { id, kind, hill, mode: sc.riverMode, depth: sc.riverDepth, walls: sc.riverWalls, wallSubdiv: sc.riverWallSubdiv, strokes: [] };
+}
+const riverContainsL = hillContainsL; // misma regla: el último toque que cubre el punto manda
+function riverIsEmpty(rv) { return !rv.strokes.some((q) => !q.e && riverContainsL(rv, [q.x, q.y])); }
+function riverLabel(rv) {
+  const same = state.rivers.filter((q) => q.kind === rv.kind);
+  const n = same.indexOf(rv) + 1;
+  return rv.name || `${rv.kind === 'fall' ? 'cascada' : 'rio'}_${String(n).padStart(2, '0')}`;
+}
+function riversChanged() { renderRiverPanel(); editor.draw(); preview.update(false); }
+function selectRiver(id) {
+  state.selRiver = id;
+  renderRiverPanel();
+  editor.draw();
+  if (id != null) setTimeout(() => { try { focusPanel('rivers', document.querySelector(`#riverList .item[data-id="${id}"]`)); } catch { /* iniciando */ } }, 0);
+}
+function renderRiverPanel() {
+  const el = document.getElementById('riverList');
+  if (!el || draggingIn(el)) return;
+  el.innerHTML = '';
+  const cnt = document.getElementById('riverCount');
+  if (cnt) cnt.textContent = state.rivers.length;
+  for (const rv of state.rivers) {
+    const div = document.createElement('div');
+    div.className = 'item river-card' + (rv.id === state.selRiver ? ' sel' : '');
+    div.dataset.id = rv.id;
+    const hill = rv.kind === 'fall' ? state.hills.find((h) => h.id === rv.hill) : null;
+    div.innerHTML = `
+      <div class="head"><span><strong>${riverLabel(rv)}</strong> <span class="muted small">${rv.kind === 'fall' ? `cascada en ${hill ? hill.name || hillName(hill.id) : 'un cerro'}` : 'río'}</span></span><button class="x del" title="Eliminar">✕</button></div>
+      <div class="field"><label>Geometría</label><select class="rmode"><option value="surface"${rv.mode === 'surface' ? ' selected' : ''}>Posada sobre la superficie</option><option value="carved"${rv.mode === 'carved' ? ' selected' : ''}>Socavada</option></select></div>
+      <div class="rcarved${rv.mode === 'carved' ? '' : ' disabled'}">
+        <div class="field"><label>Profundidad <span class="val"><input type="number" class="rdepthN" min="0.1" step="0.1" style="width:58px" value="${rv.depth}"> m</span></label><input type="range" class="rdepth" min="0.2" max="20" step="0.1" value="${Math.min(20, rv.depth)}"></div>
+        <div class="field"><label>Paredes</label><select class="rwalls"><option value="smooth"${rv.walls !== 'rock' ? ' selected' : ''}>Suaves</option><option value="rock"${rv.walls === 'rock' ? ' selected' : ''}>De roca</option></select></div>
+        <div class="field"><label>Densidad de las paredes <span class="val rsubV">${rv.wallSubdiv} (×${subdivFactor(rv.wallSubdiv)} pol.)</span></label><input type="range" class="rsub" min="0" max="6" step="1" value="${rv.wallSubdiv}"></div>
+      </div>`;
+    let editing = false;
+    const set = (k, v, done = true) => {
+      if (!editing) { pushUndo(); editing = true; }
+      rv[k] = v;
+      if (done) editing = false;
+      div.querySelector('.rcarved').classList.toggle('disabled', rv.mode !== 'carved');
+      div.querySelector('.rsubV').textContent = `${rv.wallSubdiv} (×${subdivFactor(rv.wallSubdiv)} pol.)`;
+      editor.draw(); preview.update(false);
+    };
+    div.querySelector('button.del').addEventListener('click', () => { pushUndo(); state.rivers = state.rivers.filter((q) => q !== rv); if (state.selRiver === rv.id) state.selRiver = null; riversChanged(); });
+    div.querySelector('.rmode').addEventListener('change', (e) => set('mode', e.target.value));
+    div.querySelector('.rwalls').addEventListener('change', (e) => set('walls', e.target.value));
+    div.querySelector('.rdepth').addEventListener('input', (e) => { div.querySelector('.rdepthN').value = e.target.value; set('depth', parseFloat(e.target.value), false); });
+    div.querySelector('.rdepth').addEventListener('change', () => { editing = false; });
+    div.querySelector('.rdepthN').addEventListener('change', (e) => { const v = parseFloat(e.target.value); if (v > 0) set('depth', v); });
+    div.querySelector('.rsub').addEventListener('input', (e) => set('wallSubdiv', Math.round(parseFloat(e.target.value)), false));
+    div.querySelector('.rsub').addEventListener('change', () => { editing = false; });
+    div.addEventListener('click', (e) => { if (e.target.closest('input,button,select,label')) return; selectRiver(state.selRiver === rv.id ? null : rv.id); });
+    el.appendChild(div);
+  }
+  const info = document.getElementById('riverInfo');
+  if (info) info.textContent = state.rivers.length ? '' : 'Activa «Ríos y cascadas» en la barra y pinta sobre el terreno. Con un cerro seleccionado, lo que pintes sobre él es una cascada.';
+}
 function hillIsEmpty(h) {
   // vacío si todos los centros de sus toques quedaron borrados
   return !h.strokes.some((q) => !q.e && hillContainsL(h, [q.x, q.y]));
 }
-/** Cerro bajo el punto (coords del lienzo): el seleccionado tiene prioridad, luego el más reciente. */
-/** Clave del radio del pincel de cada herramienta. */
 /** Subdivisiones extra del pincel → multiplicador de polígonos por m² (cada lado se divide n + 1 veces). */
 function subdivFactor(n) { const k = Math.max(0, Math.round(n ?? 1)); return (k + 1) * (k + 1); }
-function brushKey(t) { return t === 'hill' ? 'hillBrush' : t === 'sculpt' ? 'sculptBrush' : 'paintBrush'; }
-const PAINT_TOOLS = ['paint', 'hill', 'itemPaint', 'sculpt'];
+/** Clave del radio del pincel de cada herramienta. */
+function brushKey(t) { return t === 'hill' ? 'hillBrush' : t === 'sculpt' ? 'sculptBrush' : t === 'river' ? 'riverBrush' : 'paintBrush'; }
+const PAINT_TOOLS = ['paint', 'hill', 'itemPaint', 'sculpt', 'river'];
 function hillAt(p) {
   const sel = state.hills.find((h) => h.id === state.selHill);
   if (sel && hillContainsL(sel, p)) return sel;
@@ -709,6 +773,22 @@ const app = {
   beginPaint(kind, ses = null, p = null, hitHill = null) {
     state.paintSes = ses;
     if (ses) { ses.from = kind === 'sculpt' ? state.terrainSculpt.length : 0; ses.strokes = []; }
+    if (kind === 'river' && ses) {
+      // río sobre el terreno o, con un cerro seleccionado y pintando sobre él, cascada de ese cerro; si el trazo empieza
+      // sobre un río (o cascada) del mismo tipo, lo extiende (así se bifurca si el trazo se abre)
+      pushUndo(); ses.pushed = true;
+      if (ses.erase) return;
+      const selH = state.selHill != null ? state.hills.find((h) => h.id === state.selHill) : null;
+      const onHill = !!(selH && ((p && hillContainsL(selH, p)) || hitHill === selH.id));
+      const kindR = onHill ? 'fall' : 'river';
+      const ex = p ? [...state.rivers].reverse().find((rv) => rv.kind === kindR && (kindR !== 'fall' || rv.hill === selH.id) && riverContainsL(rv, p)) : null;
+      let rv = ex;
+      if (!rv) { rv = newRiver(kindR, onHill ? selH.id : null); state.rivers.push(rv); }
+      ses.target = rv.id;
+      state.selRiver = rv.id;
+      return;
+    }
+    if (kind === 'paint' && ses) ses.hillSub = state.selHill; // con un cerro seleccionado se subdivide el cerro
     if (kind !== 'hill' || !ses) { pushUndo(); if (kind === 'itemPaint') { const g = itemGroup(state.itemPaintTarget); if (g && g.mode !== 'painted') { g.mode = 'painted'; if (state.itemPaintTarget.type === 'deco') renderDecoPanel(); else renderItemsPanel(); } } return; }
     // el cerro bajo el pincel: por su huella pintada y, si no, por la malla que tocó el rayo (vista 3D)
     const hit = (p ? hillAt(p) : null) || (hitHill != null ? state.hills.find((h) => h.id === hitHill) : null);
@@ -750,6 +830,14 @@ const app = {
       return;
     }
     const r = rm / L.scale;
+    if (ses.kind === 'river') {
+      if (ses.last && Math.hypot(p[0] - ses.last[0], p[1] - ses.last[1]) < r * 0.3) return;
+      ses.last = p;
+      const q = { x: +p[0].toFixed(2), y: +p[1].toFixed(2), r: +r.toFixed(2), e: !!ses.erase };
+      if (ses.erase) { for (const rv of state.rivers) if (rv.strokes.some((st) => !st.e && Math.hypot(st.x - q.x, st.y - q.y) < st.r + q.r)) rv.strokes.push({ ...q }); if (ses.strokes) ses.strokes.push(q); }
+      else { const rv = state.rivers.find((x) => x.id === ses.target); if (rv) rv.strokes.push(q); }
+      return;
+    }
     if (ses.pending) {
       if (!ses.start || Math.hypot(p[0] - ses.start[0], p[1] - ses.start[1]) < r * 0.3) return;
       ses.pending = false;
@@ -777,13 +865,24 @@ const app = {
         const h = state.hills.find((hh) => hh.id === ses.target);
         if (h) h.strokes.push(q);
       }
-    } else state.densityPaint.push({ ...q, f: q.e ? undefined : subdivFactor(state.scene.paintSubdiv) });
+    } else {
+      const dq = { ...q, f: q.e ? undefined : subdivFactor(state.scene.paintSubdiv) };
+      const hs = ses.hillSub != null ? state.hills.find((h) => h.id === ses.hillSub) : null;
+      if (hs) (hs.subdiv || (hs.subdiv = [])).push(dq); // subdivisión del cerro seleccionado
+      else state.densityPaint.push(dq);
+    }
   },
   endPaint(kind, ses) {
     state.paintSes = null;
     setTimeout(() => preview.refreshPaintOverlay(), 0);
     if (kind === 'itemPaint') { if (state.itemPaintTarget && state.itemPaintTarget.type === 'deco') decoChanged(); else itemsChanged(); return; }
     if (kind === 'sculpt') refreshSculptInfo();
+    if (kind === 'river') {
+      state.rivers = state.rivers.filter((rv) => rv.strokes.some((q) => !q.e) && !riverIsEmpty(rv));
+      if (state.selRiver != null && !state.rivers.some((rv) => rv.id === state.selRiver)) state.selRiver = null;
+      riversChanged();
+      return;
+    }
     if (kind === 'hill') {
       // quita los cerros que quedaron vacíos
       const before = state.hills.length;
@@ -805,6 +904,8 @@ const app = {
     if (!L) return null;
     const W = (list, extra = {}) => (list || []).map((q) => { const [x, y] = L.toWorld(q.x, q.y); return { x, y, r: q.r * L.scale, e: !!q.e, ...extra }; });
     const t = state.tool, ses = state.paintSes;
+    if (t === 'paint' && state.selHill != null) { const h = state.hills.find((q) => q.id === state.selHill); return { color: 0xe040fb, strokes: h ? W(h.subdiv || []) : [] }; }
+    if (t === 'river') return { color: 0x3fa7ff, strokes: state.rivers.flatMap((rv) => W(rv.strokes)) };
     if (t === 'paint') {
       const top = Math.max(4, ...state.densityPaint.map((q) => q.f || state.scene.paintFactor || 4));
       return { color: 0xe040fb, strokes: state.densityPaint.map((q) => { const [x, y] = L.toWorld(q.x, q.y); return { x, y, r: q.r * L.scale, e: !!q.e, a: q.e ? 1 : 0.45 + 0.55 * Math.min(1, (q.f || state.scene.paintFactor || 4) / top) }; }) };
@@ -826,7 +927,13 @@ const app = {
     return state.terrainSculpt.map((q) => { const [x, y] = L.toWorld(q.x, q.y); return { x, y, r: q.r * L.scale, h: q.h }; });
   },
   /** Todo lo que el terreno recibe del pincel: zonas de densidad y relieve esculpido. */
-  terrainPaintWorld() { return { density: this.paintWorld(), sculpt: this.sculptWorld() }; },
+  terrainPaintWorld() { const rv = this.riversWorld(); return { density: this.paintWorld(), sculpt: this.sculptWorld(), rivers: rv ? rv.filter((q) => q.kind !== 'fall') : null }; },
+  /** Ríos y cascadas en metros (los toques pasan a coordenadas del mundo). */
+  riversWorld() {
+    const L = state.layout;
+    if (!L || !state.rivers.length) return null;
+    return state.rivers.map((rv) => ({ ...rv, name: riverLabel(rv), strokes: rv.strokes.map((q) => { const [x, y] = L.toWorld(q.x, q.y); return { x, y, r: q.r * L.scale, e: q.e }; }) }));
+  },
   paintWorld() {
     const L = state.layout;
     if (!L || !state.densityPaint.length) return null;
@@ -835,9 +942,12 @@ const app = {
   hillsWorld() {
     const L = state.layout;
     if (!L || !state.hills.length) return null;
+    const rw = this.riversWorld();
     return state.hills.map((h) => ({
       id: h.id, name: h.name, height: h.height, hard: !!h.hard, onTop: !!h.onTop, flat: h.flat, density: h.density, maxTris: h.maxTris,
       strokes: h.strokes.map((q) => { const [x, y] = L.toWorld(q.x, q.y); return { x, y, r: q.r * L.scale, e: q.e }; }),
+      subdiv: (h.subdiv || []).map((q) => { const [x, y] = L.toWorld(q.x, q.y); return { x, y, r: q.r * L.scale, e: q.e, f: q.f }; }),
+      falls: (rw || []).filter((rv) => rv.kind === 'fall' && rv.hill === h.id),
     }));
   },
   hillAt(p) { return hillAt(p); },
@@ -935,9 +1045,13 @@ const app = {
       return;
     }
     if (onMainRoad(p, tol)) { selectHill(null); focusPanel('tracktex'); return; }
+    const rv = [...state.rivers].reverse().find((q) => riverContainsL(q, p)); // río o cascada: su tarjeta
+    if (rv) { selectHill(null); selectRiver(rv.id); return; }
+    if (state.selRiver != null) selectRiver(null);
     const h = hillAt(p); selectHill(h ? h.id : null);
   },
   selectAlt(i) { selectAlt(i); },
+  selectRiver(id) { selectRiver(id); },
   selectBridge(i) { selectBridge(i); },
   focusPanel(id, sub) { focusPanel(id, sub); },
   trackTexCanvas() { return state.trackTex || defaultTrackCanvas(); },
@@ -2530,6 +2644,10 @@ function setTool(t) {
   if (t !== 'itemPaint' && state.itemPaintTarget) { const wasDeco = state.itemPaintTarget.type === 'deco'; state.itemPaintTarget = null; if (typeof renderItemsPanel === 'function') renderItemsPanel(); if (wasDeco && typeof renderDecoPanel === 'function') renderDecoPanel(); }
   const hb = document.getElementById('hillBox');
   if (hb) hb.hidden = t !== 'hill';
+  const rb = document.getElementById('riverBox');
+  if (rb) rb.hidden = t !== 'river';
+  const phb = document.getElementById('paintHillHint');
+  if (phb) { const h = t === 'paint' && state.selHill != null ? state.hills.find((q) => q.id === state.selHill) : null; phb.hidden = !h; if (h) phb.textContent = `subdivides ${h.name || hillName(h.id)} · Esc = terreno`; }
   if (typeof syncSceneControls === 'function' && PAINT_TOOLS.includes(t)) syncSceneControls();
   if (typeof preview !== 'undefined' && preview.setPaintMode) preview.setPaintMode(PAINT_TOOLS.includes(t) ? t : null);
   if (typeof preview !== 'undefined' && preview.updateHillGizmo) preview.updateHillGizmo();
@@ -2628,6 +2746,7 @@ function saveProject() {
     assets: (() => { let tot = 0; return state.assets.map((a) => { tot += a.buffer.byteLength; return { id: a.id, name: a.name, data: tot <= 60 * 1048576 ? bufToB64(a.buffer) : null }; }); })(),
     ref3d: state.ref3d ? { name: state.ref3d.name, settings: ref3dSettings(), data: state.ref3d.buffer.byteLength <= 40 * 1048576 ? bufToB64(state.ref3d.buffer) : null } : null,
     hills: state.hills,
+    rivers: state.rivers,
     items: state.items,
     game: state.game,
     sky: state.skyCustom && state.skyTex ? state.skyTex.toDataURL('image/jpeg', 0.9) : null,
@@ -2825,6 +2944,7 @@ async function openProject(text) {
     try { state.assets.push(await loadAsset(b64ToBuf(a.data), a.name, a.id)); } catch (err) { toast(`No se pudo cargar ${a.name}: ${err.message}`); }
   }
   state.decoSets = d.decoSets || [];
+  state.rivers = d.rivers || []; state.selRiver = null; renderRiverPanel();
   state.selDeco = null;
   renderAssetList(); renderVegAssetLists(); renderDecoPanel();
   // modelo de referencia 3D guardado con el proyecto
@@ -3010,6 +3130,10 @@ function syncSceneControls() {
   $('tunnelAdaptBox').hidden = sc.tunnelMeshMode !== 'optimized';
   $('caveBox').classList.toggle('disabled', sc.tunnelType !== 'natural');
   $('pillarBox').classList.toggle('disabled', sc.tunnelOpen === 'none');
+  set('riverMode', sc.riverMode); set('riverWalls', sc.riverWalls); set('riverDepth', sc.riverDepth); set('riverWallSubdiv', sc.riverWallSubdiv);
+  if ($('riverDepthVal')) $('riverDepthVal').textContent = `${(+sc.riverDepth).toFixed(1)} m`;
+  if ($('riverWallSubdivVal')) $('riverWallSubdivVal').textContent = `${sc.riverWallSubdiv}`;
+  if ($('riverCarvedBox')) $('riverCarvedBox').classList.toggle('disabled', sc.riverMode !== 'carved');
   { const n = sc.paintSubdiv ?? 1, t = `${n} (×${subdivFactor(n)} pol.)`; $('paintSubdivVal').textContent = t; $('paintSubdivPVal').textContent = t; }
   $('paintBrushVal').textContent = `${sc[brushKey(state.tool)]} m`;
   $('treeScaleVal').textContent = `${(+sc.treeScale).toFixed(2)}×`;
@@ -3356,7 +3480,7 @@ function focusPanel(id, sub = null) {
 /** Botones (fuera de la barra lateral) con parámetros asociados: a qué sección llevan. */
 const PANEL_FOR_BUTTON = {
   'tool:edit': 'arc', 'tool:draw': 'trace', 'tool:extend': 'trace', 'tool:alt': 'alts', 'tool:start': 'gate', 'tool:ref': 'ref',
-  btnDecoNew: 'deco', 'tool:hill': 'hills', 'tool:paint': 'terrain', 'tool:sculpt': 'terrain', 'tool:flat': 'elev', btnSculptTool: 'terrain', btnRef3dTop: 'ref3d',
+  btnDecoNew: 'deco', 'tool:hill': 'hills', 'tool:river': 'rivers', 'tool:paint': 'terrain', 'tool:sculpt': 'terrain', 'tool:flat': 'elev', btnSculptTool: 'terrain', btnRef3dTop: 'ref3d',
   btnGame: 'sky', btnExportBlender: 'export', btnExportMax: 'export', btnExportJSON: 'export', btnExportOBJ: 'export',
   btnExportGLB2: 'export', btnExportFBX2: 'export', btnTbRadius: 'arc', btnTbFork: 'arc', btnGenTerrain: 'terrain', btnGenTrees: 'trees',
 };
@@ -3394,6 +3518,7 @@ function initCollapsibles() {
 function bindSceneControls() {
   initCollapsibles();
   initButtonIcons(); // iconos pequeños en todos los botones (también los que se creen después)
+  renderRiverPanel();
   const sc = state.scene;
   $('btnGenTerrain').addEventListener('click', () => generateFromToolbar('terrain'));
   $('btnGenTrees').addEventListener('click', () => generateFromToolbar('trees'));
@@ -3526,7 +3651,18 @@ function bindSceneControls() {
   $('ref3dUnit').addEventListener('change', (e) => reparse('unitOpt', e.target.value));
   $('ref3dUp').addEventListener('change', (e) => reparse('upOpt', e.target.value));
   syncRef3dControls();
-  $('btnPaintClear').addEventListener('click', () => { if (!state.densityPaint.length) return; pushUndo(); state.densityPaint = []; refreshPaintInfo(); editor.draw(); sceneChanged(); });
+  $('btnPaintClear').addEventListener('click', () => {
+    const hs = state.selHill != null ? state.hills.find((h) => h.id === state.selHill) : null;
+    if (hs && hs.subdiv && hs.subdiv.length) { pushUndo(); hs.subdiv = []; editor.draw(); preview.update(false); toast(`Subdivisión de ${hs.name || hillName(hs.id)} borrada.`); return; } // con un cerro seleccionado: la suya
+    if (!state.densityPaint.length) return; pushUndo(); state.densityPaint = []; refreshPaintInfo(); editor.draw(); sceneChanged();
+  });
+  // ríos y cascadas: valores para los nuevos (barra) y botones del panel
+  $('riverMode').addEventListener('change', (e) => { sc.riverMode = e.target.value; syncSceneControls(); });
+  $('riverWalls').addEventListener('change', (e) => { sc.riverWalls = e.target.value; syncSceneControls(); });
+  $('riverDepth').addEventListener('input', (e) => { sc.riverDepth = parseFloat(e.target.value); syncSceneControls(); });
+  $('riverWallSubdiv').addEventListener('input', (e) => { sc.riverWallSubdiv = Math.round(parseFloat(e.target.value)); syncSceneControls(); });
+  $('btnRiverTool').addEventListener('click', () => setTool('river'));
+  $('btnRiverClear').addEventListener('click', () => { if (!state.rivers.length) return; pushUndo(); state.rivers = []; state.selRiver = null; riversChanged(); });
   // wireframe
   const wire = () => { preview.wire.on = $('wireOn').checked; preview.wire.color = $('wireColor').value; preview.wire.opacity = parseFloat($('wireOpacity').value); preview.applyWireframe(); };
   $('wireOn').addEventListener('change', wire);
@@ -3829,7 +3965,7 @@ const HINTS = {
   btnExportGLB: 'Exporta pista con UV, terreno y árboles, con las texturas incrustadas, en un .glb (glTF binario).',
   paintSubdiv: 'Subdivisiones extra de las pinceladas que hagas ahora: cada lado de la celda del terreno se divide n + 1 veces ((n + 1)² más polígonos). Las pinceladas ya hechas conservan su valor. El tope de polígonos se sigue respetando.',
   paintSubdivP: 'Subdivisiones extra de las pinceladas que hagas ahora: cada lado de la celda del terreno se divide n + 1 veces ((n + 1)² más polígonos). Las pinceladas ya hechas conservan su valor. El tope de polígonos se sigue respetando.',
-  btnPaintTool: 'Activa «Pintar densidad»: pinta en el mapa las zonas del terreno que necesitan más detalle. Alt o clic derecho borra.',
+  btnPaintTool: 'Activa «Pintar subdivisión»: pinta en el mapa las zonas del terreno (o del cerro seleccionado) que necesitan más detalle. Alt o clic derecho borra.',
   btnPaintClear: 'Borra todas las zonas pintadas; el terreno vuelve a ser uniforme.',
   paintBrush: 'Radio del pincel en metros.',
   coastSide: 'Lado de la pista (según el sentido de marcha) donde está la costa. Con un solo lado, el otro es terreno de bosque.',
@@ -3852,7 +3988,7 @@ const HINTS = {
   sculptStrength: 'Cuántos metros sube (clic derecho) o baja (clic izquierdo) cada toque del pincel en su centro; al pasar varias veces se acumula.',
   sculptStrengthP: 'Cuántos metros sube o baja cada toque del pincel de relieve en su centro.',
   sculptBrushP: 'Radio del pincel de relieve en metros (también con [ y ] mientras esculpes).',
-  sculptDetail: 'Las zonas esculpidas reciben más polígonos (como lo pintado con «Pintar densidad»), para que el relieve se vea definido.',
+  sculptDetail: 'Las zonas esculpidas reciben más polígonos (como lo pintado con «Pintar subdivisión»), para que el relieve se vea definido.',
   btnSculptTool: 'Activa «Esculpir relieve» en el mapa y en la vista 3D: clic derecho eleva y clic izquierdo hunde el terreno. Es parte de la misma malla del terreno.',
   btnSculptClear: 'Quita todo el relieve esculpido (Ctrl+Z lo recupera).',
   paintErase: 'Pinta borrando (también con Alt o clic derecho).',

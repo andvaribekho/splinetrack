@@ -11,6 +11,7 @@ import { computeItems, defaultGroup, itemAt } from '../js/items.js';
 import { nearestOnSamples } from '../js/geometry.js';
 import { buildEdgeMeshes } from '../js/edges.js';
 import { edgeExtents } from '../js/tunnels.js';
+import { buildRivers } from '../js/rivers.js';
 
 let fails = 0, passes = 0;
 const check = (cond, msg) => { if (cond) passes++; else { fails++; console.log('  FALLA:', msg); } };
@@ -473,6 +474,57 @@ for (const [key, s] of Object.entries(SAMPLES)) {
   }
   check(n > 0 && below / n < 0.02, `cerro encima: su base no atraviesa el cerro de abajo (${below}/${n} triángulos bajo él)`);
   check(ha.tris > 0, 'cerro encima: el de abajo sigue entero');
+}
+
+// cima plana al 100 %: meseta horizontal aunque se apoye en la ladera de otro cerro; subdivisión pintada en un cerro;
+// ríos socavados en el terreno y cascadas en un cerro
+{
+  const L = buildLayout(SAMPLES.oval.build(), { lapLength: 1000 });
+  const E = computeElevation(L, { hills: 0.5 });
+  const r = L.routes[0];
+  let cx = 0, cy = 0; for (let i = 0; i < r.n; i++) { cx += r.x[i]; cy += r.y[i]; } cx /= r.n; cy /= r.n;
+  const sp = { terrain: true, terrainDensity: 40 };
+  const T = buildTerrain(L, E, sp);
+  const A = { id: 1, height: 24, hard: false, flat: 0, density: 60, maxTris: 60000, strokes: [{ x: cx, y: cy, r: 60, e: false }] };
+  const B = { id: 2, height: 8, hard: false, flat: 1, density: 70, maxTris: 60000, onTop: true, strokes: [{ x: cx + 30, y: cy, r: 22, e: false }] };
+  const H = buildHills(L, E, sp, T, [A, B]);
+  const zs = [];
+  for (let a = 0; a < 12; a++) for (const rr of [0, 3, 6]) { const z = H.hillSample(2, cx + 30 + Math.cos(a) * rr, cy + Math.sin(a) * rr); if (Number.isFinite(z)) zs.push(z); }
+  const span = Math.max(...zs) - Math.min(...zs);
+  check(zs.length > 20 && span < 0.25, `cima plana: meseta horizontal sobre otro cerro (desnivel ${span.toFixed(2)} m)`);
+  // subdivisión pintada sobre el cerro
+  const A2 = { ...A, subdiv: [{ x: cx, y: cy, r: 25, e: false, f: 16 }] };
+  const Hsub = buildHills(L, E, sp, T, [A2]), Hno = buildHills(L, E, sp, T, [A]);
+  const hs = Hsub.hills[0], hn = Hno.hills[0];
+  check(hs.subdivided && hs.tris > hn.tris * 1.3, `subdivisión en un cerro (${hn.tris} → ${hs.tris} triángulos)`);
+  check(Math.abs(Hsub.sample(cx + 40, cy) - Hno.sample(cx + 40, cy)) < 0.6, 'subdivisión en un cerro: misma forma');
+  // río socavado en el terreno
+  const rv = { id: 1, kind: 'river', mode: 'carved', depth: 3, walls: 'rock', wallSubdiv: 2, strokes: [{ x: cx - 40, y: cy - 20, r: 6, e: false }, { x: cx - 30, y: cy - 20, r: 6, e: false }, { x: cx - 20, y: cy - 20, r: 6, e: false }] };
+  const TR = buildTerrain(L, E, sp, { density: null, sculpt: null, rivers: [rv] });
+  const d0 = T.sample(cx - 30, cy - 20) - TR.sample(cx - 30, cy - 20);
+  check(d0 > 2.4 && d0 < 3.6, `río socavado: hunde el terreno (${d0.toFixed(2)} m)`);
+  check(Math.abs(T.sample(cx - 30, cy + 20) - TR.sample(cx - 30, cy + 20)) < 0.3, 'río socavado: fuera del cauce no cambia');
+  const RW = buildRivers(TR, null, [rv]);
+  check(RW.length === 1 && RW[0].tris > 10 && RW[0].name === 'rio_01', `río: malla de agua (${RW.length && RW[0].tris} triángulos)`);
+  if (RW.length) {
+    let zmin = Infinity, zmax = -Infinity;
+    const P = RW[0].positions;
+    for (let v = 0; v < P.length; v += 3) if (Math.hypot(P[v] - (cx - 30), P[v + 1] - (cy - 20)) < 3) { const zb = TR.sample(P[v], P[v + 1]); zmin = Math.min(zmin, P[v + 2] - zb); zmax = Math.max(zmax, P[v + 2] - T.sample(P[v], P[v + 1])); }
+    check(zmin > 0.5 && zmax < 0, `río: el agua queda dentro del cauce (sobre el lecho ${zmin.toFixed(2)}, bajo el borde ${zmax.toFixed(2)})`);
+  }
+  const rvS = { ...rv, id: 2, mode: 'surface' };
+  const TS = buildTerrain(L, E, sp, { rivers: [rvS] });
+  check(Math.abs(T.sample(cx - 30, cy - 20) - TS.sample(cx - 30, cy - 20)) < 0.3, 'río posado: no hunde el terreno');
+  const G = makeGround(TR, null);
+  check(G.inWater && G.inWater(cx - 30, cy - 20) && !G.inWater(cx - 30, cy + 20), 'río: la vegetación lo evita');
+  // cascada socavada sobre el cerro
+  const fall = { id: 3, kind: 'fall', hill: 1, mode: 'carved', depth: 2.5, walls: 'smooth', wallSubdiv: 2, strokes: [{ x: cx + 20, y: cy + 5, r: 5, e: false }, { x: cx + 30, y: cy + 5, r: 5, e: false }] };
+  const HF = buildHills(L, E, sp, T, [{ ...A, falls: [fall] }]);
+  const dh = Hno.hillSample(1, cx + 30, cy + 5) - HF.hillSample(1, cx + 30, cy + 5);
+  check(dh > 1.8 && dh < 3.2, `cascada socavada: hunde el cerro (${dh.toFixed(2)} m)`);
+  check(HF.hills[0].subdivided, 'cascada socavada: paredes con más geometría');
+  const FW = buildRivers(T, HF, [fall]);
+  check(FW.length === 1 && FW[0].kind === 'fall' && FW[0].name === 'cascada_01', 'cascada: malla de agua propia');
 }
 
 // tramos cubiertos (bajo cruces y en túneles): material propio, cortes exactos

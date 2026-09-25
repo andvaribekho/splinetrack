@@ -2,6 +2,7 @@
 // Todo en metros, Z arriba. Devuelve arrays planos listos para three.js o para exportar.
 import { SpatialGrid, rng, clamp, smoothstep } from './geometry.js';
 import Delaunator from '../vendor/delaunator.js';
+import { riverField, subdivFactor } from './rivers.js';
 import { hillFieldOne, detectTunnels, tunnelTop, buildTunnelGeometry, applyTunnelOverrides, portalBox, frameAt, edgeExtents, tunnelInnerWidth } from './tunnels.js';
 
 export const DEFAULT_SCENE = {
@@ -24,6 +25,7 @@ export const DEFAULT_SCENE = {
   terrainTexRepX: 20,
   terrainTexRepY: 20,
   paintFactor: 4, // multiplicador de densidad de las pinceladas antiguas (sin valor propio)
+  riverBrush: 6, riverMode: 'carved', riverDepth: 2, riverWalls: 'smooth', riverWallSubdiv: 2, // ríos y cascadas nuevos
   paintSubdiv: 1, // subdivisiones extra del pincel de densidad: cada pincelada nueva guarda f = (n + 1)²
   terrainType: 'forest', // 'forest' (bosque) | 'beach' (playa: costa hacia el agua) | 'mountain' (acantilado y pared de roca)
   coastSide: 'right', // playa: 'left' | 'right' | 'both'
@@ -487,9 +489,16 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
   const PI = Array.isArray(paintIn) || !paintIn ? { density: paintIn || null, sculpt: null } : paintIn;
   const sculptDabs = PI.sculpt && PI.sculpt.length ? PI.sculpt : null;
   const SF = sculptField(sculptDabs);
+  // ríos sobre el terreno: los socavados hunden la malla (y reciben más detalle en el cauce y sus paredes)
+  const RF = (PI.rivers || []).filter((rv) => rv.kind !== 'fall').map(riverField).filter(Boolean);
   // lo esculpido recibe más detalle (como una zona pintada de densidad)
   let paint = PI.density && PI.density.length ? PI.density : null;
   if (sculptDabs && sp.sculptDetail !== false) paint = [...(paint || []), ...sculptDabs.map((d) => ({ x: d.x, y: d.y, r: d.r, e: false }))];
+  for (const F of RF) {
+    if (F.river.mode !== 'carved') continue;
+    const f = subdivFactor(F.river.wallSubdiv ?? 2);
+    if (f > 1) paint = [...(paint || []), ...F.river.strokes.filter((q) => !q.e).map((q) => ({ x: q.x, y: q.y, r: q.r + F.wallW * 0.5 + 0.5, e: false, f }))];
+  }
   const S = trackSamples(layout, elev, sp);
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, maxW = 0;
   for (const p of S) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); maxW = Math.max(maxW, p.ew); }
@@ -505,6 +514,7 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
   if (special) M = Math.max(M, landMax + (TT === 'beach' ? Math.max(1, sp.coastBeach) * 1.4 : 6) + 50); // hay que ver el agua
   minX -= M; minY -= M; maxX += M; maxY += M;
   if (SF) { minX = Math.min(minX, SF.bounds.x0); minY = Math.min(minY, SF.bounds.y0); maxX = Math.max(maxX, SF.bounds.x1); maxY = Math.max(maxY, SF.bounds.y1); } // el terreno llega hasta lo esculpido
+  for (const F of RF) { minX = Math.min(minX, F.bounds.x0 - 5); minY = Math.min(minY, F.bounds.y0 - 5); maxX = Math.max(maxX, F.bounds.x1 + 5); maxY = Math.max(maxY, F.bounds.y1 + 5); } // y hasta los ríos
   const W = maxX - minX, H = maxY - minY;
   const gap = sp.terrainGap;
   const fine = new SpatialGrid(Math.max(maxW, 8));
@@ -649,7 +659,7 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
     return zone;
   };
   /** Altura de un vértice; rho = distancia máxima a la que un triángulo que lo usa puede cubrir la pista. */
-  const heightAt = (x, y, rho) => {
+  const heightAt0 = (x, y, rho) => {
     const zone = zoneAt(x, y, rho);
     if (zone < Infinity) return zone - gap;
     let bd = Infinity, bz = 0, bw = 0;
@@ -667,6 +677,22 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
     const fade = SF ? smoothstep(0, 4, bd - bw / 2 - rho) : 0;
     return (sideZ ?? forestZ) + sc * fade;
   };
+  // socavado de los ríos: se desvanece junto a la pista (nunca la deja colgando)
+  const riverCarveRaw = (x, y) => {
+    let c = 0;
+    for (const F of RF) { const B = F.bounds; if (x < B.x0 || y < B.y0 || x > B.x1 || y > B.y1) continue; const v = F.carve(x, y); if (v > c) c = v; }
+    return c;
+  };
+  const riverCarveAt = (x, y, rho = 0.5) => {
+    const c = RF.length ? riverCarveRaw(x, y) : 0;
+    if (c <= 0) return 0;
+    let bd = Infinity, bw = 0;
+    coarseG.query(x, y, falloff + maxW, (p) => { const d = Math.hypot(p.x - x, p.y - y); if (d < bd) { bd = d; bw = p.ew; } });
+    return bd === Infinity ? c : c * smoothstep(0, 4, bd - bw / 2 - rho);
+  };
+  const heightAt = RF.length ? (x, y, rho) => heightAt0(x, y, rho) - riverCarveAt(x, y, rho) : heightAt0;
+  const origAt = (x, y) => heightAt0(x, y, 0.5);
+  const inRiver = RF.length ? (x, y) => RF.some((F) => { const B = F.bounds; return x >= B.x0 && y >= B.y0 && x <= B.x1 && y <= B.y1 && F.sd(x, y) > -0.5; }) : null;
   if (extraPaint.length) paint = [...(paint || []), ...extraPaint];
   const painted = paint && paint.length && paint.some((st) => !st.e && (st.f ?? sp.paintFactor) > 1);
   const out = painted
@@ -678,7 +704,8 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
   out.terrainType = TT;
   out.waterLevel = waterLevel;
   terrainColors(out, TT, waterLevel, nearestSide);
-  Object.defineProperty(out, 'ctx', { value: { S, fine, maxW, gap, zoneAt, heightAt, sp }, enumerable: false });
+  out.rivers = RF.length;
+  Object.defineProperty(out, 'ctx', { value: { S, fine, maxW, gap, zoneAt, heightAt, sp, origAt, riverCarveAt, inRiver }, enumerable: false });
   return out;
 }
 
@@ -753,21 +780,97 @@ export function buildHills(layout, elev, spIn, T, hills) {
   const sink = 0.4;
   const samplers = [];
   fields.forEach(({ h, f }, hi) => {
-    const c0 = cells[hi];
+    let c0 = cells[hi];
     const x0 = f.minX, y0 = f.minY;
+    // cascadas socavadas de este cerro (hunden su superficie) y zonas con más subdivisión (pintadas o paredes de cascada)
+    const FF = (h.falls || []).map(riverField).filter(Boolean);
+    const fallCarve = (x, y) => { let cv = 0; for (const F of FF) { const B = F.bounds; if (x < B.x0 || y < B.y0 || x > B.x1 || y > B.y1) continue; const v = F.carve(x, y); if (v > cv) cv = v; } return cv; };
+    const subPaint = [...(h.subdiv || [])];
+    for (const F of FF) {
+      if (F.river.mode !== 'carved') continue;
+      const fv = subdivFactor(F.river.wallSubdiv ?? 2);
+      if (fv > 1) for (const q of F.river.strokes) if (!q.e) subPaint.push({ x: q.x, y: q.y, r: q.r + F.wallW * 0.5 + 0.5, e: false, f: fv });
+    }
+    // máscara de subdivisión (multiplicador por celda) sobre la caja del cerro
+    let fmask = null, fmc = 0, fmw = 0, fmh = 0;
+    const areas = new Map();
+    if (subPaint.some((q) => !q.e && (q.f ?? 4) > 1)) {
+      fmc = Math.max(0.3, Math.min(c0 / 2, Math.max(f.maxX - f.minX, f.maxY - f.minY) / 400));
+      fmw = Math.ceil((f.maxX - f.minX) / fmc) + 1; fmh = Math.ceil((f.maxY - f.minY) / fmc) + 1;
+      fmask = new Float32Array(fmw * fmh);
+      for (const st of subPaint) {
+        const fv = st.e ? 0 : Math.max(1, Math.round((st.f ?? 4) * 4) / 4);
+        const i0 = Math.max(0, Math.floor((st.x - st.r - x0) / fmc)), i1 = Math.min(fmw - 1, Math.ceil((st.x + st.r - x0) / fmc));
+        const j0 = Math.max(0, Math.floor((st.y - st.r - y0) / fmc)), j1 = Math.min(fmh - 1, Math.ceil((st.y + st.r - y0) / fmc));
+        for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) if (Math.hypot(x0 + i * fmc - st.x, y0 + j * fmc - st.y) <= st.r) fmask[j * fmw + i] = fv <= 1 ? 0 : fv;
+      }
+      for (let j = 0; j < fmh; j++) for (let i = 0; i < fmw; i++) {
+        const fv = fmask[j * fmw + i];
+        if (fv > 0 && f.sample(x0 + i * fmc, y0 + j * fmc) > 0) areas.set(fv, (areas.get(fv) || 0) + fmc * fmc);
+      }
+      if (!areas.size) fmask = null;
+      else { // el tope de triángulos del cerro incluye lo subdividido
+        let extra = 0;
+        for (const [fv, ar] of areas) extra += ar * (fv - 1);
+        c0 = Math.max(c0, Math.sqrt((2 * (f.area + extra)) / Math.max(50, h.maxTris ?? 20000)));
+      }
+    }
+    const factorAt = (x, y) => { if (!fmask) return 0; const i = Math.round((x - x0) / fmc), j = Math.round((y - y0) / fmc); return i >= 0 && j >= 0 && i < fmw && j < fmh ? fmask[j * fmw + i] : 0; };
     const nx = Math.max(2, Math.ceil((f.maxX - f.minX) / c0)), ny = Math.max(2, Math.ceil((f.maxY - f.minY) / c0));
     const cx = (f.maxX - f.minX) / nx, cy = (f.maxY - f.minY) / ny;
-    const rho = Math.hypot(cx, cy) * 1.05 + 0.5;
-    const nv = (nx + 1) * (ny + 1);
-    const X = new Float64Array(nv), Y = new Float64Array(nv), Z = new Float64Array(nv), TZ = new Float64Array(nv);
-    for (let j = 0; j <= ny; j++) for (let i = 0; i <= nx; i++) {
-      const v = j * (nx + 1) + i;
-      const x = x0 + i * cx, y = y0 + j * cy;
-      // base: el terreno o, si el cerro va encima de otros, la superficie de los cerros anteriores
-      let tz = T.sample(x, y);
-      if (h.onTop) for (const S2 of samplers) { const zs = S2.sample(x, y); if (zs > tz) tz = zs; }
-      const hh = f.sample(x, y);
+    const baseAtH = (x, y) => { let tz = T.sample(x, y); if (h.onTop) for (const S2 of samplers) { const zs = S2.sample(x, y); if (zs > tz) tz = zs; } return tz; };
+    // cima plana: con «parte superior plana» al máximo la cima es una meseta horizontal aunque el cerro se apoye en
+    // un terreno o en otro cerro inclinado (se nivela a la base más alta bajo la cima)
+    const flat = clamp(h.flat ?? 0, 0, 1), Hh = Math.max(0.01, h.height);
+    let baseRef = null;
+    if (flat > 0) {
+      let best = -Infinity, best2 = -Infinity, hmax = 0;
+      for (let j = 0; j <= ny; j++) for (let i = 0; i <= nx; i++) {
+        const x = x0 + i * cx, y = y0 + j * cy, hh = f.sample(x, y);
+        if (hh <= 0) continue;
+        hmax = Math.max(hmax, hh);
+        const tz = baseAtH(x, y);
+        if (hh >= 0.97 * Hh && tz > best) best = tz;
+        if (hh >= 0.8 * Hh && tz > best2) best2 = tz;
+      }
+      baseRef = Number.isFinite(best) ? best : Number.isFinite(best2) ? best2 : null;
+    }
+    const surfOrig = (x, y, tz, hh) => {
       let z = tz + hh - sink;
+      if (baseRef != null && hh > 0) z = Math.max(tz - sink, z + flat * (baseRef - tz) * clamp(hh / Hh, 0, 1));
+      return z;
+    };
+    // puntos de la malla: grilla regular o, con zonas subdivididas, grilla gruesa + una fina por nivel (Delaunay)
+    const PX = [], PY = [], PR = [];
+    if (!fmask) {
+      for (let j = 0; j <= ny; j++) for (let i = 0; i <= nx; i++) { PX.push(x0 + i * cx); PY.push(y0 + j * cy); }
+    } else {
+      const rc = Math.hypot(cx, cy) * 1.05 + 0.5;
+      for (let j = 0; j <= ny; j++) for (let i = 0; i <= nx; i++) {
+        const x = x0 + i * cx, y = y0 + j * cy;
+        if (i === 0 || j === 0 || i === nx || j === ny || !factorAt(x, y)) { PX.push(x); PY.push(y); PR.push(rc); }
+      }
+      for (const fv of areas.keys()) {
+        const cl = c0 / Math.sqrt(fv);
+        const fx = Math.max(2, Math.ceil((f.maxX - f.minX) / cl)), fy = Math.max(2, Math.ceil((f.maxY - f.minY) / cl));
+        const fcx = (f.maxX - f.minX) / fx, fcy = (f.maxY - f.minY) / fy, rf = Math.hypot(fcx, fcy) * 1.05 + 0.5;
+        for (let j = 1; j < fy; j++) for (let i = 1; i < fx; i++) {
+          const x = x0 + i * fcx + (j % 2) * fcx * 0.013, y = y0 + j * fcy + (i % 2) * fcy * 0.011;
+          if (factorAt(x, y) === fv) { PX.push(x); PY.push(y); PR.push(rf); }
+        }
+      }
+    }
+    const rhoGrid = Math.hypot(cx, cy) * 1.05 + 0.5;
+    const nv = PX.length;
+    const X = new Float64Array(nv), Y = new Float64Array(nv), Z = new Float64Array(nv), TZ = new Float64Array(nv);
+    for (let v = 0; v < nv; v++) {
+      const x = PX[v], y = PY[v];
+      const rho = fmask ? PR[v] : rhoGrid;
+      // base: el terreno o, si el cerro va encima de otros, la superficie de los cerros anteriores
+      const tz = baseAtH(x, y);
+      const hh = f.sample(x, y);
+      let z = surfOrig(x, y, tz, hh);
+      if (FF.length && hh > 0.01) z -= fallCarve(x, y); // cauce de la cascada
       const zone = zoneAt(x, y, rho, tunId);
       if (zone < Infinity) z = Math.min(z, zone - gap); // la pista corta el cerro (trinchera)
       if (tunReach > 0 && hh > 0.01) {
@@ -786,12 +889,28 @@ export function buildHills(layout, elev, spIn, T, hills) {
       if (zone < Infinity) z = Math.min(z, zone - gap); // la pista fuera de túneles nunca queda bajo un cerro
       X[v] = x; Y[v] = y; Z[v] = z; TZ[v] = tz;
     }
+    // triángulos: los de la grilla o los de la triangulación de Delaunay (sentido antihorario, normal hacia +Z)
+    let TRI;
+    if (!fmask) {
+      TRI = new Uint32Array(nx * ny * 6);
+      let q = 0;
+      for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+        const a = j * (nx + 1) + i, b = a + 1, cI = a + nx + 1, d = cI + 1;
+        TRI[q++] = a; TRI[q++] = b; TRI[q++] = d; TRI[q++] = a; TRI[q++] = d; TRI[q++] = cI;
+      }
+    } else {
+      const co = new Float64Array(nv * 2);
+      for (let v = 0; v < nv; v++) { co[v * 2] = X[v]; co[v * 2 + 1] = Y[v]; }
+      const dt = new Delaunator(co).triangles;
+      TRI = new Uint32Array(dt.length);
+      for (let t = 0; t < dt.length; t += 3) { TRI[t] = dt[t]; TRI[t + 1] = dt[t + 2]; TRI[t + 2] = dt[t + 1]; }
+    }
     const pos = [], uv = [], idx = [];
     for (let v = 0; v < nv; v++) {
       pos.push(X[v], Y[v], Z[v]);
       uv.push(((X[v] - bx0) / (bx1 - bx0)) * sp.terrainTexRepX, ((Y[v] - by0) / (by1 - by0)) * sp.terrainTexRepY);
     }
-    const keptTri = new Uint8Array(nx * ny * 2);
+    const keptTri = new Uint8Array(TRI.length / 3);
     const below = (a) => Z[a] <= TZ[a] + 0.02;
     // recorte contra la caja de la boca / interior del túnel (piezas convexas fuera de la caja)
     const vert = (a) => ({ x: X[a], y: Y[a], z: Z[a], tz: TZ[a], uu: uv[a * 2], vv: uv[a * 2 + 1] });
@@ -845,26 +964,55 @@ export function buildHills(layout, elev, spIn, T, hills) {
       idx.push(a, b, cI);
       keptTri[ti] = 1;
     };
-    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
-      const a = j * (nx + 1) + i, b = a + 1, cI = a + nx + 1, d = cI + 1;
-      const ti = (j * nx + i) * 2;
-      tri(a, b, d, ti);
-      tri(a, d, cI, ti + 1);
+    for (let t = 0; t < TRI.length; t += 3) tri(TRI[t], TRI[t + 1], TRI[t + 2], t / 3);
+    let sample;
+    if (!fmask) {
+      sample = (x, y) => {
+        const fx = (x - x0) / cx, fy = (y - y0) / cy;
+        if (fx < 0 || fy < 0 || fx >= nx || fy >= ny) return -Infinity;
+        const i = Math.min(nx - 1, Math.floor(fx)), j = Math.min(ny - 1, Math.floor(fy)), tx = fx - i, ty = fy - j;
+        const a = j * (nx + 1) + i, b = a + 1, cI = a + nx + 1, d = cI + 1;
+        const ti = (j * nx + i) * 2;
+        if (tx >= ty) return keptTri[ti] ? Z[a] + (Z[b] - Z[a]) * tx + (Z[d] - Z[b]) * ty : -Infinity;
+        return keptTri[ti + 1] ? Z[a] + (Z[d] - Z[cI]) * tx + (Z[cI] - Z[a]) * ty : -Infinity;
+      };
+    } else {
+      // triangulación libre: grilla de aceleración sobre los triángulos conservados
+      const gc = Math.max(c0, 2), acc = new Map();
+      for (let t = 0; t < TRI.length; t += 3) {
+        if (!keptTri[t / 3]) continue;
+        const a = TRI[t], b = TRI[t + 1], cI = TRI[t + 2];
+        const i0 = Math.floor((Math.min(X[a], X[b], X[cI]) - x0) / gc), i1 = Math.floor((Math.max(X[a], X[b], X[cI]) - x0) / gc);
+        const j0 = Math.floor((Math.min(Y[a], Y[b], Y[cI]) - y0) / gc), j1 = Math.floor((Math.max(Y[a], Y[b], Y[cI]) - y0) / gc);
+        for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) { const k = j * 100003 + i; let l = acc.get(k); if (!l) acc.set(k, (l = [])); l.push(t); }
+      }
+      sample = (x, y) => {
+        const l = acc.get(Math.floor((y - y0) / gc) * 100003 + Math.floor((x - x0) / gc));
+        if (!l) return -Infinity;
+        for (const t of l) {
+          const a = TRI[t], b = TRI[t + 1], cI = TRI[t + 2];
+          const den = (Y[b] - Y[cI]) * (X[a] - X[cI]) + (X[cI] - X[b]) * (Y[a] - Y[cI]);
+          if (Math.abs(den) < 1e-12) continue;
+          const l1 = ((Y[b] - Y[cI]) * (x - X[cI]) + (X[cI] - X[b]) * (y - Y[cI])) / den;
+          const l2 = ((Y[cI] - Y[a]) * (x - X[cI]) + (X[a] - X[cI]) * (y - Y[cI])) / den;
+          const l3 = 1 - l1 - l2;
+          if (l1 >= -1e-6 && l2 >= -1e-6 && l3 >= -1e-6) return l1 * Z[a] + l2 * Z[b] + l3 * Z[cI];
+        }
+        return -Infinity;
+      };
     }
-    const sample = (x, y) => {
-      const fx = (x - x0) / cx, fy = (y - y0) / cy;
-      if (fx < 0 || fy < 0 || fx >= nx || fy >= ny) return -Infinity;
-      const i = Math.min(nx - 1, Math.floor(fx)), j = Math.min(ny - 1, Math.floor(fy)), tx = fx - i, ty = fy - j;
-      const a = j * (nx + 1) + i, b = a + 1, cI = a + nx + 1, d = cI + 1;
-      const ti = (j * nx + i) * 2;
-      if (tx >= ty) return keptTri[ti] ? Z[a] + (Z[b] - Z[a]) * tx + (Z[d] - Z[b]) * ty : -Infinity;
-      return keptTri[ti + 1] ? Z[a] + (Z[d] - Z[cI]) * tx + (Z[cI] - Z[a]) * ty : -Infinity;
-    };
-    samplers.push({ f, sample, h });
+    const orig = (x, y) => surfOrig(x, y, baseAtH(x, y), f.sample(x, y));
+    samplers.push({ f, sample, h, fallCarve, orig, FF });
     const name = h.name || `cerro_${String(h.id).padStart(2, '0')}`;
-    res.hills.push({ id: h.id, name, positions: new Float32Array(pos), uvs: new Float32Array(uv), indices: new Uint32Array(idx), tris: idx.length / 3, cell: Math.max(cx, cy) });
+    res.hills.push({ id: h.id, name, positions: new Float32Array(pos), uvs: new Float32Array(uv), indices: new Uint32Array(idx), tris: idx.length / 3, cell: Math.max(cx, cy), subdivided: !!fmask });
     res.tris += idx.length / 3;
   });
+  // superficie de un cerro concreto (con y sin el cauce de sus cascadas)
+  const byId = (id) => samplers.find((q) => q.h.id === id);
+  res.hillSample = (id, x, y) => { const q = byId(id); return q ? q.sample(x, y) : -Infinity; };
+  res.hillOrig = (id, x, y) => { const q = byId(id); return q ? q.orig(x, y) : -Infinity; };
+  res.fallCarve = (id, x, y) => { const q = byId(id); return q ? q.fallCarve(x, y) : 0; };
+  if (samplers.some((q) => q.FF.length)) res.inFall = (x, y) => samplers.some((q) => q.FF.some((F) => { const B = F.bounds; return x >= B.x0 && y >= B.y0 && x <= B.x1 && y <= B.y1 && F.sd(x, y) > -0.5; }));
   res.sample = (x, y) => {
     let m = -Infinity;
     for (const { f, sample } of samplers) { if (x < f.minX || y < f.minY || x > f.maxX || y > f.maxY) continue; const v = sample(x, y); if (v > m) m = v; }
@@ -1042,6 +1190,7 @@ export function makeGround(T, HS) {
   return {
     sample: (x, y) => Math.max(T.sample(x, y), HS ? HS.sample(x, y) : -Infinity),
     waterLevel: T.waterLevel ?? null,
+    inWater: (T.ctx && T.ctx.inRiver) || (HS && HS.inFall) ? (x, y) => !!((T.ctx && T.ctx.inRiver && T.ctx.inRiver(x, y)) || (HS && HS.inFall && HS.inFall(x, y))) : null,
     classify: HS && HS.classify ? HS.classify : () => null,
     bboxes: HS && HS.bboxes ? HS.bboxes : [],
   };
@@ -1086,6 +1235,7 @@ function scatter(layout, elev, sp, ground, o) {
     if (where === 'top' && !o.onTops) return;
     const z = ground ? ground.sample(x, y) : zFallback;
     if (ground && ground.waterLevel != null && z < ground.waterLevel + 1) return; // ni en el agua ni en la arena
+    if (ground && ground.inWater && ground.inWater(x, y)) return; // ni en ríos ni en cascadas
     if (ground && ground.waterLevel != null && where === 'terrain' && groundNormal(ground, x, y)[2] < 0.7) return; // ni en el acantilado ni en la pared de roca
     let up = [0, 0, 1], cosA = 1;
     if (ground) {

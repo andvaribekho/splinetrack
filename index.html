@@ -315,7 +315,7 @@
         <div class="field"><label>Transición hacia el relieve <span class="val" id="terrainFalloffVal"></span></label><input type="range" id="terrainFalloff" min="10" max="200" step="5"></div>
         <div class="field"><label>Subdivisiones extra del pincel <span class="val" id="paintSubdivPVal"></span></label><input type="range" id="paintSubdivP" min="1" max="6" step="1"></div>
         <p class="hint">Cada pincelada guarda sus subdivisiones: puedes pintar zonas con distinto detalle.</p>
-        <div class="row gap"><button id="btnPaintTool" title="Activa la herramienta «Pintar densidad» en el mapa">Pintar densidad…</button><button id="btnPaintClear" title="Borra todas las zonas pintadas">Borrar pintura</button></div>
+        <div class="row gap"><button id="btnPaintTool" title="Activa la herramienta «Pintar subdivisión» en el mapa">Pintar subdivisión…</button><button id="btnPaintClear" title="Borra todas las zonas pintadas">Borrar pintura</button></div>
         <label class="check"><input type="checkbox" id="skirts"> Faldones laterales en la pista</label>
         <h3 class="subhead" id="sculptHead">Relieve esculpido</h3>
         <div class="row gap"><button id="btnSculptTool" title="Activa «Esculpir relieve» (en el mapa o en la vista 3D): clic derecho eleva, clic izquierdo hunde">Esculpir relieve…</button><button id="btnSculptClear" title="Quita todo el relieve esculpido">Borrar relieve</button></div>
@@ -441,6 +441,14 @@
         <p class="hint">Se ubica en la línea de meta de la ruta principal (herramienta «Meta» para moverla). Se exporta en el .glb con el pivote en la base, al centro de la calzada.</p>
       </section>
 
+      <section class="panel" data-panel="rivers">
+        <h2>Ríos y cascadas <span class="badge" id="riverCount">0</span></h2>
+        <p class="hint">Con <b>Ríos y cascadas</b> (barra superior) pintas ríos sobre el terreno; con un cerro seleccionado, lo que pintes sobre él es una cascada de ese cerro. Si empiezas sobre un río, lo extiendes, y si el trazo se abre, se bifurca. <b>Posado</b>: solo el agua sobre la superficie. <b>Socavado</b>: la superficie se hunde (profundidad, paredes suaves o de roca y su densidad de geometría) y el agua queda dentro del cauce. Alt o clic derecho borra.</p>
+        <div class="row gap"><button id="btnRiverTool">Pintar ríos…</button><button id="btnRiverClear">Borrar todos</button></div>
+        <div id="riverList" class="list"></div>
+        <p class="hint" id="riverInfo"></p>
+      </section>
+
       <section class="panel" data-panel="trees">
         <h2>Árboles y hierba</h2>
         <div class="collapsible" id="treesBlock">
@@ -551,8 +559,9 @@
           <button data-tool="start" title="Clic sobre la pista para fijar la meta">Meta</button>
           <button data-tool="ref" title="Mover y escalar la imagen de referencia (arrastra la imagen o su esquina)">Referencia</button>
           <button data-tool="hill" title="Pinta cerros (suaves o paredes rocosas); si cubren la pista se crea un túnel. Alt o clic derecho borra">Pintar cerros</button>
-          <button data-tool="paint" title="Pinta zonas del terreno que tendrán más polígonos (Alt o clic derecho borra)">Pintar densidad</button>
+          <button data-tool="paint" title="Pinta zonas del terreno (o del cerro seleccionado) que tendrán más polígonos (Alt o clic derecho borra)">Pintar subdivisión</button>
           <button data-tool="sculpt" title="Esculpe el terreno: clic derecho eleva, clic izquierdo hunde (en el mapa o en la vista 3D). [ y ] cambian el pincel">Esculpir relieve</button>
+          <button data-tool="river" title="Pinta ríos sobre el terreno; con un cerro seleccionado, lo que pintes sobre él es una cascada. Empezar sobre un río lo extiende (y se bifurca). Alt o clic derecho borra">Ríos y cascadas</button>
           <button data-tool="flat" title="Arrastra sobre la pista para marcar un tramo plano">Zona plana</button>
           <span class="sep"></span>
           <button id="btnGenTerrain" class="gen">Generar terreno</button>
@@ -567,6 +576,7 @@
           <span id="paintBox" class="row" hidden>
             <label class="small">Pincel <input type="range" id="paintBrush" min="3" max="200" step="1" style="width:90px"> <span class="val" id="paintBrushVal"></span></label>
             <label class="small" id="paintSubdivLbl" title="Subdivisiones extra de las pinceladas que hagas ahora (cada lado de la celda se divide n + 1 veces)">Subdiv. <input type="range" id="paintSubdiv" min="1" max="6" step="1" style="width:70px"> <span class="val" id="paintSubdivVal"></span></label>
+            <span class="small muted" id="paintHillHint" hidden></span>
             <label class="check small" id="paintEraseLbl"><input type="checkbox" id="paintErase"> Borrar</label>
           </span>
           <span id="sculptBox" class="row" hidden>
@@ -578,6 +588,15 @@
             <select id="hillHard" style="font-size:12px"><option value="soft">Colina suave</option><option value="hard">Pared rocosa</option></select>
             <label class="small">Cima plana <input type="range" id="hillFlatBar" min="0" max="1" step="0.05" style="width:70px"></label>
             <span class="small muted" title="Sobre un cerro existente: arrastrar pinta un cerro nuevo encima; con Shift agranda (o borra) el cerro original">sobre un cerro: nuevo encima · Shift = el original</span>
+          </span>
+          <span id="riverBox" class="row" hidden>
+            <select id="riverMode" style="font-size:12px" title="Geometría del río o cascada nuevo"><option value="surface">Posado</option><option value="carved">Socavado</option></select>
+            <span id="riverCarvedBox" class="row" style="gap:6px">
+              <label class="small">Prof. <input type="range" id="riverDepth" min="0.2" max="20" step="0.1" style="width:70px"> <span class="val" id="riverDepthVal"></span></label>
+              <select id="riverWalls" style="font-size:12px" title="Paredes del cauce"><option value="smooth">Paredes suaves</option><option value="rock">Paredes de roca</option></select>
+              <label class="small" title="Subdivisiones extra de las paredes socavadas">Dens. paredes <input type="range" id="riverWallSubdiv" min="0" max="6" step="1" style="width:56px"> <span class="val" id="riverWallSubdivVal"></span></label>
+            </span>
+            <span class="small muted">cerro seleccionado = cascada</span>
           </span>
           <span id="editBox" class="row" hidden>
             <button id="btnTbRadius">Radio</button>

@@ -2,6 +2,7 @@
 // glTF usa Y arriba: se rota la raíz para que Blender / 3ds Max la importen con Z arriba y en metros.
 import * as THREE from 'three';
 import { GLTFExporter } from '../vendor/exporters/GLTFExporter.js';
+import { buildRivers } from './rivers.js';
 import { buildTrackMesh, coveredRanges, terrainTint, buildTerrain, buildTrees, buildHills, buildStartGate, buildGrass, makeGround, bridgePillars } from './scene.js';
 import { pillarGeometry } from './tunnels.js';
 import { buildEdgeMeshes } from './edges.js';
@@ -56,7 +57,8 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
   let tm = null, covAll = [];
   let terrain = null, HS = null;
   const tt = tex(textures.terrain);
-  if (sp.terrain || (hills && hills.length)) {
+  const riverList = [...((paint && !Array.isArray(paint) && paint.rivers) || []), ...(hills || []).flatMap((h) => h.falls || [])];
+  if (sp.terrain || (hills && hills.length) || riverList.length) {
     terrain = buildTerrain(layout, elev, sp, paint);
     if (sp.terrain) {
       const cols = terrainTint(terrain, !!tt);
@@ -80,6 +82,18 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
       root.add(hg);
       const hillMat = new THREE.MeshStandardMaterial({ name: 'cerro', color: tt ? 0xffffff : 0x6f7d45, map: tt, roughness: 1, metalness: 0 });
       for (const h of HS.hills) if (h.indices.length) hg.add(mesh(h.name, h.positions, h.indices, h.uvs, hillMat));
+    }
+    // ríos y cascadas: un objeto por cada uno (rio_NN / cascada_NN), con materiales distintos
+    if (riverList.length) {
+      const RW = buildRivers(terrain, HS, riverList);
+      if (RW.length) {
+        const rg = new THREE.Group();
+        rg.name = 'rios';
+        root.add(rg);
+        const riverMat = new THREE.MeshStandardMaterial({ name: 'rio', color: 0x2f86d6, roughness: 0.12, metalness: 0.05, transparent: true, opacity: 0.85 });
+        const fallMat = new THREE.MeshStandardMaterial({ name: 'cascada', color: 0xbfe8ff, roughness: 0.25, metalness: 0, transparent: true, opacity: 0.9 });
+        for (const w of RW) rg.add(mesh(w.name, w.positions, w.indices, w.uvs, w.kind === 'fall' ? fallMat : riverMat));
+      }
     }
     // túneles: paredes, techo, veredas, bocas, estalactitas, rocas y cada pilar como objetos propios
     if (HS.tunnelGeo.length) {

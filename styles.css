@@ -235,8 +235,8 @@ button .hk { display: inline-block; margin-left: 6px; padding: 0 4px; border: 1p
 .hk-dialog { position: fixed; z-index: 2147483001; background: var(--panel2); border: 1px solid #ffd54f; border-radius: 8px; padding: 10px 12px; font-size: 12px; line-height: 1.5; box-shadow: 0 10px 30px rgba(0,0,0,0.5); max-width: 320px; }
 .hk-dialog kbd { background: var(--panel); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
 /* sección resaltada desde un atajo de la barra */
-.panel.focus-ring { outline: 1px solid #ffd54f; outline-offset: -1px; border-radius: 6px; background-image: linear-gradient(rgba(255, 213, 79, 0.11), rgba(255, 213, 79, 0.11)); }
-.panel.focus-ring.floating h2 { background-image: linear-gradient(rgba(255, 213, 79, 0.16), rgba(255, 213, 79, 0.16)); }
+.panel.focus-ring { outline: 1px solid rgba(255, 213, 79, 0.55); outline-offset: -1px; border-radius: 6px; background-image: linear-gradient(rgba(255, 213, 79, 0.055), rgba(255, 213, 79, 0.055)); }
+.panel.focus-ring.floating h2 { background-image: linear-gradient(rgba(255, 213, 79, 0.08), rgba(255, 213, 79, 0.08)); }
 .tri-stats .sel { margin-top: 3px; color: #ffe082; }
 .tun-link { color: var(--accent2); cursor: pointer; text-decoration: underline dotted; }
 .tun-link.on { color: #ffd54f; font-weight: 600; }
@@ -251,11 +251,11 @@ button .hk { display: inline-block; margin-left: 6px; padding: 0 4px; border: 1p
 .item-sel { font-size: 12px; margin: 4px 0 8px; color: #ffe082; }
 .item-sel:empty { display: none; }
 #editBox button.ready { border-color: #ffd54f; color: #ffe082; }
-.igroup.sel { border-color: #ffd54f; background: rgba(255, 213, 79, 0.08); }
+.igroup.sel { border-color: #ffd54f; background: rgba(255, 213, 79, 0.04); }
 #altList .item { cursor: pointer; }
-#altList .item.sel { border-color: #ffd54f; background: rgba(255, 213, 79, 0.08); }
+#altList .item.sel { border-color: #ffd54f; background: rgba(255, 213, 79, 0.04); }
 #crossList .item { cursor: pointer; }
-#crossList .item.sel { border-color: #ffd54f; background: rgba(255, 213, 79, 0.08); }
+#crossList .item.sel { border-color: #ffd54f; background: rgba(255, 213, 79, 0.04); }
 
 /* diálogo «Abrir» con miniaturas */
 .open-dialog-back { position: fixed; inset: 0; z-index: 2147483000; background: rgba(5,7,12,0.62); display: flex; align-items: center; justify-content: center; padding: 16px; }
@@ -315,4 +315,7 @@ button.small svg.bi { width: 11px; height: 11px; }
 .alt-card .abody h4.mini { margin: 8px 0 3px; }
 .alt-card img.athumb.inherited { opacity: 0.45; }
 .alt-card .adirtBox.disabled, .alt-card .abarBox.disabled { opacity: 0.45; pointer-events: none; }
-.alt-card.sel { box-shadow: 0 0 0 2px #ffe066 inset, 0 0 12px rgba(255, 224, 102, 0.35); }
+.alt-card.sel { box-shadow: 0 0 0 1px rgba(255, 224, 102, 0.55) inset, 0 0 6px rgba(255, 224, 102, 0.17); }
+/* ríos y cascadas */
+.river-card .rcarved.disabled { opacity: 0.45; pointer-events: none; }
+#riverList .item.sel { border-color: rgba(63, 167, 255, 0.7); background: rgba(63, 167, 255, 0.05); }

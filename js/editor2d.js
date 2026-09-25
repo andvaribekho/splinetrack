@@ -95,7 +95,7 @@ export class Editor2D {
       const [sx, sy] = this.eventPos(e);
       cv.setPointerCapture(e.pointerId);
       const tool = this.app.state.tool;
-      if ((tool === 'paint' || tool === 'hill' || tool === 'itemPaint' || tool === 'sculpt') && (e.button === 0 || e.button === 2)) {
+      if ((tool === 'paint' || tool === 'hill' || tool === 'itemPaint' || tool === 'sculpt' || tool === 'river') && (e.button === 0 || e.button === 2)) {
         this.painting = { kind: tool, erase: e.button === 2 || e.altKey || (tool !== 'sculpt' && this.app.state.paintErase), ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey, last: null };
         const p0 = this.toLayout(sx, sy);
         this.app.beginPaint(tool, this.painting, p0);
@@ -232,7 +232,7 @@ export class Editor2D {
       // hover sobre la ruta principal
       const s = this.app.nearestMainS(p, 25 / this.view.zoom);
  const tl = this.app.state.tool;
-      if (tl === 'paint' || tl === 'hill' || tl === 'itemPaint' || tl === 'sculpt') { this.paintCursor = p; cv.style.cursor = 'none'; this.draw(); return; }
+      if (tl === 'paint' || tl === 'hill' || tl === 'itemPaint' || tl === 'sculpt' || tl === 'river') { this.paintCursor = p; cv.style.cursor = 'none'; this.draw(); return; }
       if (tl === 'pan' && this.app.itemAtLayout(p, 6 / this.view.zoom)) { cv.style.cursor = 'move'; return; }
       if (tl === 'pan' && this.app.state.ref3d && this.app.state.ref3d.sel && !this.app.state.ref3d.locked && this.hitRef3d(p)) { cv.style.cursor = 'move'; return; }
       if (tl === 'pan' && this.app.bridgeAtLayout(p, 3 / this.view.zoom) != null) { cv.style.cursor = 'ew-resize'; if (s !== this.hoverS) { this.hoverS = s; this.app.setHover(s, 'map'); } return; }
@@ -337,9 +337,9 @@ export class Editor2D {
     const A = side(1), B = side(-1);
     ctx.save();
     // relleno suave + bordes amarillos (deja ver la textura del tablero)
-    ctx.fillStyle = 'rgba(255,224,102,0.16)';
+    ctx.fillStyle = 'rgba(255,224,102,0.08)';
     ctx.beginPath(); A.forEach(([x, y], k) => (k ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); for (let k = B.length - 1; k >= 0; k--) ctx.lineTo(B[k][0], B[k][1]); ctx.closePath(); ctx.fill();
-    ctx.strokeStyle = '#ffe066'; ctx.lineWidth = 2.5; ctx.lineJoin = 'round';
+    ctx.strokeStyle = 'rgba(255,224,102,0.6)'; ctx.lineWidth = 2.5; ctx.lineJoin = 'round';
     for (const E of [A, B]) { ctx.beginPath(); E.forEach(([x, y], k) => (k ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.stroke(); }
     // flecha doble a lo ancho: se arrastra para desplazar el puente hacia un borde
     const jm = (((Math.round((i0 + i1) / 2)) % r.n) + r.n) % r.n;
@@ -370,17 +370,17 @@ export class Editor2D {
     const path = () => { ctx.beginPath(); for (let i = 0; i < r.n; i++) { const [lx, ly] = L.toLayout(r.x[i], r.y[i]); const [x, y] = this.toScreen(lx, ly); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); } };
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     // halo
-    ctx.shadowColor = 'rgba(255,224,102,0.95)'; ctx.shadowBlur = 16;
-    ctx.strokeStyle = 'rgba(255,224,102,0.35)'; ctx.lineWidth = wpx + 10;
+    ctx.shadowColor = 'rgba(255,224,102,0.5)'; ctx.shadowBlur = 8;
+    ctx.strokeStyle = 'rgba(255,224,102,0.17)'; ctx.lineWidth = wpx + 10;
     path(); ctx.stroke();
     ctx.shadowBlur = 0;
     // calzada iluminada
-    ctx.strokeStyle = 'rgba(255,224,102,0.55)'; ctx.lineWidth = wpx;
+    ctx.strokeStyle = 'rgba(255,224,102,0.28)'; ctx.lineWidth = wpx;
     path(); ctx.stroke();
     // bordes
     const { left, right } = this.app.edgeSamplesFor ? this.app.edgeSamplesFor(r) : { left: null, right: null };
     if (left && right) {
-      ctx.strokeStyle = '#ffe066'; ctx.lineWidth = 2;
+      ctx.strokeStyle = 'rgba(255,224,102,0.6)'; ctx.lineWidth = 2;
       for (const arr of [left, right]) { ctx.beginPath(); arr.forEach((p, i) => { const [lx, ly] = L.toLayout(p.x, p.y); const [x, y] = this.toScreen(lx, ly); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); }); ctx.stroke(); }
     }
     ctx.restore(); // (la etiqueta con el nombre se dibuja junto a las de los demás atajos, en amarillo)
@@ -489,7 +489,7 @@ export class Editor2D {
     for (const h of st.hills || []) {
       const sel = h.id === st.selHill;
       const col = sel ? '#ffd54f' : hillCol({ h: h.height, hard: h.hard });
-      this.drawStrokeLayer(h.strokes, col, sel ? 0.6 : tool === 'hill' ? 0.45 : 0.28);
+      this.drawStrokeLayer(h.strokes, col, sel ? 0.4 : tool === 'hill' ? 0.45 : 0.28);
     }
     // nombres de los cerros
     if (st.hills && st.hills.length && (tool === 'hill' || tool === 'pan' || st.selHill != null)) {
@@ -509,18 +509,25 @@ export class Editor2D {
       }
       ctx.restore();
     }
-    this.drawStrokeLayer(st.densityPaint, '#e040fb', tool === 'paint' ? 0.35 : 0.16);
+    this.drawStrokeLayer(st.densityPaint, '#e040fb', tool === 'paint' && st.selHill == null ? 0.35 : 0.16);
+    // subdivisión pintada sobre el cerro seleccionado
+    if (tool === 'paint' && st.selHill != null) { const h = st.hills.find((q) => q.id === st.selHill); if (h && h.subdiv && h.subdiv.length) this.drawStrokeLayer(h.subdiv, '#e040fb', 0.45); }
+    // ríos (azul) y cascadas (celeste)
+    for (const rv of st.rivers || []) {
+      const sel = rv.id === st.selRiver;
+      this.drawStrokeLayer(rv.strokes, rv.kind === 'fall' ? '#bfe8ff' : '#3fa7ff', tool === 'river' ? (sel ? 0.6 : 0.45) : sel ? 0.5 : 0.3);
+    }
     if (st.terrainSculpt && st.terrainSculpt.length && (tool === 'sculpt' || st.scene.terrain)) this.drawStrokeLayer(st.terrainSculpt, null, tool === 'sculpt' ? 0.4 : 0.14, (q) => (q.h > 0 ? 'rgb(255,160,70)' : 'rgb(80,160,255)'));
     if (tool === 'itemPaint') this.drawStrokeLayer(this.app.itemPaintStrokes(), this.app.itemPaintColor(), 0.4);
     // cursor del pincel
-    if ((tool === 'paint' || tool === 'hill' || tool === 'itemPaint' || tool === 'sculpt') && this.paintCursor && st.layout) {
+    if ((tool === 'paint' || tool === 'hill' || tool === 'itemPaint' || tool === 'sculpt' || tool === 'river') && this.paintCursor && st.layout) {
       const [x, y] = this.toScreen(this.paintCursor[0], this.paintCursor[1]);
       const erase = (this.painting && this.painting.erase) || st.paintErase;
       ctx_stroke: {
         const ctx = this.ctx;
-        ctx.strokeStyle = tool === 'sculpt' ? (this.painting ? (this.painting.erase ? '#ffa046' : '#50a0ff') : '#7ec8ff') : erase ? '#ff8a80' : tool === 'hill' ? '#e0a050' : tool === 'itemPaint' ? this.app.itemPaintColor() : '#e040fb';
+        ctx.strokeStyle = tool === 'sculpt' ? (this.painting ? (this.painting.erase ? '#ffa046' : '#50a0ff') : '#7ec8ff') : erase ? '#ff8a80' : tool === 'hill' ? '#e0a050' : tool === 'river' ? '#3fa7ff' : tool === 'itemPaint' ? this.app.itemPaintColor() : '#e040fb';
         ctx.lineWidth = 1.5;
-        const rm = tool === 'hill' ? st.scene.hillBrush : tool === 'sculpt' ? st.scene.sculptBrush : st.scene.paintBrush;
+        const rm = tool === 'hill' ? st.scene.hillBrush : tool === 'sculpt' ? st.scene.sculptBrush : tool === 'river' ? st.scene.riverBrush : st.scene.paintBrush;
         ctx.beginPath(); ctx.arc(x, y, (rm / st.layout.scale) * this.view.zoom, 0, Math.PI * 2); ctx.stroke();
       }
     }
@@ -803,7 +810,7 @@ export class Editor2D {
     const L = st.layout, E = st.result;
     // trazo crudo
     if (st.showRaw || !L) this.drawRaw();
-    if (st.scene && (st.tool === 'paint' || st.tool === 'hill' || st.tool === 'itemPaint' || st.tool === 'sculpt' || st.scene.terrain || (st.hills && st.hills.length))) this.drawPaint();
+    if (st.scene && (st.tool === 'paint' || st.tool === 'hill' || st.tool === 'itemPaint' || st.tool === 'sculpt' || st.tool === 'river' || (st.rivers && st.rivers.length) || st.scene.terrain || (st.hills && st.hills.length))) this.drawPaint();
     if (L && st.ref3d && st.ref3d.fp && st.ref3d.visible !== false && st.ref3d.show2d !== false) this.drawRef3d(L, st.ref3d);
     if (L) this.drawLayout(L, E);
     if (L && E) this.drawItems(L);
