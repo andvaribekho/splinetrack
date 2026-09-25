@@ -218,6 +218,19 @@
         <p class="hint">El tablero de cada puente (el tramo con el ancho del puente) usa esta textura, café por defecto; las transiciones que se angostan usan la de la pista. Mismo tiling que la pista. Se exporta como <code>puentes/puente_NN</code>.</p>
       </section>
 
+      <section class="panel" data-panel="trackmesh">
+        <h2>Geometría de la pista</h2>
+        <div class="seg" id="trackMeshMode" role="group" aria-label="Reparto de la geometría">
+          <button data-mode="uniform" title="Secciones a distancia pareja en toda la pista">Uniforme</button>
+          <button data-mode="optimized" title="Más secciones en curvas, cambios de pendiente, peralte y ancho; menos en las rectas">Optimizado</button>
+        </div>
+        <div class="field"><label>Densidad de polígonos <span class="val"><input type="number" id="trackDensityNum" min="1" max="100" step="1" style="width:56px"> %</span></label><input type="range" id="trackDensity" min="1" max="100" step="1"></div>
+        <div class="field"><label>Máximo de triángulos <span class="val"><input type="number" id="trackMaxTrisNum" min="200" step="500" style="width:84px"></span></label><input type="range" id="trackMaxTris" min="1000" max="300000" step="1000"></div>
+        <div class="field" id="trackAdaptBox"><label>Optimización <span class="val" id="trackAdaptVal"></span></label><input type="range" id="trackAdapt" min="0" max="1" step="0.01">
+          <div class="range-ends"><span>mínimo: curvas con algo más</span><span>máximo: rectas con mucho menos</span></div></div>
+        <p class="hint" id="trackMeshInfo"></p>
+      </section>
+
       <section class="panel" data-panel="terrain">
         <h2>Terreno</h2>
         <label class="check"><input type="checkbox" id="terrain"> Agregar terreno bajo la pista</label>
@@ -284,17 +297,18 @@
         </div>
         <div class="field" id="caveBox"><label>Tamaño de la caverna <span class="val" id="caveSizeVal"></span></label><input type="range" id="caveSize" min="0" max="1" step="0.05"></div>
         <div class="field">
-          <label>Costado abierto</label>
+          <label>Costado abierto (general)</label>
           <select id="tunnelOpen">
             <option value="none">Cerrado</option>
             <option value="left">Abierto a la izquierda (con pilares)</option>
             <option value="right">Abierto a la derecha (con pilares)</option>
           </select>
         </div>
-        <div class="field" id="pillarBox"><label>Pilares por túnel <span class="val" id="tunnelPillarsVal"></span></label><input type="range" id="tunnelPillars" min="1" max="40" step="1"></div>
+        <div class="field" id="pillarBox"><label>Pilares por túnel (general) <span class="val" id="tunnelPillarsVal"></span></label><input type="range" id="tunnelPillars" min="1" max="40" step="1"></div>
         <div class="field"><label>Grosor del marco de la boca <span class="val" id="portalFrameVal"></span></label><input type="range" id="portalFrame" min="0.2" max="5" step="0.1"></div>
         <div class="field"><label>Cuánto sobresale la boca <span class="val" id="portalDepthVal"></span></label><input type="range" id="portalDepth" min="0" max="5" step="0.1"></div>
         <p class="hint" id="tunnelInfo"></p>
+        <div id="tunnelSelBox" class="item sel" hidden></div>
       </section>
 
       <section class="panel" data-panel="items">

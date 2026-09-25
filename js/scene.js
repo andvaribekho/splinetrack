@@ -2,13 +2,17 @@
 // Todo en metros, Z arriba. Devuelve arrays planos listos para three.js o para exportar.
 import { SpatialGrid, rng, clamp, smoothstep } from './geometry.js';
 import Delaunator from '../vendor/delaunator.js';
-import { hillFieldOne, detectTunnels, tunnelTop, buildTunnelGeometry, portalBox, frameAt } from './tunnels.js';
+import { hillFieldOne, detectTunnels, tunnelTop, buildTunnelGeometry, applyTunnelOverrides, portalBox, frameAt } from './tunnels.js';
 
 export const DEFAULT_SCENE = {
   // pista
   trackTexDir: 'vertical', // 'vertical' = la textura corre a lo largo de la pista en V; 'horizontal' = en U
   trackTexReps: 100, // repeticiones a lo largo de la ruta principal
   trackTexOpacity: 1, // opacidad de la textura en la vista 3D (0 = solo colores por altura)
+  trackMeshMode: 'uniform', // 'uniform' = secciones a distancia pareja; 'optimized' = más secciones en curvas que en rectas
+  trackDensity: 100, // 1..100: separación entre secciones de 16 m (1) a la del muestreo (100)
+  trackMaxTris: 200000, // tope de triángulos de la pista (manda sobre la densidad)
+  trackAdapt: 0.5, // 0..1 (optimizado): 0 = las curvas tienen algo más que las rectas; 1 = las rectas mucho menos
   skirts: true, // faldones laterales hacia el terreno
   // terreno
   terrain: false,
@@ -36,7 +40,8 @@ export const DEFAULT_SCENE = {
   tunnelRoof: 2.5, // m de cerro mínimo sobre el techo
   tunnelType: 'artificial', // 'artificial' | 'natural'
   caveSize: 0.3, // 0..1
-  tunnelOpen: 'none', // 'none' | 'left' | 'right'
+  tunnelOpen: 'none', // 'none' | 'left' | 'right' (valor general; cada túnel puede tener el suyo)
+  tunnelOverrides: [], // [{k, s, open, pillars}] ajustes propios por túnel
   tunnelPillars: 8,
   paintBrush: 25, // radio del pincel en m
   // árboles
@@ -93,20 +98,112 @@ function trackSamples(layout, elev) {
   return out;
 }
 
+/** Tramo de puente (índice en r.bridges) que contiene la posición sv, o -1. */
+function bridgeIndexAt(r, sv) {
+  if (!r.bridges) return -1;
+  for (let bi = 0; bi < r.bridges.length; bi++) {
+    const b = r.bridges[bi];
+    const d = r.closed ? (((sv - b.s0) % r.L) + r.L) % r.L : sv - b.s0;
+    if (d >= -1e-6 && d <= b.s1 - b.s0 + 1e-6) return bi;
+  }
+  return -1;
+}
+
+/**
+ * Qué muestras de cada ruta se usan como secciones de la malla (densidad del trazado).
+ * Uniforme: a distancia pareja. Optimizado: el mismo presupuesto repartido según cuánto cambia la pista
+ * (curvatura en planta, curvatura vertical, peralte y ancho), así las rectas llevan menos secciones que las curvas.
+ * Devuelve por ruta la lista creciente de filas q (0..n, n = vuelta completa en rutas cerradas).
+ */
+export function trackRows(layout, elev, spIn = {}) {
+  const sp = { ...DEFAULT_SCENE, ...spIn };
+  const cols = sp.skirts ? 5 : 3;
+  const d = clamp(sp.trackDensity ?? 100, 1, 100);
+  const per = layout.routes.map((r) => {
+    const nq = r.closed ? r.n : r.n - 1; // segmentos entre muestras
+    const hmax = Math.max(16, r.ds);
+    const h = Math.exp(Math.log(hmax) + (Math.log(r.ds) - Math.log(hmax)) * (d - 1) / 99);
+    return { r, nq, N: Math.max(2, Math.min(nq, Math.ceil(r.L / h))) };
+  });
+  // tope de triángulos
+  const trisOf = (list) => list.reduce((a, p) => a + p.N * (cols - 1) * 2, 0);
+  const cap = Math.max(200, sp.trackMaxTris || Infinity);
+  const t0 = trisOf(per);
+  if (t0 > cap) for (const p of per) p.N = Math.max(2, Math.floor(p.N * cap / t0));
+  const opt = sp.trackMeshMode === 'optimized';
+  const ratio = Math.exp(Math.log(1.6) + (Math.log(25) - Math.log(1.6)) * clamp(sp.trackAdapt ?? 0.5, 0, 1));
+  return per.map(({ r, nq, N }, k) => {
+    const e = elev.routes[k];
+    const n = r.n;
+    const at = (q) => ((q % n) + n) % n;
+    // filas obligatorias: extremos y bordes de los tableros de puente
+    const must = new Set([0, nq]);
+    if (r.bridges && r.bridges.length) {
+      for (let q = 0; q < nq; q++) {
+        const a = bridgeIndexAt(r, r.s[at(q)]), b = bridgeIndexAt(r, q + 1 === n ? 0 : r.s[at(q + 1)]);
+        if (a !== b) { must.add(q); must.add(q + 1); }
+      }
+    }
+    let rowsSet;
+    if (!opt) {
+      rowsSet = new Set(must);
+      for (let j = 0; j <= N; j++) rowsSet.add(Math.round((j * nq) / N));
+    } else {
+      // cuánto cambia la pista en cada segmento (0..1), ensanchado para que la densidad llegue antes de la curva
+      const c = new Float64Array(nq);
+      const ds = r.ds;
+      for (let q = 0; q < nq; q++) {
+        const i = at(q), ip = r.closed ? at(q - 1) : Math.max(0, q - 1), inx = r.closed ? at(q + 1) : Math.min(n - 1, q + 1);
+        const kPlan = Math.abs(r.k[i]) * 40; // radio 40 m = máximo
+        const zpp = e && e.z ? Math.abs(e.z[inx] - 2 * e.z[i] + e.z[ip]) / (ds * ds) * 50 : 0; // curvatura vertical (radio 50 m = máximo)
+        const roll = e && e.roll ? Math.abs(e.roll[inx] - e.roll[ip]) / (2 * ds) * 60 : 0; // cambio de peralte
+        const dw = Math.abs(r.w[inx] - r.w[ip]) / (2 * ds) * 6; // cambio de ancho
+        c[q] = Math.min(1, Math.max(kPlan, zpp, roll, dw));
+      }
+      const half = Math.max(1, Math.round(6 / ds));
+      const cm = new Float64Array(nq);
+      for (let q = 0; q < nq; q++) { // máximo móvil
+        let m = 0;
+        for (let o = -half; o <= half; o++) { const j = r.closed ? ((q + o) % nq + nq) % nq : Math.min(nq - 1, Math.max(0, q + o)); if (c[j] > m) m = c[j]; }
+        cm[q] = m;
+      }
+      const cum = new Float64Array(nq + 1);
+      for (let q = 0; q < nq; q++) cum[q + 1] = cum[q] + 1 + (ratio - 1) * cm[q];
+      const Wt = cum[nq];
+      const pick = (Nt) => {
+        const set = new Set(must);
+        let q = 0;
+        for (let j = 0; j <= Nt; j++) {
+          const target = (j * Wt) / Nt;
+          while (q < nq && cum[q + 1] < target) q++;
+          set.add(target - cum[q] < cum[Math.min(nq, q + 1)] - target ? q : Math.min(nq, q + 1));
+        }
+        return set;
+      };
+      // en las curvas el reparto puede pedir más de una sección por muestra: se queda en una (el muestreo es el límite),
+      // así la proporción entre rectas y curvas se respeta y el total nunca supera al uniforme
+      rowsSet = pick(N);
+    }
+    return [...rowsSet].filter((q) => q >= 0 && q <= nq).sort((a, b) => a - b);
+  });
+}
+
 /** Malla de la pista con UV (a lo largo x a lo ancho) y faldones opcionales. */
 export function buildTrackMesh(layout, elev, spIn = {}) {
   const sp = { ...DEFAULT_SCENE, ...spIn };
   const Lmain = layout.routes[0].L;
   const repsPerM = Math.max(0.01, sp.trackTexReps) / Lmain;
   const skirt = sp.skirts ? sp.terrainGap + 0.8 : 0;
+  const rowLists = trackRows(layout, elev, sp);
   const parts = layout.routes.map((r, k) => {
     const pos = [], uv = [], idx = [];
     const e = elev.routes[k];
     const n = r.n;
-    const rows = r.closed ? n + 1 : n;
+    const qList = rowLists[k];
+    const rows = qList.length;
     // columnas: [faldón izq], izq, centro, der, [faldón der]
     const cols = sp.skirts ? 5 : 3;
-    for (let q = 0; q < rows; q++) {
+    for (const q of qList) {
       const i = q % n;
       const s = q === n ? r.L : r.s[i];
       const along = s * repsPerM;
@@ -141,7 +238,8 @@ export function buildTrackMesh(layout, elev, spIn = {}) {
       return -1;
     };
     for (let q = 0; q < rows - 1; q++) {
-      const sa = r.s[q % n], sb = q + 1 === n ? r.L : r.s[(q + 1) % n];
+      const qa = qList[q], qb = qList[q + 1];
+      const sa = r.s[qa % n], sb = qb === n ? r.L : r.s[qb % n];
       const ba = bridgeOf(sa), bb = bridgeOf(sb === r.L && r.closed ? 0 : sb);
       const tgt = ba >= 0 && ba === bb ? bIdx[ba] : idx;
       for (let c2 = 0; c2 < cols - 1; c2++) {
@@ -174,7 +272,7 @@ export function buildTrackMesh(layout, elev, spIn = {}) {
     if (p.bridgeIdx.some((b) => b.length)) Object.assign(p, compactMesh(p.positions, p.uvs, p.indices));
     delete p.bridgeIdx; delete p.bridgeNo;
   }
-  return { positions, uvs, indices, trackCount, parts, bridgeParts };
+  return { positions, uvs, indices, trackCount, parts, bridgeParts, rows: rowLists.map((q) => q.length) };
 }
 
 /** Deja solo los vértices usados por los índices. */
@@ -286,10 +384,10 @@ export function buildHills(layout, elev, spIn, T, hills) {
   if (!fields.length) return res;
   const combined = { sample: (x, y) => { let m = 0; for (const { f } of fields) { if (x < f.minX || y < f.minY || x > f.maxX || y > f.maxY) continue; const v = f.sample(x, y); if (v > m) m = v; } return m; } };
   const tun = detectTunnels(layout, elev, combined, sp);
+  applyTunnelOverrides(layout, tun.runs, sp);
   res.tunnels = tun.runs;
   const runById = new Map(tun.runs.map((t) => [t.id, t]));
   const natural = sp.tunnelType === 'natural';
-  const openSide = sp.tunnelOpen === 'left' ? 1 : sp.tunnelOpen === 'right' ? -1 : 0;
   const box = portalBox(sp, layout.routes[0].w[0]);
   const cover = Math.max(sp.tunnelRoof, box.thick + 0.3);
   const tunId = new Int32Array(S.length).fill(-1);
@@ -307,8 +405,8 @@ export function buildHills(layout, elev, spIn, T, hills) {
       const top = tunnelTop(sp, t, ss);
       const vault = natural ? top / sp.tunnelHeight : 1;
       const half = Math.max(sp.tunnelWidth, p.w + 1) / 2 * vault + (natural ? 0.6 + 3 * sp.caveSize : 0) + 1;
-      const q = { ...p, tun: id, top, half };
-      tunReach = Math.max(tunReach, half + box.thick + 2 + (openSide ? 2 * sp.tunnelWidth : 0));
+      const q = { ...p, tun: id, top, half, open: t.openSide || 0 };
+      tunReach = Math.max(tunReach, half + box.thick + 2 + (t.openSide ? 2 * sp.tunnelWidth : 0));
       tunGrid.insert(p.x, p.y, q);
     }
   }
@@ -359,7 +457,7 @@ export function buildHills(layout, elev, spIn, T, hills) {
         const nt = nearTunnel(x, y, tunReach);
         if (nt) {
           const { p, u } = nt;
-          const onOpen = openSide && Math.sign(u) === openSide && Math.abs(u) > p.w / 2;
+          const onOpen = p.open && Math.sign(u) === p.open && Math.abs(u) > p.w / 2;
           if (onOpen) {
             if (Math.abs(u) < p.half + 2 * sp.tunnelWidth) z = Math.min(z, p.z - gap - 0.5); // lado abierto: se despeja
           } else if (Math.abs(u) < p.half + 1 + box.thick) {

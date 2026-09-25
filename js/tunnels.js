@@ -287,6 +287,33 @@ function meshOut(pos, uv, idx) {
  * Mallas de cada túnel, todas separadas: paredes, techo, veredas, boca de entrada, boca de salida,
  * estalactitas, rocas y pilares. opts.collarIn = cuánto se mete el marco de la boca dentro del cerro.
  */
+/**
+ * Ajustes propios de cada túnel (costado abierto y pilares). sp.tunnelOverrides = [{k, s, open, pillars}], anclados
+ * por ruta y posición s (el centro del túnel al crearlos); un ajuste vale para el túnel que contiene su s.
+ * Deja en cada túnel: t.openSide (+1 izq, -1 der, 0 cerrado), t.pillarCount, t.custom y t.key (índice del ajuste).
+ */
+export function applyTunnelOverrides(layout, runs, sp) {
+  const ov = Array.isArray(sp.tunnelOverrides) ? sp.tunnelOverrides : [];
+  const side = (o) => (o === 'left' ? 1 : o === 'right' ? -1 : 0);
+  for (const t of runs) {
+    const r = layout.routes[t.k];
+    let key = -1;
+    ov.forEach((o, i) => {
+      if (key >= 0 || !o || o.k !== t.k) return;
+      let ss = o.s;
+      if (r.closed) { while (ss < t.e0 - 5) ss += r.L; while (ss > t.e1 + 5) ss -= r.L; }
+      if (ss >= t.e0 - 5 && ss <= t.e1 + 5) key = i;
+    });
+    const o = key >= 0 ? ov[key] : null;
+    t.key = key;
+    t.custom = !!o;
+    t.openMode = o && o.open ? o.open : sp.tunnelOpen || 'none';
+    t.openSide = side(t.openMode);
+    t.pillarCount = o && Number.isFinite(o.pillars) ? Math.max(0, Math.round(o.pillars)) : sp.tunnelPillars;
+  }
+  return runs;
+}
+
 export function buildTunnelGeometry(layout, elev, spIn, runs, opts = {}) {
   const sp = spIn;
   const out = [];
@@ -303,7 +330,7 @@ export function buildTunnelGeometry(layout, elev, spIn, runs, opts = {}) {
     const prof = tunnelProfile(sp.tunnelShape, W, Hb, Nreq);
     const N = prof.length;
     const { a: ca, b: cb } = profileSplit(prof);
-    const open = sp.tunnelOpen === 'left' ? 1 : sp.tunnelOpen === 'right' ? -1 : 0; // lado abierto: +1 izquierda
+    const open = t.openSide ?? (sp.tunnelOpen === 'left' ? 1 : sp.tunnelOpen === 'right' ? -1 : 0); // lado abierto: +1 izquierda (propio de cada túnel)
     const ns = Math.max(2, Math.ceil((t.e1 - t.e0) / step));
     const amp = natural ? 0.4 + 2.6 * sp.caveSize : 0;
     const keep = prof.map(([u, v]) => !(open && Math.sign(u) === open && v < Hb * 0.72 && Math.abs(u) > W * 0.2));
@@ -488,8 +515,9 @@ export function buildTunnelGeometry(layout, elev, spIn, runs, opts = {}) {
     }
     // pilares en el lado abierto: cubo estirado con pivote en su base
     const pillars = [];
-    if (open && sp.tunnelPillars > 0 && openEdge.length > 1) {
-      const n = sp.tunnelPillars;
+    const nPil = t.pillarCount ?? sp.tunnelPillars;
+    if (open && nPil > 0 && openEdge.length > 1) {
+      const n = nPil;
       for (let k2 = 0; k2 < n; k2++) {
         const f = (k2 + 0.5) / n;
         const s = t.s0 + (t.s1 - t.s0) * f;
@@ -507,7 +535,8 @@ export function buildTunnelGeometry(layout, elev, spIn, runs, opts = {}) {
     const rocks = { positions: new Float32Array(rPos), indices: rIdx };
     const tris = (walls.indices.length + ceiling.indices.length + walkways.indices.length + portals.reduce((a2, p) => a2 + p.geo.indices.length, 0) + sIdx.length + rIdx.length) / 3 + pillars.length * 12;
     out.push({
-      id: t.id, name: `tunel_${String(t.id + 1).padStart(2, '0')}`, len: t.s1 - t.s0, k: t.k,
+      id: t.id, name: `tunel_${String(t.id + 1).padStart(2, '0')}`, len: t.s1 - t.s0, k: t.k, sMid: (t.s0 + t.s1) / 2,
+      openMode: t.openMode ?? sp.tunnelOpen, pillarCount: nPil, custom: !!t.custom, key: t.key ?? -1,
       walls, ceiling, walkways, portals, stalactites, rocks, pillars, tris, box,
     });
   }

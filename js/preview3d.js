@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { OrbitControls } from '../vendor/OrbitControls.js';
 import { TransformControls } from '../vendor/TransformControls.js';
 import { edgeSamples } from './export.js';
-import { buildTrackMesh, buildTerrain, buildTrees, buildHills, buildStartGate, buildGrass, makeGround, bridgePillars } from './scene.js';
+import { buildTrackMesh, trackRows, buildTerrain, buildTrees, buildHills, buildStartGate, buildGrass, makeGround, bridgePillars } from './scene.js';
 import { pillarGeometry } from './tunnels.js';
 import { makeBannerCanvas, makeCheckerCanvas, makeGrassCanvas, makePadCanvas, makeGlowCanvas, makeAsphaltCanvas, makeBridgeCanvas } from './gatetex.js';
 
@@ -262,8 +262,19 @@ export class Preview3D {
         w.material.needsUpdate = true;
         // desplaza el sólido para que las líneas no parpadeen
         m.material.polygonOffset = true;
-        m.material.polygonOffsetFactor = 1;
-        m.material.polygonOffsetUnits = 1;
+        m.material.polygonOffsetFactor = grp === this.trackGroup ? 2 : 1;
+        m.material.polygonOffsetUnits = grp === this.trackGroup ? 2 : 1;
+      }
+    }
+    // capa de textura de la pista: entre la base (+2) y las líneas (0); sin wireframe va delante de la base (-1).
+    // (el desplazamiento de polígonos no se aplica a las líneas, por eso la textura se aleja en vez de acercar las líneas)
+    for (const m of this.trackGroup.children) {
+      if (!m.userData.texOverlay) continue;
+      for (const mt of Array.isArray(m.material) ? m.material : [m.material]) {
+        mt.polygonOffset = true;
+        mt.polygonOffsetFactor = this.wire.on ? 1 : -1;
+        mt.polygonOffsetUnits = this.wire.on ? 1 : -1;
+        mt.needsUpdate = true;
       }
     }
     this.needsFrame = true;
@@ -322,6 +333,13 @@ export class Preview3D {
       this.trackGroup.add(ov);
     }
     this.triCounts.track = tm.indices.length / 3;
+    if (this.app.onTrackMeshInfo) {
+      const rowsN = tm.rows.reduce((a, b) => a + b, 0);
+      let uniTris = null;
+      if (sp.trackMeshMode === 'optimized') uniTris = trackRows(L, E, { ...sp, skirts: sp.terrain && sp.skirts, trackMeshMode: 'uniform' }).reduce((a, q) => a + (q.length - 1), 0) * ((sp.terrain && sp.skirts) ? 4 : 2) * 2;
+      const samples = L.routes.reduce((a, r) => a + (r.closed ? r.n + 1 : r.n), 0);
+      this.app.onTrackMeshInfo({ rows: rowsN, tris: tm.indices.length / 3, uniTris, samples });
+    }
     this.updateStats();
     this.applyWireframe();
     g.computeBoundingBox();
@@ -567,7 +585,7 @@ export class Preview3D {
             tris += 12;
           }
           info.tunnelTris += tris;
-          info.tunnels.push({ id: t.id, name: t.name, len: t.len, pillars: t.pillars.length, tris });
+          info.tunnels.push({ id: t.id, name: t.name, len: t.len, pillars: t.pillars.length, tris, k: t.k, sMid: t.sMid, openMode: t.openMode, pillarCount: t.pillarCount, custom: t.custom, key: t.key });
           this.objTris.tunnels.set(t.id, { name: t.name, tris });
         }
       }
@@ -607,6 +625,7 @@ export class Preview3D {
           gm.userData.exag = { base: new Float32Array(pos.array), shift: Float32Array.from({ length: pos.count }, (_, v) => sh[Math.floor(v / 8)]) };
         }
         gm.userData.noWire = true;
+        gm.userData.veg = 'grass';
         this.extras.add(gm);
       }
       info.grass = GR.count;
@@ -625,6 +644,7 @@ export class Preview3D {
           const pos = g.getAttribute('position');
           tm.userData.exag = { base: new Float32Array(pos.array), shift: Float32Array.from({ length: pos.count }, (_, v) => per[Math.floor(v / 10)]) };
         }
+        tm.userData.veg = 'trees';
         this.extras.add(tm);
       }
       info.trees = TR.count;
@@ -685,7 +705,8 @@ export class Preview3D {
     const ndc = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
     const ray = new THREE.Raycaster();
     ray.setFromCamera(ndc, this.camera);
-    const objs = [...this.itemsGroup.children, ...this.hillMeshes, ...(this.tunnelMeshes || []), ...(this.terrainMesh ? [this.terrainMesh] : []), ...this.trackGroup.children];
+    const veg = this.extras.children.filter((o) => o.isMesh && o.userData.veg);
+    const objs = [...this.itemsGroup.children, ...this.hillMeshes, ...(this.tunnelMeshes || []), ...(this.terrainMesh ? [this.terrainMesh] : []), ...this.trackGroup.children, ...veg];
     const h = ray.intersectObjects(objs, false);
     const ud = h.length ? h[0].object.userData : {};
     const onTrack = h.length && this.trackGroup.children.includes(h[0].object);
@@ -693,6 +714,11 @@ export class Preview3D {
     if (altHit == null && !ud.item && this.app.state.selAlt != null) this.app.selectAlt(null);
     if (this.app.state.selBridge != null && !(onTrack && this.app.bridgeAtWorld(h[0].point.x, h[0].point.y) === this.app.state.selBridge)) this.app.selectBridge(null);
     if (h.length && h[0].object === this.terrainMesh && this.app.focusPanel) this.app.focusPanel('terrain'); // clic en el terreno: sus parámetros
+    if (ud.veg) { // árboles o hierba: sus parámetros
+      this.app.selectHill(null);
+      if (this.app.focusPanel) this.app.focusPanel('trees', ud.veg === 'grass' ? document.getElementById('grass') : document.getElementById('trees'));
+      return;
+    }
     if (ud.item) this.app.selectItem(ud.item);
     else if (altHit != null) this.app.selectAlt(altHit);
     else if (onTrack && this.app.bridgeAtWorld && this.app.bridgeAtWorld(h[0].point.x, h[0].point.y) != null) this.app.selectBridge(this.app.bridgeAtWorld(h[0].point.x, h[0].point.y));

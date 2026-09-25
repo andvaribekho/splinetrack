@@ -121,6 +121,45 @@ function refreshTunnelInfo() {
   if (!tl.length) { el.textContent = 'Ningún cerro cubre la pista lo suficiente para un túnel (debe superar la altura libre + techo); donde la cruza, la pista pasa en trinchera.'; return; }
   el.innerHTML = `${tl.length} túnel(es): ${tl.map((t) => `<span class="tun-link${t.id === state.selTunnel ? ' on' : ''}" data-id="${t.id}">${t.name}</span> ${t.len.toFixed(0)} m (${t.tris.toLocaleString('es')} tri.)`).join(' · ')}. Haz clic en un túnel (aquí o en 3D) para seleccionarlo. Cada túnel exporta paredes, techo, veredas y dos bocas por separado.`;
   el.querySelectorAll('.tun-link').forEach((a) => a.addEventListener('click', () => { const id = +a.dataset.id; selectTunnel(state.selTunnel === id ? null : id); }));
+  refreshTunnelSel();
+}
+/** Tarjeta del túnel seleccionado: costado abierto y pilares propios (si no, usa los valores generales). */
+function refreshTunnelSel() {
+  const box = $('tunnelSelBox');
+  if (!box || draggingIn(box)) return;
+  const t = (state.tunnelInfo || []).find((q) => q.id === state.selTunnel);
+  box.hidden = !t;
+  if (!t) { box.innerHTML = ''; return; }
+  const sc = state.scene;
+  const ov = (sc.tunnelOverrides || [])[t.key] || null;
+  const openOwn = ov && ov.open ? ov.open : '';
+  const pilOwn = ov && Number.isFinite(ov.pillars);
+  const genName = { none: 'cerrado', left: 'abierto a la izquierda', right: 'abierto a la derecha' }[sc.tunnelOpen] || 'cerrado';
+  box.innerHTML = `<div class="head"><strong>${t.name}</strong><span class="meta">${t.len.toFixed(0)} m · ${t.tris.toLocaleString('es')} tri.</span></div>
+    <div class="field"><label>Costado abierto de este túnel</label>
+      <select class="tsOpen"><option value="">Como el general (${genName})</option><option value="none">Cerrado</option><option value="left">Abierto a la izquierda (con pilares)</option><option value="right">Abierto a la derecha (con pilares)</option></select></div>
+    <div class="field tsPilBox${t.openMode === 'none' ? ' disabled' : ''}"><label><input type="checkbox" class="tsPilOwn"${pilOwn ? ' checked' : ''}> Pilares propios <span class="val"><input type="number" class="tsPilN" min="0" max="200" step="1" style="width:56px" value="${t.pillarCount}"></span></label>
+      <input type="range" class="tsPil" min="0" max="40" step="1" value="${Math.min(40, t.pillarCount)}"${pilOwn ? '' : ' disabled'}></div>
+    <div class="row gap"><button class="tsReset"${ov ? '' : ' disabled'} title="Vuelve a usar los valores generales en este túnel">Usar valores generales</button></div>`;
+  box.querySelector('.tsOpen').value = openOwn;
+  const setOv = (patch) => {
+    const list = (sc.tunnelOverrides || []).slice();
+    const cur = (t.key >= 0 && list[t.key]) ? { ...list[t.key] } : { k: t.k, s: +t.sMid.toFixed(2) };
+    Object.assign(cur, patch);
+    if (!cur.open) delete cur.open;
+    if (!Number.isFinite(cur.pillars)) delete cur.pillars;
+    const empty = !cur.open && !Number.isFinite(cur.pillars);
+    if (t.key >= 0 && list[t.key]) { if (empty) list.splice(t.key, 1); else list[t.key] = cur; }
+    else if (!empty) { list.push(cur); t.key = list.length - 1; }
+    sc.tunnelOverrides = list;
+    sceneChanged();
+  };
+  box.querySelector('.tsOpen').addEventListener('change', (e) => setOv({ open: e.target.value || undefined }));
+  const pilSet = (v) => { v = Math.max(0, Math.min(200, Math.round(v))); box.querySelector('.tsPilN').value = v; box.querySelector('.tsPil').value = Math.min(40, v); setOv({ pillars: v }); };
+  box.querySelector('.tsPilOwn').addEventListener('change', (e) => { if (e.target.checked) pilSet(t.pillarCount); else setOv({ pillars: undefined }); });
+  box.querySelector('.tsPil').addEventListener('input', (e) => pilSet(parseFloat(e.target.value)));
+  box.querySelector('.tsPilN').addEventListener('change', (e) => { box.querySelector('.tsPilOwn').checked = true; box.querySelector('.tsPil').disabled = false; pilSet(parseFloat(e.target.value)); });
+  box.querySelector('.tsReset').addEventListener('click', () => { const list = (sc.tunnelOverrides || []).slice(); if (t.key >= 0) list.splice(t.key, 1); sc.tunnelOverrides = list; sceneChanged(); });
 }
 function clearAllSelections() {
   if (state.selAlt != null) selectAlt(null);
@@ -146,7 +185,7 @@ function deleteSelectedHill() {
 }
 function selectTunnel(id) {
   state.selTunnel = id;
-  if (id != null) setTimeout(() => { try { focusPanel('hills', $('tunnelInfo')); } catch { /* iniciando */ } }, 0);
+  if (id != null) setTimeout(() => { try { focusPanel('hills', $('tunnelSelBox').hidden ? $('tunnelInfo') : $('tunnelSelBox')); } catch { /* iniciando */ } }, 0);
   if (id != null) { state.selHill = null; if (state.selItem) { state.selItem = null; preview.buildItems(); preview.updateHandles(); refreshItemsInfo(); } }
   if (typeof refreshHillPanel === 'function') refreshHillPanel();
   if (typeof refreshTunnelInfo === 'function') refreshTunnelInfo();
@@ -2439,6 +2478,7 @@ async function openProject(text) {
     cv.getContext('2d').drawImage(img, 0, 0);
     state.image = { canvas: cv, w: cv.width, h: cv.height };
   }
+  state.scene.tunnelOverrides = []; // los ajustes por túnel son de cada proyecto
   if (d.scene) Object.assign(state.scene, d.scene);
   const toCanvas = async (url) => {
     if (!url) return null;
@@ -2621,6 +2661,12 @@ function syncSceneControls() {
   thumb('bridgeTexThumb', state.bridgeTex || defaultBridgeCanvas(), 'btnBridgeTexRemove');
   $('btnBridgeTexRemove').disabled = !state.bridgeTex;
   set('trackTexOpacity', sc.trackTexOpacity ?? 1);
+  document.querySelectorAll('#trackMeshMode button').forEach((b) => b.classList.toggle('on', b.dataset.mode === (sc.trackMeshMode || 'uniform')));
+  set('trackDensity', sc.trackDensity ?? 100); set('trackDensityNum', sc.trackDensity ?? 100);
+  set('trackMaxTris', Math.min(300000, sc.trackMaxTris ?? 200000)); set('trackMaxTrisNum', sc.trackMaxTris ?? 200000);
+  set('trackAdapt', sc.trackAdapt ?? 0.5);
+  $('trackAdaptVal').textContent = `${Math.round((sc.trackAdapt ?? 0.5) * 100)} %`;
+  $('trackAdaptBox').hidden = sc.trackMeshMode !== 'optimized';
   $('trackTexOpacityVal').textContent = `${Math.round((sc.trackTexOpacity ?? 1) * 100)} %`;
   thumb('terrainTexThumb', state.terrainTex, 'btnTerrainTexRemove');
   { const gi = $('grassTexThumb'); if (!state.grassTex && !grassDefaultCanvas) grassDefaultCanvas = makeGrassCanvas(); gi.src = (state.grassTex || grassDefaultCanvas).toDataURL('image/png'); $('btnGrassTexRemove').disabled = !state.grassTex; }
@@ -2871,6 +2917,18 @@ function bindSceneControls() {
   $('btnBridgeTex').addEventListener('click', () => $('fileBridgeTex').click());
   $('fileBridgeTex').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) loadTexture(f, 'bridgeTex'); });
   $('btnBridgeTexRemove').addEventListener('click', () => { state.bridgeTex = null; syncSceneControls(); sceneChanged(); });
+  // geometría de la pista (densidad del trazado)
+  {
+    const trackMeshChanged = () => { syncSceneControls(); preview.update(false, true); };
+    document.querySelectorAll('#trackMeshMode button').forEach((b) => b.addEventListener('click', () => { sc.trackMeshMode = b.dataset.mode; trackMeshChanged(); }));
+    const dens = (v) => { v = Math.round(Math.max(1, Math.min(100, v))); if (!isFinite(v)) return; sc.trackDensity = v; trackMeshChanged(); };
+    $('trackDensity').addEventListener('input', (e) => dens(parseFloat(e.target.value)));
+    $('trackDensityNum').addEventListener('change', (e) => dens(parseFloat(e.target.value)));
+    const cap = (v) => { v = Math.round(Math.max(200, v)); if (!isFinite(v)) return; sc.trackMaxTris = v; trackMeshChanged(); };
+    $('trackMaxTris').addEventListener('input', (e) => cap(parseFloat(e.target.value)));
+    $('trackMaxTrisNum').addEventListener('change', (e) => cap(parseFloat(e.target.value)));
+    $('trackAdapt').addEventListener('input', (e) => { sc.trackAdapt = Math.max(0, Math.min(1, parseFloat(e.target.value))); trackMeshChanged(); });
+  }
   $('trackTexOpacity').addEventListener('input', () => { sc.trackTexOpacity = parseFloat($('trackTexOpacity').value); $('trackTexOpacityVal').textContent = `${Math.round(sc.trackTexOpacity * 100)} %`; preview.update(false, true); editor.draw(); });
   $('btnTerrainTex').addEventListener('click', () => $('fileTerrainTex').click());
   $('fileTerrainTex').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) loadTexture(f, 'terrainTex'); });
@@ -2900,6 +2958,12 @@ function bindSceneControls() {
   };
   $('btnExportFBX').addEventListener('click', fbx);
   $('btnExportFBX2').addEventListener('click', fbx);
+  app.onTrackMeshInfo = (m) => {
+    const el = $('trackMeshInfo');
+    if (!el) return;
+    const f = (v) => Math.round(v).toLocaleString('es');
+    el.textContent = `${f(m.rows)} secciones de ${f(m.samples)} muestras · ${f(m.tris)} triángulos${m.uniTris ? ` (uniforme a esta densidad: ${f(m.uniTris)})` : ''}. ${state.scene.trackMeshMode === 'optimized' ? 'Las curvas, los cambios de pendiente, el peralte y los cambios de ancho reciben más secciones; las rectas, menos.' : 'Secciones a distancia pareja.'} El mapeado UV sigue la distancia recorrida, así que la textura se ve igual con más o menos secciones. El tope de triángulos manda sobre la densidad.`;
+  };
   app.onSceneInfo = (info) => {
     $('terrainInfo').textContent = state.scene.terrain ? `Terreno: ${info.terrainTris.toLocaleString('es')} triángulos, celda de ${info.terrainCell.toFixed(1)} m${info.terrainCellFine ? ` (${info.terrainCellFine.toFixed(1)} m en lo pintado)` : ''} · ${info.ms.toFixed(0)} ms. Nunca atraviesa la pista: queda al menos ${state.scene.terrainGap} m bajo su superficie.` : 'Desactivado.';
     $('treesInfo').textContent = state.scene.trees ? `${info.trees} árboles${info.treesOnHills ? ` (${info.treesOnHills} sobre cerros)` : ''}.${!(state.scene.treeOnSlopes || state.scene.treeOnTops) && state.hills.length ? ' Sin marcar laderas ni cima, solo van sobre el terreno.' : ''}` : 'Desactivado.';
@@ -2926,6 +2990,11 @@ const HINTS = {
   width: 'Ancho de la pista en metros. Se usa para el mallado, la holgura de los cruces y los avisos de horquillas.',
   altWidthSame: 'Si está marcado, los atajos tienen el mismo ancho que la pista. Desmárcalo para darles su propio ancho (con una transición en los empalmes).',
   altWidth: 'Ancho general de las rutas alternativas. Cada atajo puede tener además su propio ancho en la lista de rutas alternativas.',
+  trackDensity: 'Densidad del trazado de la pista: cuántas secciones transversales tiene la malla. 100 % = una por cada muestra de la ruta; 1 % = una cada ~16 m.',
+  trackDensityNum: 'Densidad exacta en %.',
+  trackMaxTris: 'Tope de triángulos de la pista (todas las rutas): si la densidad pide más, las secciones se separan.',
+  trackMaxTrisNum: 'Tope exacto de triángulos de la pista (puede superar el máximo del control deslizante).',
+  trackAdapt: 'Solo en «Optimizado»: al mínimo, las curvas tienen apenas algo más de geometría que las rectas; al máximo, las rectas tienen mucho menos que las curvas.',
   trackTexOpacity: 'Opacidad de la textura de la pista en las vistas 2D y 3D: bájala para ver los colores por altura que hay debajo. No cambia la exportación.',
   btnTbBridge: 'Crea un puente entre los dos extremos abiertos seleccionados (cierra el circuito), con el ancho del panel «Puntos seleccionados».',
   openOnDelete: 'Si está activado, al borrar un punto de un circuito cerrado el circuito queda abierto en ese lugar (en vez de cerrarse con un punto menos).',

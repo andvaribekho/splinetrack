@@ -202,7 +202,14 @@ export function buildLayout(project, gpIn = {}) {
     }
   }
   const main = makeSampledRoute(mainUni, closed, ds);
-  main.bridges = bridges.map((b) => ({ s0: b.i0 * main.ds, s1: (b.i0 + b.len) * main.ds, w: b.w, off: b.off || 0, idx: b.idx }));
+  main.bridges = bridges.map((b) => {
+    // s exactos de las muestras de inicio y fin (el tablero empieza y termina justo en una muestra)
+    const nn = main.n, ia = b.i0 % nn, ib = (b.i0 + b.len) % nn;
+    const s0 = main.s[ia];
+    let s1 = closed ? main.s[ib] : main.s[Math.min(nn - 1, b.i0 + b.len)];
+    if (closed && s1 < s0) s1 += main.L;
+    return { s0, s1, w: b.w, off: b.off || 0, idx: b.idx };
+  });
   main.id = 0;
   main.kind = 'main';
   main.name = 'ruta_principal';

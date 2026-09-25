@@ -5,7 +5,7 @@ import { computeElevation } from '../js/elevation.js';
 import { traceImage } from '../js/trace.js';
 import { exportBlender, exportMax, exportJSON, exportOBJ, routeSamples, bezierKnots, bezierError } from '../js/export.js';
 import { rasterize } from './raster.js';
-import { buildTerrain, buildTrees, buildTrackMesh, buildHills, buildStartGate, buildGrass, makeGround } from '../js/scene.js';
+import { buildTerrain, buildTrees, buildTrackMesh, trackRows, buildHills, buildStartGate, buildGrass, makeGround } from '../js/scene.js';
 import { edgeSamples } from '../js/export.js';
 import { computeItems, defaultGroup, itemAt } from '../js/items.js';
 import { nearestOnSamples } from '../js/geometry.js';
@@ -106,6 +106,23 @@ for (const [key, s] of Object.entries(SAMPLES)) {
       check(HS.hills.length === 2 && HS.hills.every((h) => h.tris > 50 && h.tris <= 30000 * 1.15), `${key}: mallas de cerros (${HS.hills.map((h) => h.tris).join(', ')})`);
       const g = HS.tunnelGeo[0];
       check(g && g.walls.indices.length && g.ceiling.indices.length && g.portals.length === 2 && g.portals.every((p) => p.geo.indices.length), `${key}: túnel con paredes, techo y bocas`);
+    }
+    // costado abierto y pilares propios de cada túnel (el general queda cerrado)
+    {
+      const sp0 = { terrain: true, terrainDensity: 45, terrainMaxPolys: 80000, tunnelOpen: 'none', tunnelPillars: 8 };
+      const T = buildTerrain(L, E, sp0);
+      const H0 = buildHills(L, E, sp0, T, hills);
+      if (H0.tunnels.length) {
+        const t0 = H0.tunnels[0];
+        const sp1 = { ...sp0, tunnelOverrides: [{ k: t0.k, s: (t0.s0 + t0.s1) / 2, open: 'right', pillars: 3 }] };
+        const H1 = buildHills(L, E, sp1, T, hills);
+        const g1 = H1.tunnelGeo.find((g) => g.id === t0.id), others = H1.tunnelGeo.filter((g) => g.id !== t0.id);
+        check(g1 && g1.openMode === 'right' && g1.custom && g1.pillars.length === 3, `${key}: túnel con costado y pilares propios (${g1 && g1.openMode}, ${g1 && g1.pillars.length})`);
+        check(others.every((g) => g.openMode === 'none' && g.pillars.length === 0), `${key}: los demás túneles siguen el valor general`);
+        const H2 = buildHills(L, E, { ...sp0, tunnelOpen: 'left', tunnelOverrides: [{ k: t0.k, s: (t0.s0 + t0.s1) / 2, open: 'none' }] }, T, hills);
+        const g2 = H2.tunnelGeo.find((g) => g.id === t0.id);
+        check(g2 && g2.openMode === 'none' && g2.pillars.length === 0 && H2.tunnelGeo.filter((g) => g.id !== t0.id).every((g) => g.openMode === 'left'), `${key}: un túnel cerrado con el general abierto`);
+      }
     }
     // densidad por cerro: bajar el máximo de triángulos reduce la malla
     {
@@ -227,6 +244,41 @@ for (const [key, s] of Object.entries(SAMPLES)) {
   }
 }
 
+// densidad del trazado de la pista: uniforme / optimizado, tope de triángulos y UV continuo
+{
+  const L = buildLayout(SAMPLES.shortcut.build(), { lapLength: 1000 });
+  const E = computeElevation(L, { hills: 0.5 });
+  const full = buildTrackMesh(L, E, {});
+  check(full.rows[0] === L.routes[0].n + 1, `densidad pista: 100 % usa todas las muestras (${full.rows[0]})`);
+  const uni = trackRows(L, E, { trackDensity: 40 });
+  const opt0 = trackRows(L, E, { trackDensity: 40, trackMeshMode: 'optimized', trackAdapt: 0 });
+  const opt1 = trackRows(L, E, { trackDensity: 40, trackMeshMode: 'optimized', trackAdapt: 1 });
+  const r = L.routes[0];
+  // separación promedio en tramos rectos (|k| bajo) y curvos (|k| alto)
+  const ez = E.routes[0].z, zpp = (m) => Math.abs(ez[(m + 1) % r.n] - 2 * ez[m] + ez[(m - 1 + r.n) % r.n]) / (r.ds * r.ds);
+  const gaps = (q) => { let st = [], cu = []; for (let j = 1; j < q.length; j++) { const m = Math.round((q[j] + q[j - 1]) / 2) % r.n, g = (q[j] - q[j - 1]) * r.ds; if (Math.abs(r.k[m]) < 0.002 && zpp(m) < 0.001) st.push(g); else if (Math.abs(r.k[m]) > 0.02) cu.push(g); }
+    const av = (a) => a.reduce((x, y) => x + y, 0) / Math.max(1, a.length); return [av(st), av(cu)]; };
+  const [us, uc] = gaps(uni[0]), [s0, c0] = gaps(opt0[0]), [s1, c1] = gaps(opt1[0]);
+  check(Math.abs(us / uc - 1) < 0.25, `densidad pista: uniforme parejo (recta ${us.toFixed(1)} m, curva ${uc.toFixed(1)} m)`);
+  check(s0 / c0 > 1.15 && s0 / c0 < 2.5, `densidad pista: optimizado mínimo, curvas algo más densas (×${(s0 / c0).toFixed(2)})`);
+  check(s1 / c1 > 5, `densidad pista: optimizado máximo, rectas mucho menos densas (×${(s1 / c1).toFixed(2)})`);
+  check(opt1[0].length <= uni[0].length + 2, `densidad pista: optimizado no supera al uniforme (${opt1[0].length} / ${uni[0].length})`);
+  const capped = buildTrackMesh(L, E, { trackMaxTris: 3000 });
+  check(capped.indices.length / 3 <= 3000, `densidad pista: tope de triángulos (${capped.indices.length / 3})`);
+  // UV: la coordenada a lo largo es proporcional a la distancia recorrida en cada sección
+  const tm = buildTrackMesh(L, E, { trackDensity: 30, trackMeshMode: 'optimized', trackAdapt: 1, skirts: false, trackTexReps: 100 });
+  const p0 = tm.parts[0], reps = 100 / r.L;
+  let worstUV = 0;
+  for (let v = 1; v < p0.positions.length / 3; v += 3) { // columna central
+    const x = p0.positions[v * 3], y = p0.positions[v * 3 + 1];
+    const nn = nearestOnSamples(r, x, y);
+    const sv = nn.s, along = p0.uvs[v * 2 + 1];
+    const d = Math.abs(along - sv * reps);
+    worstUV = Math.max(worstUV, Math.min(d, Math.abs(d - r.L * reps)));
+  }
+  check(worstUV < 1e-3, `densidad pista: UV a lo largo sigue la distancia (${worstUV.toExponential(1)})`);
+}
+
 // puentes: tramo entre dos puntos de control con ancho propio
 {
   const proj = SAMPLES.oval.build();
@@ -252,6 +304,12 @@ for (const [key, s] of Object.entries(SAMPLES)) {
   check(TM.trackCount > 0 && TM.trackCount < TM.indices.length, 'puente: índices de pista y de tablero separados');
   const tpart = TM.parts[0];
   check(tpart.indices.every((i) => i < tpart.positions.length / 3) && TM.bridgeParts[0].indices.every((i) => i < TM.bridgeParts[0].positions.length / 3), 'puente: mallas compactadas válidas');
+  // con la pista optimizada y poca densidad el tablero sigue exacto (secciones obligatorias en sus bordes)
+  const TO = buildTrackMesh(LB, EB, { trackDensity: 10, trackMeshMode: 'optimized', trackAdapt: 1 });
+  const bp = TO.bridgeParts[0];
+  let zmin = Infinity, zmax = -Infinity;
+  if (bp) for (let v = 0; v < bp.positions.length / 3; v++) { const nn = nearestOnSamples(r, bp.positions[v * 3], bp.positions[v * 3 + 1]); zmin = Math.min(zmin, nn.s); zmax = Math.max(zmax, nn.s); }
+  check(bp && Math.abs(zmin - b.s0) < 0.6 && Math.abs(zmax - b.s1) < 0.6, `puente: tablero exacto con pista optimizada (${zmin.toFixed(1)}–${zmax.toFixed(1)} vs ${b.s0.toFixed(1)}–${b.s1.toFixed(1)})`);
 }
 
 // puentes desplazados hacia un borde: el borde del puente sigue el borde de la pista

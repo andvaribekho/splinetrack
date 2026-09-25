@@ -275,3 +275,10 @@ button .hk { display: inline-block; margin-left: 6px; padding: 0 4px; border: 1p
 .od-img em { position: absolute; right: 6px; bottom: 5px; font-style: normal; font-size: 10px; color: var(--muted); background: rgba(0,0,0,0.5); padding: 1px 5px; border-radius: 3px; }
 .od-name { margin-top: 6px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .od-meta { color: var(--muted); font-size: 11px; margin-top: 2px; }
+
+/* interruptor de dos opciones (uniforme / optimizado) */
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; margin: 2px 0 8px; }
+.seg button { border: 0; border-radius: 0; padding: 5px 14px; background: var(--panel2); color: var(--muted); }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button.on { background: #3a2c12; color: #ffd28a; }
+.range-ends { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--muted); margin-top: 1px; }
