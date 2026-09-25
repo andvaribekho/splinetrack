@@ -151,6 +151,8 @@ export class ProfileView {
     const Lm = L.routes[0].L;
     const v = E.validation;
     let zmin = v.zMin, zmax = v.zMax;
+    const GL = this.app.state.groundLine; // el nivel del suelo también entra en la escala (se ve la zanja)
+    if (GL && GL.z.length) for (const z of GL.z) { if (Number.isFinite(z)) { zmin = Math.min(zmin, z); zmax = Math.max(zmax, z); } }
     const need = Math.max(4, (zmax - zmin) * 1.15);
     const mid = (zmax + zmin) / 2;
     zmin = mid - need / 2; zmax = mid + need / 2;
@@ -247,6 +249,21 @@ export class ProfileView {
       ctx.fillRect(sx(0), f.y0, sx(sf) - sx(0), f.y1 - f.y0);
       ctx.fillRect(sx(Lm - sf), f.y0, sx(Lm) - sx(Lm - sf), f.y1 - f.y0);
     }
+    // nivel natural del suelo (café): bajo esta línea la pista va socavada
+    const GL = this.app.state.groundLine;
+    if (GL && GL.s.length > 1) {
+      ctx.beginPath();
+      GL.s.forEach((sv, k) => { const x = sx(sv), y = sy(Math.max(zmin, Math.min(zmax, GL.z[k]))); if (k) ctx.lineTo(x, y); else ctx.moveTo(x, y); });
+      ctx.lineTo(sx(GL.s[GL.s.length - 1]), f.y1); ctx.lineTo(sx(GL.s[0]), f.y1); ctx.closePath();
+      ctx.fillStyle = 'rgba(141,90,43,0.12)'; ctx.fill();
+      ctx.beginPath();
+      GL.s.forEach((sv, k) => { const x = sx(sv), y = sy(Math.max(zmin, Math.min(zmax, GL.z[k]))); if (k) ctx.lineTo(x, y); else ctx.moveTo(x, y); });
+      ctx.strokeStyle = 'rgba(176,118,60,0.85)'; ctx.lineWidth = 1.2; ctx.stroke();
+    }
+    // tramos suspendidos: banda celeste
+    for (const c of this.app.state.scene.suspRanges || []) { ctx.fillStyle = 'rgba(90,216,255,0.07)'; ctx.fillRect(sx(c.s0), f.y0, sx(c.s1) - sx(c.s0), f.y1 - f.y0); }
+    // secciones socavadas: banda café
+    for (const c of this.app.state.scene.cutRanges || []) { ctx.fillStyle = 'rgba(141,90,43,0.10)'; ctx.fillRect(sx(c.s0), f.y0, sx(c.s1) - sx(c.s0), f.y1 - f.y0); }
     // perfiles dibujados (violeta) y tramo elegido para dibujar (amarillo suave)
     for (const Z of this.app.profileZonesS ? this.app.profileZonesS() : []) {
       ctx.fillStyle = 'rgba(186,120,255,0.08)';
@@ -332,14 +349,16 @@ export class ProfileView {
         const ms = this.app.state.selSet;
         const isSel = (sel && sel.key === pt.key && sel.idx === pt.idx) || (ms && ms.key === pt.key && ms.idxs.has(pt.idx));
         ctx.lineWidth = 2;
+        const cut = pt.k === 0 && this.app.ctrlInCut && this.app.ctrlInCut(pt.key, pt.idx); // sección socavada: café
+        const susp = !cut && pt.k === 0 && this.app.ctrlInSusp && this.app.ctrlInSusp(pt.key, pt.idx); // tramo suspendido: celeste
         if (pt.pin !== null) {
-          ctx.fillStyle = isSel ? '#ffe066' : '#f2a93b';
-          ctx.strokeStyle = '#3a2400';
+          ctx.fillStyle = isSel ? '#ffe066' : cut ? '#8d5a2b' : susp ? '#5ad8ff' : '#f2a93b';
+          ctx.strokeStyle = cut || susp ? '#f2a93b' : '#3a2400';
           ctx.beginPath(); ctx.moveTo(x, y - 6); ctx.lineTo(x + 6, y); ctx.lineTo(x, y + 6); ctx.lineTo(x - 6, y); ctx.closePath();
           ctx.fill(); ctx.stroke();
         } else {
-          ctx.fillStyle = isSel ? '#ffe066' : '#0e1117';
-          ctx.strokeStyle = pt.k > 0 ? '#4fb3ff' : '#ffffff';
+          ctx.fillStyle = isSel ? '#ffe066' : cut ? '#8d5a2b' : susp ? '#5ad8ff' : '#0e1117';
+          ctx.strokeStyle = pt.k > 0 ? '#4fb3ff' : cut ? '#c89060' : susp ? '#bff0ff' : '#ffffff';
           ctx.beginPath(); ctx.arc(x, y, isSel ? 5 : 3.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
         }
       }

@@ -802,10 +802,12 @@ export class Editor2D {
         ctx.beginPath();
         if (pinned) { const q = isSel ? 6.5 : 5; ctx.rect(x - q, y - q, q * 2, q * 2); }
         else ctx.arc(x, y, isSel ? 6.5 : 4.5, 0, Math.PI * 2);
-        ctx.fillStyle = isSel ? '#ffe066' : pinned ? '#f2a93b' : alt ? '#cfe9ff' : '#ffffff';
+        const cut = r.key === 'main' && this.app.ctrlInCut && this.app.ctrlInCut('main', i); // sección socavada: café
+        const susp = !cut && r.key === 'main' && this.app.ctrlInSusp && this.app.ctrlInSusp('main', i); // tramo suspendido: celeste
+        ctx.fillStyle = isSel ? '#ffe066' : cut ? '#8d5a2b' : susp ? '#5ad8ff' : pinned ? '#f2a93b' : alt ? '#cfe9ff' : '#ffffff';
         ctx.fill();
         ctx.lineWidth = 2;
-        ctx.strokeStyle = isSel ? '#8a5a00' : alt ? '#1d6fb8' : '#b8741a';
+        ctx.strokeStyle = isSel ? '#8a5a00' : cut ? (pinned ? '#f2a93b' : '#3b2410') : susp ? (pinned ? '#f2a93b' : '#0f4a5c') : alt ? '#1d6fb8' : '#b8741a';
         ctx.stroke();
       });
     }

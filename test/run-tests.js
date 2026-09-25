@@ -601,6 +601,29 @@ for (const [key, s] of Object.entries(SAMPLES)) {
   check(okN, 'barrera de grosor 0: plano de una cara mirando a la calzada');
 }
 
+// sección socavada: la pista baja y abre una zanja con paredes (el resto del terreno no se deforma)
+{
+  const L = buildLayout(SAMPLES.oval.build(), { lapLength: 1000 });
+  const r = L.routes[0];
+  const s0 = 300, s1 = 520;
+  const E0 = computeElevation(L, { hills: 0.3 });
+  const zS = E0.routes[0].z[Math.round(s0 / r.ds)];
+  const E = computeElevation(L, { hills: 0.3, profileZones: [{ s0, s1, pts: [[0, zS], [0.3, zS - 8], [0.7, zS - 8], [1, zS]] }] });
+  const sp = { terrain: true, terrainDensity: 50, terrainMaxPolys: 150000 };
+  const i = Math.round(410 / r.ds), x = r.x[i], y = r.y[i], zt = E.routes[0].z[i];
+  const lx = -r.ty[i], ly = r.tx[i], hw = r.w[i] / 2;
+  const TN = buildTerrain(L, E, sp); // sin sección socavada: el terreno baja con la pista
+  const TA = buildTerrain(L, E, { ...sp, cutRanges: [{ k: 0, s0, s1, walls: 'art', wallSubdiv: 3 }] });
+  const TR = buildTerrain(L, E, { ...sp, cutRanges: [{ k: 0, s0, s1, walls: 'nat', wallSubdiv: 3 }] });
+  const at = (T, u) => T.sample(x + lx * u, y + ly * u);
+  const g = TA.ctx.groundAt(x + lx * (hw + 15), y + ly * (hw + 15));
+  check(Math.abs(at(TA, 0) - (zt - 0.35)) < 1.2, `sección socavada: piso de la zanja bajo la pista (${(at(TA, 0) - zt).toFixed(2)} m)`);
+  check(at(TA, hw + 6) > zt + 4 && at(TN, hw + 6) < zt + 3, `sección socavada: el terreno junto a la zanja no baja (${(at(TN, hw + 6) - zt).toFixed(1)} → ${(at(TA, hw + 6) - zt).toFixed(1)} m)`);
+  check(TA.cutWalls && TA.cutWalls.art && TA.cutWalls.art.tris > 20 && !TA.cutWalls.nat, `sección socavada: paredes artificiales aparte (${TA.cutWalls && TA.cutWalls.art && TA.cutWalls.art.tris})`);
+  check(TR.cutWalls && TR.cutWalls.nat && TR.cutWalls.nat.tris > 20, 'sección socavada: paredes naturales (roca) aparte');
+  check(Number.isFinite(g) && g > zt + 4, `sección socavada: nivel natural del suelo sobre la pista (${(g - zt).toFixed(1)} m)`);
+}
+
 // tramos cubiertos (bajo cruces y en túneles): material propio, cortes exactos
 {
   const L = buildLayout(SAMPLES.figure8.build(), { lapLength: 1000 });

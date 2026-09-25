@@ -444,6 +444,18 @@
         <p class="hint">Se ubica en la línea de meta de la ruta principal (herramienta «Meta» para moverla). Se exporta en el .glb con el pivote en la base, al centro de la calzada.</p>
       </section>
 
+      <section class="panel" data-panel="cut">
+        <h2>Secciones socavadas</h2>
+        <p class="hint">Con <b>Sección socavada</b> (barra superior): selecciona dos o más puntos seguidos de la ruta principal y pulsa <b>Socavar selección</b>. Si después bajas esos puntos, el terreno no se deforma para seguirlos: la pista lo socava y se abre una zanja con paredes <b>artificiales</b> (lisas, casi verticales) o <b>naturales</b> (roca irregular). En el gráfico de perfil la línea café es el nivel natural del suelo y los puntos de las secciones socavadas se ven café.</p>
+        <div id="cutZoneList" class="list"></div>
+        <h3 class="subhead">Texturas de las paredes</h3>
+        <div class="row gap"><span class="small" style="min-width:74px">Artificiales</span><button id="cutArtTexBtn">Cargar textura…</button><button id="cutArtTexRemove" disabled>Por defecto</button><img id="cutArtTexThumb" class="thumb" hidden alt=""></div>
+        <input id="cutArtTexFile" type="file" accept="image/*" hidden>
+        <div class="row gap" style="margin-top:6px"><span class="small" style="min-width:74px">Naturales</span><button id="cutNatTexBtn">Cargar textura…</button><button id="cutNatTexRemove" disabled>Por defecto</button><img id="cutNatTexThumb" class="thumb" hidden alt=""></div>
+        <input id="cutNatTexFile" type="file" accept="image/*" hidden>
+        <div class="field"><label>Repetición de la textura <span class="val"><input type="number" id="cutWallTileNum" min="0.5" step="0.5" style="width:56px"> m</span></label><input type="range" id="cutWallTile" min="0.5" max="30" step="0.5"></div>
+      </section>
+
       <section class="panel" data-panel="susp">
         <h2>Tramos suspendidos</h2>
         <p class="hint">Con <b>Tramo suspendido</b> (barra superior) arrastra sobre la pista para marcar un tramo. Ahí el terreno no se adapta a la pista (solo se baja si llegaría a tocarla), así que puedes dejarla en el aire subiéndola con el <b>perfil de tramo</b> o las alturas de sus puntos. Cada tramo lleva pilares hasta el suelo y eliges si tiene camino de tierra y barreras. Se exportan como <code>ruta_principal_suspendido</code>, sus bordes como <code>…_suspendido_izq/der</code> y los pilares en el grupo <code>suspendidos</code>.</p>
@@ -581,6 +593,7 @@
           <button data-tool="draw" title="Dibujar la ruta principal a mano alzada">Dibujar</button>
           <button data-tool="extend" title="Continúa la pista desde un extremo (círculo verde) o redibuja un tramo empezando y terminando sobre la pista">Extender</button>
           <button data-tool="alt" title="Dibujar una ruta alternativa: empieza y termina sobre la principal">Dibujar atajo</button>
+          <button id="btnCut" title="Sección socavada: los puntos seleccionados socavan el terreno (zanja con paredes) en vez de deformarlo">Sección socavada</button>
           <button id="btnHelix" title="Helix: la pista da giros alrededor de un centro, subiendo (o bajando) en cada giro, en los puntos seleccionados">Helix</button>
           <button id="btnLoop" title="Rizo: la pista da una o más vueltas sobre sí misma en los puntos seleccionados y se cruza por arriba">Rizo</button>
           <button data-tool="start" title="Clic sobre la pista para fijar la meta">Meta</button>
@@ -617,6 +630,12 @@
             <label class="small">Cima plana <input type="range" id="hillFlatBar" min="0" max="1" step="0.05" style="width:70px"></label>
             <span class="small muted" title="Sobre un cerro existente: arrastrar pinta un cerro nuevo encima; con Shift agranda (o borra) el cerro original">sobre un cerro: nuevo encima · Shift = el original</span>
           </span>
+          <span id="cutBox" class="row" hidden>
+            <select id="cutWalls" style="font-size:12px" title="Tipo de paredes de la zanja"><option value="art">Paredes artificiales (lisas)</option><option value="nat">Paredes naturales (rocosas)</option></select>
+            <label class="small" title="Subdivisiones extra del terreno en la zanja y sus paredes">Dens. paredes <input type="range" id="cutDensity" min="0" max="6" step="1" value="2" style="width:60px"> <span class="val" id="cutDensityVal"></span></label>
+            <button id="btnCutAdd" class="primary" title="Convierte los puntos seleccionados (seguidos, ruta principal) en una sección socavada">Socavar selección</button>
+            <span class="small muted">selecciona 2+ puntos seguidos y bájalos: el terreno se abre en una zanja</span>
+          </span>
           <span id="helixBox" class="row" hidden>
             <label class="small" title="Radio de los giros en metros">Radio <input type="range" id="helixRadiusR" min="5" max="150" step="1" value="30" style="width:90px"> <input type="number" id="helixRadius" min="5" max="1000" step="1" value="30" style="width:58px"> m</label>
             <label class="small" title="Número de giros">Giros <input type="number" id="helixTurns" min="1" max="10" step="1" value="2" style="width:44px"></label>
@@ -628,6 +647,7 @@
             <label class="small" title="Cuánto sube (o baja) la pista en cada giro: la separación entre giros apilados">Z por giro <input type="range" id="helixPitch" min="2" max="20" step="0.5" value="7" style="width:70px"> <span class="val" id="helixPitchVal"></span></label>
             <select id="helixDir" style="font-size:12px"><option value="up">Sube</option><option value="down">Baja</option></select>
             <select id="helixSide" style="font-size:12px" title="Hacia qué lado gira"><option value="auto">Hacia afuera</option><option value="left">Izquierda</option><option value="right">Derecha</option></select>
+            <span class="small edit-live" id="helixEditing" hidden>editando el helix seleccionado (en vivo)</span>
             <button id="btnHelixAdd" class="primary" title="Añade el helix en los puntos seleccionados (el resto de la pista no se mueve)">Añadir helix</button>
             <span class="small muted" id="helixInfo"></span>
           </span>
@@ -637,6 +657,7 @@
             <label class="small" title="Radio de cada vuelta en metros (0 o vacío = automático, según el tramo elegido y el ancho de la pista)">Radio <input type="range" id="loopRadiusR" min="0" max="150" step="1" value="0" style="width:90px"> <input type="number" id="loopRadius" min="0" max="150" step="1" placeholder="auto" style="width:62px"> m</label>
             <label class="small" title="Tope de la barra del radio (y del número), en metros">máx. <input type="number" id="loopRadiusMax" min="5" max="5000" step="5" value="150" style="width:58px"></label>
             <select id="loopSide" style="font-size:12px" title="Hacia qué lado sale el rizo"><option value="auto">Hacia afuera</option><option value="left">Izquierda</option><option value="right">Derecha</option></select>
+            <span class="small edit-live" id="loopEditing" hidden>editando el rizo seleccionado (en vivo)</span>
             <button id="btnLoopAdd" class="primary" title="Añade el rizo en los puntos seleccionados (el resto de la pista no se mueve)">Añadir rizo</button>
             <span class="small muted" id="loopInfo"></span>
           </span>

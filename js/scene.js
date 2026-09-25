@@ -128,9 +128,11 @@ function trackSamples(layout, elev, sp = {}) {
       const low = e.z[i] - Math.abs(Math.sin(e.roll[i])) * r.w[i] / 2;
       const bridge = !!(r.bridges && r.bridges.some((b) => { const d = r.closed ? (((r.s[i] - b.s0) % r.L) + r.L) % r.L : r.s[i] - b.s0; return d >= 0 && d <= b.s1 - b.s0; }));
       const X = XR[k];
-      const susp = !!(sp.suspRanges && isCovered(layout, k, r.s[i], sp.suspRanges)); // tramo suspendido: el terreno no se adapta
+      // sección socavada: como un tramo suspendido (el terreno no se adapta), pero además la pista socava el terreno
+      const cut = sp.cutRanges && sp.cutRanges.length ? cutZoneAt(layout, k, r.s[i], sp.cutRanges) : null;
+      const susp = !!cut || !!(sp.suspRanges && isCovered(layout, k, r.s[i], sp.suspRanges)); // tramo suspendido: el terreno no se adapta
       const uL = r.w[i] / 2 + X.left, uR = r.w[i] / 2 + X.right; // calzada + camino de tierra + barrera
-      out.push({ x: r.x[i], y: r.y[i], z: low, zc: e.z[i], sr: Math.sin(e.roll[i]), tx: r.tx[i], ty: r.ty[i], w: r.w[i], uL, uR, ew: 2 * Math.max(uL, uR), k, i, s: r.s[i], j: out.length, bridge, susp });
+      out.push({ x: r.x[i], y: r.y[i], z: low, zc: e.z[i], sr: Math.sin(e.roll[i]), tx: r.tx[i], ty: r.ty[i], w: r.w[i], uL, uR, ew: 2 * Math.max(uL, uR), k, i, s: r.s[i], j: out.length, bridge, susp, cut, ds: r.ds });
     }
   });
   return out;
@@ -155,6 +157,17 @@ export function coveredRanges(layout, elev, tunnels = []) {
     out.push({ k: kl, s0: sl - half, s1: sl + half });
   }
   return out;
+}
+/** Sección socavada que contiene la posición sv de la ruta k (o null). ranges: [{k, s0, s1, walls, wallSubdiv}]. */
+export function cutZoneAt(layout, k, sv, ranges) {
+  const r = layout.routes[k];
+  for (const c of ranges) {
+    if (c.k !== k) continue;
+    let d = sv - c.s0;
+    if (r.closed) d = ((d % r.L) + r.L) % r.L;
+    if (d >= -1e-6 && d <= c.s1 - c.s0 + 1e-6) return c;
+  }
+  return null;
 }
 /** ¿La posición sv de la ruta k está en un tramo cubierto? */
 export function isCovered(layout, k, sv, ranges) {
@@ -504,6 +517,25 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
   // lo esculpido recibe más detalle (como una zona pintada de densidad)
   let paint = PI.density && PI.density.length ? PI.density : null;
   if (sculptDabs && sp.sculptDetail !== false) paint = [...(paint || []), ...sculptDabs.map((d) => ({ x: d.x, y: d.y, r: d.r, e: false }))];
+  // secciones socavadas: más detalle en la zanja y sus paredes
+  if (sp.cutRanges && sp.cutRanges.length) {
+    for (const c of sp.cutRanges) {
+      const r = layout.routes[c.k];
+      if (!r) continue;
+      const f = subdivFactor(c.wallSubdiv ?? 2);
+      if (f <= 1) continue;
+      const len = c.s1 - c.s0, step = Math.max(3, r.w[0] * 0.5);
+      const reach = c.walls === 'nat' ? 12 : 4;
+      const add = [];
+      for (let sv = c.s0; sv <= c.s1 + 1e-6; sv += step) {
+        const ss = r.closed ? ((sv % r.L) + r.L) % r.L : Math.min(r.L, sv);
+        const i = Math.min(r.n - 1, Math.round(ss / r.ds)) % r.n;
+        add.push({ x: r.x[i], y: r.y[i], r: r.w[i] / 2 + 4 + reach, e: false, f });
+      }
+      void len;
+      paint = [...(paint || []), ...add];
+    }
+  }
   for (const F of RF) {
     if (F.river.mode !== 'carved') continue;
     const f = subdivFactor(F.river.wallSubdiv ?? 2);
@@ -672,12 +704,39 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
   /** Altura de un vértice; rho = distancia máxima a la que un triángulo que lo usa puede cubrir la pista. */
   const anySusp = S.some((p) => p.susp);
   // bajo un tramo suspendido el terreno sigue su relieve natural: solo se baja si llegaría a tocar la pista
+  // secciones socavadas: la pista baja bajo el terreno y abre una zanja con paredes artificiales (casi verticales,
+  // lisas) o naturales (roca inclinada e irregular). cutInfo = altura de la zanja en (x,y) y el tipo de pared
+  const anyCut = S.some((p) => p.cut);
+  const cutNoise = valueNoise2((sp.treeSeed | 0) + 707);
+  const cutInfo = (x, y) => {
+    let best = Infinity, kind = null;
+    fine.query(x, y, maxW / 2 + 26, (p) => {
+      if (!p.cut) return;
+      const dx = x - p.x, dy = y - p.y;
+      const a = Math.abs(dx * p.tx + dy * p.ty);
+      const u = dx * -p.ty + dy * p.tx;
+      const ext = (u >= 0 ? p.uL : p.uR) + 0.4; // calzada + camino de tierra + barrera
+      const nat = p.cut.walls === 'nat';
+      const d = Math.hypot(Math.max(0, Math.abs(u) - ext), Math.max(0, a - p.ds * 0.6));
+      const floor = p.z - gap;
+      let z;
+      if (!nat) z = floor + d * 14; // muro artificial: casi vertical
+      else {
+        const n = cutNoise(x / 2.3, y / 2.3), n2 = cutNoise(x / 0.9 + 31, y / 0.9 - 17);
+        z = floor + d * (2.2 + 1.4 * n) + (d > 0.3 ? (n2 - 0.5) * 1.2 : 0); // roca: pendiente irregular
+      }
+      if (z < best) { best = z; kind = nat ? 'cutNat' : 'cutArt'; }
+    });
+    return { z: best, kind };
+  };
   const heightAt0 = anySusp ? (x, y, rho) => {
     const zone = zoneAt(x, y, rho, null, 1);
     if (zone < Infinity) return zone - gap;
-    const z = heightNat(x, y, rho);
+    let z = heightNat(x, y, rho);
     const zs = zoneAt(x, y, rho, null, 2);
-    return zs < Infinity ? Math.min(z, zs - gap) : z;
+    if (zs < Infinity) z = Math.min(z, zs - gap);
+    if (anyCut) { const ci = cutInfo(x, y); if (ci.z < z) z = ci.z; }
+    return z;
   } : (x, y, rho) => {
     const zone = zoneAt(x, y, rho);
     if (zone < Infinity) return zone - gap;
@@ -727,9 +786,17 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
   out.waterLevel = waterLevel;
   terrainColors(out, TT, waterLevel, nearestSide);
   out.rivers = RF.length;
-  // cauces socavados: sus triángulos (lecho y paredes) van aparte, con su propio material
-  if (RF.some((F) => F.river.mode === 'carved')) splitWalls(out, riverCarveAt, Math.max(0.5, sp.riverWallTile ?? 4));
-  Object.defineProperty(out, 'ctx', { value: { S, fine, maxW, gap, zoneAt, heightAt, sp, origAt, riverCarveAt, inRiver }, enumerable: false });
+  // cauces socavados (ríos) y paredes de las secciones socavadas: sus triángulos van aparte, con su propio material
+  const carvedRivers = RF.some((F) => F.river.mode === 'carved');
+  if (carvedRivers || anyCut) {
+    const cutCarve = (x, y) => { const ci = cutInfo(x, y); if (!ci.kind) return null; const zn = heightNat(x, y, 0.5); return zn - ci.z > 0.3 ? ci.kind : null; };
+    const classify = (x, y) => (carvedRivers && riverCarveAt(x, y) > 0.05 ? 'river' : anyCut ? cutCarve(x, y) : null);
+    splitParts(out, classify, { river: Math.max(0.5, sp.riverWallTile ?? 4), cutArt: Math.max(0.5, sp.cutWallTile ?? 4), cutNat: Math.max(0.5, sp.cutWallTile ?? 4) });
+    out.wall = out.parts.river || null; // compatibilidad: cauces de los ríos
+    out.cutWalls = { art: out.parts.cutArt || null, nat: out.parts.cutNat || null };
+  }
+  const groundAt = (x, y) => heightNat(x, y, 0.5); // nivel natural del suelo (sin las zanjas de las secciones socavadas)
+  Object.defineProperty(out, 'ctx', { value: { S, fine, maxW, gap, zoneAt, heightAt, sp, origAt, riverCarveAt, inRiver, groundAt }, enumerable: false });
   return out;
 }
 
@@ -1066,6 +1133,40 @@ export function buildHills(layout, elev, spIn, T, hills) {
  * malla: mesh.baseIndices (el resto) y mesh.wall = malla compacta propia con UV que no se estiran en las paredes
  * verticales. mesh.indices queda completo (muestreo de alturas).
  */
+/**
+ * Separa triángulos de la malla por tipo: classify(x, y) → clave (o null = se queda en la malla base). Deja
+ * mesh.baseIndices y mesh.parts = {clave: malla compacta con UV oblicuas (ver splitWalls)}. tiles: {clave: metros}.
+ */
+export function splitParts(mesh, classify, tiles = {}) {
+  const P = mesh.positions, I = mesh.indices;
+  const base = [], groups = {};
+  for (let t = 0; t < I.length; t += 3) {
+    const a = I[t], b = I[t + 1], c = I[t + 2];
+    const x = (P[a * 3] + P[b * 3] + P[c * 3]) / 3, y = (P[a * 3 + 1] + P[b * 3 + 1] + P[c * 3 + 1]) / 3;
+    const key = classify(x, y);
+    if (key) (groups[key] || (groups[key] = [])).push(a, b, c); else base.push(a, b, c);
+  }
+  mesh.baseIndices = new Uint32Array(base);
+  mesh.parts = {};
+  for (const [key, list] of Object.entries(groups)) {
+    const tile = tiles[key] || 4;
+    const map = new Map(), pos = [], uv = [], idx = [];
+    for (const v of list) {
+      let k = map.get(v);
+      if (k === undefined) {
+        k = pos.length / 3;
+        map.set(v, k);
+        const x = P[v * 3], y = P[v * 3 + 1], z = P[v * 3 + 2];
+        pos.push(x, y, z);
+        uv.push((x + 0.5 * z) / tile, (y + z) / tile);
+      }
+      idx.push(k);
+    }
+    mesh.parts[key] = { positions: new Float32Array(pos), uvs: new Float32Array(uv), indices: new Uint32Array(idx), tris: idx.length / 3 };
+  }
+  return mesh;
+}
+
 export function splitWalls(mesh, carveAt, tile = 4) {
   const P = mesh.positions, I = mesh.indices;
   const base = [], wall = [];

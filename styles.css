@@ -326,3 +326,5 @@ button.small svg.bi { width: 11px; height: 11px; }
 #helixBox { flex-basis: 100%; flex-wrap: wrap; gap: 6px 10px; }
 #helixInfo.warn { color: #ffb86b; }
 #helixRBox.disabled { opacity: 0.45; pointer-events: none; }
+#cutBox { flex-basis: 100%; flex-wrap: wrap; gap: 6px 10px; }
+.edit-live { color: #8fd18f; font-weight: 600; }

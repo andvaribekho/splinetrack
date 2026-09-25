@@ -34,6 +34,9 @@ const state = {
   flatZones: [], // [[ [x,y], [x,y] ], ...] en coordenadas de lienzo
   profileZones: [], // perfiles dibujados en la ruta principal: [{a:[x,y], b:[x,y], pts:[[t, z], ...]}] (extremos en coords del lienzo)
   profileSel: null, // tramo elegido para dibujar un perfil: {a, b} (coords del lienzo)
+  cutZones: [], // secciones socavadas de la ruta principal: [{a:[x,y], b:[x,y], walls: 'art'|'nat', wallSubdiv}] (coords del lienzo)
+  cutArtTex: null, cutNatTex: null, // texturas de las paredes socavadas (artificiales / naturales)
+  groundLine: null, // nivel natural del suelo a lo largo de la ruta principal {s:[], z:[]} (lo calcula la vista 3D)
   suspZones: [], // tramos suspendidos de la ruta principal: [{a:[x,y], b:[x,y], pillars, dirt, barrier}] (coords del lienzo)
   suspTex: null, suspBarrierTex: null, suspDirtTex: null, // texturas propias de los tramos suspendidos (null = las de la pista)
   image: null, // {canvas, w, h}
@@ -87,7 +90,7 @@ const state = {
 const undoStack = [];
 function snapshot() {
   const ref = state.ref ? { x: state.ref.x, y: state.ref.y, scale: state.ref.scale, opacity: state.ref.opacity } : null;
-  return JSON.stringify({ project: state.project, flatZones: state.flatZones, profileZones: state.profileZones, suspZones: state.suspZones, overrides: state.overrides, ref, refCanvas: !!state.ref, densityPaint: state.densityPaint, terrainSculpt: state.terrainSculpt, decoSets: state.decoSets, hills: state.hills, selHill: state.selHill, rivers: state.rivers, items: state.items });
+  return JSON.stringify({ project: state.project, flatZones: state.flatZones, profileZones: state.profileZones, suspZones: state.suspZones, cutZones: state.cutZones, overrides: state.overrides, ref, refCanvas: !!state.ref, densityPaint: state.densityPaint, terrainSculpt: state.terrainSculpt, decoSets: state.decoSets, hills: state.hills, selHill: state.selHill, rivers: state.rivers, items: state.items });
 }
 function pushUndo() {
   undoStack.push(snapshot());
@@ -102,6 +105,7 @@ function undo() {
   state.flatZones = o.flatZones;
   if (o.profileZones) state.profileZones = o.profileZones;
   if (o.suspZones) state.suspZones = o.suspZones;
+  if (o.cutZones) state.cutZones = o.cutZones;
   state.overrides = o.overrides;
   if (o.ref && state.ref) Object.assign(state.ref, o.ref);
   if (o.items) { state.items = o.items; if (typeof itemsChanged === 'function') { renderItemsPanel(); itemsChanged(); } }
@@ -569,6 +573,37 @@ const app = {
       const flip = s1 < s0;
       return { idx, s0: Math.min(s0, s1), s1: Math.max(s0, s1), pts: flip ? Z.pts.map(([t, z]) => [1 - t, z]).reverse() : Z.pts };
     }).filter((Z) => Z && Z.s1 - Z.s0 > 2);
+  },
+  /** Secciones socavadas en s de la ruta principal: [{k: 0, s0, s1, walls, wallSubdiv, idx}]. */
+  cutZonesS() {
+    const L = state.layout;
+    if (!L) return [];
+    return state.cutZones.map((Z, idx) => {
+      const s0 = app.nearestMainS(Z.a, Infinity), s1 = app.nearestMainS(Z.b, Infinity);
+      if (s0 === null || s1 === null) return null;
+      return { k: 0, idx, s0: Math.min(s0, s1), s1: Math.max(s0, s1), walls: Z.walls === 'nat' ? 'nat' : 'art', wallSubdiv: Z.wallSubdiv ?? 2 };
+    }).filter((Z) => Z && Z.s1 - Z.s0 > 2);
+  },
+  /** Convierte los puntos seleccionados (ruta principal, seguidos) en una sección socavada. */
+  addCutFromSelection(walls = 'art', wallSubdiv = 2) {
+    const L = state.layout;
+    if (!L) return false;
+    const sel = state.selSet && state.selSet.idxs.size ? state.selSet : null;
+    if (!sel || sel.idxs.size < 2) { toast('Selecciona dos o más puntos seguidos de la ruta principal (Editar puntos, Shift + clic o caja).'); return false; }
+    if (sel.key !== 'main') { toast('Las secciones socavadas van en la ruta principal.'); return false; }
+    const run = contiguousRun('main');
+    if (!run || run.length !== sel.idxs.size) { toast('Los puntos de la sección socavada deben ser seguidos.'); return false; }
+    const cp = app.ctrlPoints().filter((q) => q.key === 'main');
+    const sA = cp.find((c) => c.idx === run[0]).s, sB = cp.find((c) => c.idx === run[run.length - 1]).s;
+    const lo = Math.min(sA, sB), hi = Math.max(sA, sB);
+    if (hi - lo < 5) { toast('El tramo es demasiado corto.'); return false; }
+    pushUndo();
+    const cur = app.cutZonesS();
+    state.cutZones = state.cutZones.filter((Z, i) => { const c = cur.find((q) => q.idx === i); return !c || c.s1 < lo || c.s0 > hi; }); // reemplaza las que se superponen
+    state.cutZones.push({ a: app.mainLayoutAt(lo), b: app.mainLayoutAt(hi), walls, wallSubdiv });
+    scheduleElev();
+    toast(`Sección socavada entre s=${lo.toFixed(0)} y ${hi.toFixed(0)} m: baja sus puntos y el terreno se abre en una zanja con paredes ${walls === 'nat' ? 'de roca' : 'artificiales'}.`);
+    return true;
   },
   /** Tramos suspendidos en s de la ruta principal: [{k: 0, s0, s1, pillars, dirt, barrier, idx}]. */
   suspZonesS() {
@@ -1184,6 +1219,19 @@ const app = {
   dirtTexCanvas(r = null, susp = false) { return (susp && state.suspDirtTex) || (r && typeof r === 'object' && this.altOwnTex(r, 'dirt')) || state.dirtTex || defaultDirtCanvas(); },
   /** Textura propia de los tramos suspendidos (null = la de la pista). */
   suspTexCanvas() { return state.suspTex || null; },
+  cutWallTexCanvas(kind) { return (kind === 'art' ? state.cutArtTex : state.cutNatTex) || null; },
+  onGroundLine() { profile.draw(); },
+  /** ¿El punto de control está en un tramo suspendido? (solo ruta principal) */
+  ctrlInSusp(key, idx) {
+    if (key !== 'main' || !state.ctrlS || !state.ctrlS[0] || !state.layout) return false;
+    const sv = state.ctrlS[0][idx], r = state.layout.routes[0];
+    if (sv == null) return false;
+    return (state.scene.suspRanges || []).some((c) => { let d = sv - c.s0; if (r.closed) { d = ((d % r.L) + r.L) % r.L; if (d > r.L - 1.5) d -= r.L; } return d >= -1.5 && d <= c.s1 - c.s0 + 1.5; });
+  },
+  /** ¿El punto de control está en una sección socavada? (solo ruta principal) */
+  ctrlInCut(key, idx) { if (key !== 'main' || !state.ctrlS || !state.ctrlS[0]) return false; const sv = state.ctrlS[0][idx]; return sv != null && this.inCutS(sv); },
+  /** ¿La posición s de la ruta principal está en una sección socavada? */
+  inCutS(sv) { return (state.scene.cutRanges || []).some((c) => { const L = state.layout; if (!L) return false; const r = L.routes[0]; let d = sv - c.s0; if (r.closed) d = ((d % r.L) + r.L) % r.L; if (r.closed && d > r.L - 1.5) d -= r.L; return d >= -1.5 && d <= c.s1 - c.s0 + 1.5; }); }, // ±1,5 m: los puntos de los extremos cuentan
   altTexCanvas(r = null) { return (r && this.altOwnTex(r, 'track')) || state.trackTex || defaultTrackCanvas(); },
   /** Asigna (o quita, con null) una textura propia a un atajo (objeto de project.alts o índice). */
   setAltTexture(a, kind, cv) {
@@ -1342,15 +1390,69 @@ function stackedOK(L, E, o) {
   return true;
 }
 
+// ---------- rizos y helix ya creados: se pueden ajustar en vivo ----------
+/** Dónde están hoy los puntos de un rizo / helix en su ruta (índice del primero) o −1 si se editaron a mano. */
+function matchFeature(f) {
+  const arr = ctrlArray(f.key);
+  if (!arr || !f.pts || !f.pts.length) return -1;
+  const eq = (a, b) => Math.abs(a[0] - b[0]) < 1e-3 && Math.abs(a[1] - b[1]) < 1e-3;
+  for (let j = 0; j + f.pts.length <= arr.length; j++) {
+    if (!eq(arr[j], f.pts[0])) continue;
+    let ok = true;
+    for (let q = 1; q < f.pts.length && ok; q++) ok = eq(arr[j + q], f.pts[q]);
+    if (ok) return j;
+  }
+  return -1;
+}
+/** Rizo / helix bajo la selección actual (algún punto seleccionado es suyo): {f, start} o null. */
+function activeFeature(type) {
+  const feats = state.project.features || [];
+  const sel = state.selSet && state.selSet.idxs.size ? state.selSet : state.sel ? { key: state.sel.key, idxs: new Set([state.sel.idx]) } : null;
+  if (!sel) return null;
+  for (let q = feats.length - 1; q >= 0; q--) {
+    const f = feats[q];
+    if (f.type !== type || f.key !== sel.key) continue;
+    const start = matchFeature(f);
+    if (start < 0) continue;
+    for (const i of sel.idxs) if (i >= start && i < start + f.pts.length) return { f, start };
+  }
+  return null;
+}
+let featUndoAt = 0;
+/** Rehace un rizo / helix con nuevos parámetros, en el mismo lugar (el resto de los puntos no se toca). */
+function regenFeature(af, plan, params) {
+  const { f, start } = af;
+  if (plan.error) { toast(plan.error); return false; }
+  const arr = ctrlArray(f.key), za = zArray(f.key);
+  if (Date.now() - featUndoAt > 900) pushUndo(); // un paso de deshacer por cada gesto
+  featUndoAt = Date.now();
+  arr.splice(start, f.pts.length, ...plan.pts);
+  za.splice(start, f.pts.length, ...(f.type === 'helix' ? plan.zs : plan.pts.map(() => null)));
+  if (f.type === 'loop') { // separaciones propias de los cruces del rizo
+    const old = f.overrides || [];
+    state.overrides = state.overrides.filter((o) => !old.some(([x, y]) => Math.abs(o.lx - x) < 1e-3 && Math.abs(o.ly - y) < 1e-3));
+    for (const c of plan.crosses) state.overrides.push({ lx: c.lx, ly: c.ly, upDir: c.upDir, type: 'auto', sep: +params.sep });
+    f.overrides = plan.crosses.map((c) => [c.lx, c.ly]);
+  }
+  f.pts = plan.pts.map((q) => q.slice());
+  f.params = { ...params };
+  f.side = plan.side;
+  state.sel = null;
+  state.selSet = { key: f.key, idxs: new Set(plan.pts.map((_, j) => start + j)) };
+  scheduleBuild();
+  return true;
+}
+
 // ---------- helix ----------
 /**
  * Plan de un helix (espiral) sobre los puntos seleccionados: desde el primer punto la pista da «turns» giros
  * alrededor de un centro al costado, con el radio pasando de «r0» a «r1», y sube (o baja) «pitch» metros por giro;
  * después sigue hacia el último punto seleccionado (con uno solo, el siguiente). El resto de los puntos no se mueve.
  */
-function helixPlan(turns, r0, r1, pitch, dirMode = 'up', sideMode = 'auto') {
+function helixPlan(turns, r0, r1, pitch, dirMode = 'up', sideMode = 'auto', feat = null) {
   const L = state.layout, E = state.result;
   if (!L || !E) return { error: 'Primero crea o carga una pista.' };
+  if (feat) return helixGeom(L, feat.key, feat.A, feat.t, feat.z0, turns, r0, r1, pitch, dirMode, sideMode === 'left' ? 1 : sideMode === 'right' ? -1 : feat.side);
   const sel = state.selSet && state.selSet.idxs.size ? state.selSet : state.sel ? { key: state.sel.key, idxs: new Set([state.sel.idx]) } : null;
   if (!sel) return { error: 'Selecciona uno o más puntos seguidos (Editar puntos) donde irá el helix.' };
   const key = sel.key, arr = ctrlArray(key);
@@ -1374,16 +1476,26 @@ function helixPlan(turns, r0, r1, pitch, dirMode = 'up', sideMode = 'auto') {
   const [ax, ay] = L.toWorld(arr[i0][0], arr[i0][1]);
   // dirección de la pista en el primer punto
   const si = q0 ? Math.min(r.n - 1, Math.max(0, Math.round(q0.s / r.ds))) % r.n : nearestOnSamples(r, ax, ay).i;
-  const tx = r.tx[si], ty = r.ty[si];
+  const tx0 = r.tx[si], ty0 = r.ty[si];
+  let side0 = sideMode === 'left' ? 1 : sideMode === 'right' ? -1 : 0;
+  if (!side0) {
+    const r0r = L.routes[0];
+    let cx = 0, cy = 0; for (let i = 0; i < r0r.n; i++) { cx += r0r.x[i]; cy += r0r.y[i]; } cx /= r0r.n; cy /= r0r.n;
+    side0 = (ax - cx) * -ty0 + (ay - cy) * tx0 >= 0 ? 1 : -1; // hacia afuera del circuito
+  }
+  const G = helixGeom(L, key, [ax, ay], [tx0, ty0], q0 ? q0.z : 0, turns, r0, r1, pitch, dirMode, side0);
+  if (G.error) return G;
+  return { ...G, run, i0, i1 };
+}
+/** Geometría de un helix desde A (mundo) con dirección t, hacia el lado «side» (+1 izquierda); z0 = altura en A. */
+function helixGeom(L, key, A, t, z0, turns, r0, r1, pitch, dirMode, side) {
+  const k = key === 'main' ? 0 : L.routes.findIndex((q) => q.kind === 'alt' && q.altIndex === key);
+  const r = L.routes[k];
+  if (!r) return { error: 'No se encontró la ruta.' };
+  const [ax, ay] = A, [tx, ty] = t;
   const N = Math.max(1, Math.min(10, Math.round(turns)));
   const w = (r.w && r.w[0]) || state.geom.width;
   const R0 = Math.max(w * 0.9, r0), R1 = Math.max(w * 0.9, r1 > 0 ? r1 : r0);
-  let side = sideMode === 'left' ? 1 : sideMode === 'right' ? -1 : 0;
-  if (!side) {
-    const r0r = L.routes[0];
-    let cx = 0, cy = 0; for (let i = 0; i < r0r.n; i++) { cx += r0r.x[i]; cy += r0r.y[i]; } cx /= r0r.n; cy /= r0r.n;
-    side = (ax - cx) * -ty + (ay - cy) * tx >= 0 ? 1 : -1; // hacia afuera del circuito
-  }
   const nx = -ty * side, ny = tx * side; // normal hacia el centro del helix
   const Cx = ax + nx * R0, Cy = ay + ny * R0;
   const T = 2 * Math.PI * N;
@@ -1395,7 +1507,6 @@ function helixPlan(turns, r0, r1, pitch, dirMode = 'up', sideMode = 'auto') {
     return [Cx + ex * R, Cy + ey * R];
   };
   const dir = dirMode === 'down' ? -1 : 1;
-  const z0 = q0 ? q0.z : 0;
   // largo y pendiente
   let len = 0, prev = Pof(0);
   const K = Math.max(16, Math.round(16 * N * Math.max(1, Math.max(R0, R1) / 30)));
@@ -1414,7 +1525,7 @@ function helixPlan(turns, r0, r1, pitch, dirMode = 'up', sideMode = 'auto') {
   // giros apilados: si el radio cambia más que el ancho por giro, ya no quedan uno sobre otro (espiral plana)
   const stacked = Math.abs(R1 - R0) / N < w * 1.1;
   const clearOK = !stacked || pitch >= (state.elev.clearance || 6) + (state.elev.deck || 1) - 0.01;
-  return { key, run, i0, i1, pts, zs, z0, zEnd: z0 + dir * pitch * N, R0, R1, N, len, grade, side, stacked, clearOK };
+  return { key, pts, zs, z0, zEnd: z0 + dir * pitch * N, R0, R1, N, len, grade, side, stacked, clearOK, A: [ax, ay], t: [tx, ty] };
 }
 function addHelix(turns, r0, r1, pitch, dirMode, sideMode) {
   const P = helixPlan(turns, r0, r1, pitch, dirMode, sideMode);
@@ -1433,6 +1544,8 @@ function addHelix(turns, r0, r1, pitch, dirMode, sideMode) {
   }
   arr.length = 0; arr.push(...nA);
   za.length = 0; za.push(...nZ);
+  const feats = state.project.features || (state.project.features = []);
+  feats.push({ id: `f${Date.now().toString(36)}${feats.length}`, type: 'helix', key: P.key, A: P.A, t: P.t, side: P.side, z0: P.z0, params: { turns: P.N, r0, r1, pitch, dirMode, sideMode: sideMode || 'auto' }, pts: P.pts.map((q) => q.slice()) });
   state.sel = null; state.selSet = { key: P.key, idxs: new Set(newSel) }; endArc(); refreshArcBox();
   scheduleBuild();
   toast(`Helix de ${P.N} giro${P.N > 1 ? 's' : ''} (radio ${P.R0.toFixed(0)}${Math.abs(P.R1 - P.R0) > 0.5 ? `→${P.R1.toFixed(0)}` : ''} m, ${P.zEnd >= P.z0 ? 'sube' : 'baja'} ${Math.abs(P.zEnd - P.z0).toFixed(1)} m, +${P.len.toFixed(0)} m de pista).`);
@@ -1446,11 +1559,50 @@ function helixInputs() {
 function refreshHelixInfo() {
   const el = document.getElementById('helixInfo');
   if (!el) return;
-  const P = helixPlan(...helixInputs());
+  const af = activeFeature('helix');
+  $('helixEditing').hidden = !af;
+  $('btnHelixAdd').hidden = !!af;
+  const P = af ? helixPlan(...helixInputs(), af.f) : helixPlan(...helixInputs());
   const warnG = !P.error && P.grade * 100 > state.elev.maxGrade;
   el.textContent = P.error ? P.error : `+${P.len.toFixed(0)} m · ${P.zEnd >= P.z0 ? 'sube' : 'baja'} ${Math.abs(P.zEnd - P.z0).toFixed(1)} m · pendiente ≈ ${(P.grade * 100).toFixed(1)} %${warnG ? ' (sube la pendiente máxima)' : ''}${!P.clearOK ? ' · giros apilados con poca separación (menos que la altura libre + tablero)' : ''}${!P.stacked ? ' · espiral plana (los giros no quedan uno sobre otro)' : ''}`;
   el.classList.toggle('warn', !P.error && (warnG || !P.clearOK));
   $('btnHelixAdd').disabled = !!P.error;
+}
+/** Carga en los controles los parámetros del helix / rizo seleccionado (al elegir sus puntos). */
+function loadFeatureParams() {
+  const ah = activeFeature('helix'), al = activeFeature('loop');
+  if (ah && ah.f !== loadFeatureParams.lastH) {
+    const p = ah.f.params;
+    $('helixTurns').value = p.turns; $('helixPitch').value = p.pitch; $('helixDir').value = p.dirMode || 'up'; $('helixSide').value = p.sideMode || 'auto';
+    const diff = Math.abs((p.r1 || p.r0) - p.r0) > 0.01;
+    $('helixDiff').checked = diff; $('helixRadius').value = p.r0; $('helixR0').value = p.r0; $('helixR1').value = p.r1 || p.r0;
+    $('helixRadiusR').value = Math.min(+$('helixRadiusR').max, p.r0); $('helixPitchVal').textContent = `${p.pitch} m`;
+    $('helixRBox').classList.toggle('disabled', !diff);
+  }
+  if (al && al.f !== loadFeatureParams.lastL) {
+    const p = al.f.params;
+    $('loopTurns').value = p.turns; $('loopSep').value = p.sep; $('loopSide').value = p.sideMode || 'auto';
+    $('loopRadius').value = p.radius > 0 ? p.radius : ''; $('loopRadiusR').value = Math.min(+$('loopRadiusR').max, p.radius || 0); $('loopSepVal').textContent = `${p.sep} m`;
+  }
+  loadFeatureParams.lastH = ah ? ah.f : null;
+  loadFeatureParams.lastL = al ? al.f : null;
+}
+/** Con un helix seleccionado, los controles lo modifican en vivo. */
+function liveHelix() {
+  const af = activeFeature('helix');
+  if (!af) return false;
+  const inp = helixInputs();
+  const plan = helixPlan(...inp, af.f);
+  regenFeature(af, plan, { turns: inp[0], r0: inp[1], r1: inp[2], pitch: inp[3], dirMode: inp[4], sideMode: inp[5] });
+  return true;
+}
+function liveLoop() {
+  const af = activeFeature('loop');
+  if (!af) return false;
+  const turns = parseFloat($('loopTurns').value) || 1, sep = parseFloat($('loopSep').value) || 7, side = $('loopSide').value, radius = parseFloat($('loopRadius').value) || 0;
+  const plan = loopPlan(turns, sep, side, radius, af.f);
+  regenFeature(af, plan, { turns, sep, radius, sideMode: side });
+  return true;
 }
 
 // ---------- rizos ----------
@@ -1461,36 +1613,41 @@ function refreshHelixInfo() {
  * optimizador, con rampas suaves). El resto de los puntos no se mueve (la vuelta se alarga).
  * Devuelve {key, run, pts (lienzo), crosses [{lx, ly, upDir}], R, grade, len, D} o {error}.
  */
-function loopPlan(turns, sep, sideMode = 'auto', radius = 0) {
+function loopPlan(turns, sep, sideMode = 'auto', radius = 0, feat = null) {
   const L = state.layout, E = state.result;
   if (!L || !E) return { error: 'Primero crea o carga una pista.' };
-  const sel = state.selSet && state.selSet.idxs.size ? state.selSet : state.sel ? { key: state.sel.key, idxs: new Set([state.sel.idx]) } : null;
-  if (!sel) return { error: 'Selecciona uno o más puntos seguidos (Editar puntos) donde irá el rizo.' };
-  const key = sel.key, arr = ctrlArray(key);
-  if (!arr) return { error: 'Esa ruta no tiene puntos editables.' };
-  const n = arr.length;
-  const closed = key === 'main' ? state.project.main.closed !== false : false;
-  let run = sel.idxs.size > 1 ? (state.selSet ? contiguousRun(key) : null) : [[...sel.idxs][0]];
-  if (!run || (sel.idxs.size > 1 && run.length !== sel.idxs.size)) return { error: 'Los puntos del rizo deben ser seguidos.' };
-  if (run.length === 1) {
-    const i = run[0];
-    if (closed) run = [i, (i + 1) % n];
-    else if (i < n - 1) run = [i, i + 1];
-    else run = [i - 1, i];
+  let key, run, i0, i1, ax, ay, bx, by;
+  if (feat) { // rizo ya creado: se rehace con sus mismos extremos
+    key = feat.key;
+    [ax, ay] = feat.A; [bx, by] = feat.B;
+  } else {
+    const sel = state.selSet && state.selSet.idxs.size ? state.selSet : state.sel ? { key: state.sel.key, idxs: new Set([state.sel.idx]) } : null;
+    if (!sel) return { error: 'Selecciona uno o más puntos seguidos (Editar puntos) donde irá el rizo.' };
+    key = sel.key;
+    const arr = ctrlArray(key);
+    if (!arr) return { error: 'Esa ruta no tiene puntos editables.' };
+    const n = arr.length;
+    const closed = key === 'main' ? state.project.main.closed !== false : false;
+    run = sel.idxs.size > 1 ? (state.selSet ? contiguousRun(key) : null) : [[...sel.idxs][0]];
+    if (!run || (sel.idxs.size > 1 && run.length !== sel.idxs.size)) return { error: 'Los puntos del rizo deben ser seguidos.' };
+    if (run.length === 1) {
+      const i = run[0];
+      if (closed) run = [i, (i + 1) % n];
+      else if (i < n - 1) run = [i, i + 1];
+      else run = [i - 1, i];
+    }
+    i0 = run[0]; i1 = run[run.length - 1];
+    [ax, ay] = L.toWorld(arr[i0][0], arr[i0][1]); [bx, by] = L.toWorld(arr[i1][0], arr[i1][1]);
   }
-  const i0 = run[0], i1 = run[run.length - 1];
   const k = key === 'main' ? 0 : L.routes.findIndex((r) => r.kind === 'alt' && r.altIndex === key);
   const r = L.routes[k];
   if (!r) return { error: 'No se encontró la ruta.' };
-  const cp = app.ctrlPoints().filter((q) => q.key === key);
-  const zOf = (idx) => { const q = cp.find((c) => c.idx === idx); return q ? q.z : 0; };
-  const [ax, ay] = L.toWorld(arr[i0][0], arr[i0][1]), [bx, by] = L.toWorld(arr[i1][0], arr[i1][1]);
   const D = Math.hypot(bx - ax, by - ay);
   if (D < 2) return { error: 'Los puntos están demasiado juntos para un rizo.' };
   const N = Math.max(1, Math.min(8, Math.round(turns)));
   const ux = (bx - ax) / D, uy = (by - ay) / D;
   // lado: hacia afuera del circuito (o el elegido)
-  let side = sideMode === 'left' ? 1 : sideMode === 'right' ? -1 : 0;
+  let side = sideMode === 'left' ? 1 : sideMode === 'right' ? -1 : feat ? feat.side : 0;
   if (!side) {
     const r0 = L.routes[0];
     let cx = 0, cy = 0; for (let i = 0; i < r0.n; i++) { cx += r0.x[i]; cy += r0.y[i]; } cx /= r0.n; cy /= r0.n;
@@ -1540,7 +1697,7 @@ function loopPlan(turns, sep, sideMode = 'auto', radius = 0) {
     const [px, py] = L.toLayout(X, Y);
     pts.push([+px.toFixed(3), +py.toFixed(3)]);
   }
-  return { key, run, i0, i1, pts, crosses, R, Rauto, Rmin, clampedR, tight, grade, len: arcLen(0, T), D, N, side, overlap: D < needD, needD };
+  return { key, run, i0, i1, pts, crosses, R, Rauto, Rmin, clampedR, tight, grade, len: arcLen(0, T), D, N, side, overlap: D < needD, needD, A: [ax, ay], B: [bx, by] };
 }
 function addLoop(turns, sep, sideMode, radius = 0) {
   const P = loopPlan(turns, sep, sideMode, radius);
@@ -1560,6 +1717,9 @@ function addLoop(turns, sep, sideMode, radius = 0) {
   za.length = 0; za.push(...nZ);
   // separación propia de cada cruce del rizo (y qué pasada va arriba)
   for (const c of P.crosses) state.overrides.push({ lx: c.lx, ly: c.ly, upDir: c.upDir, type: 'auto', sep: +sep });
+  // se recuerda como «rizo» para poder ajustarlo después (mientras sus puntos no se editen a mano)
+  const feats = state.project.features || (state.project.features = []);
+  feats.push({ id: `f${Date.now().toString(36)}${feats.length}`, type: 'loop', key: P.key, A: P.A, B: P.B, side: P.side, params: { turns: P.N, sep: +sep, radius: radius || 0, sideMode: sideMode || 'auto' }, pts: P.pts.map((q) => q.slice()), overrides: P.crosses.map((c) => [c.lx, c.ly]) });
   state.sel = null; state.selSet = { key: P.key, idxs: new Set(newSel) }; endArc(); refreshArcBox();
   scheduleBuild();
   toast(`Rizo de ${P.N} vuelta${P.N > 1 ? 's' : ''} (radio ${P.R.toFixed(0)} m, +${P.len.toFixed(0)} m de pista, ${sep} m de separación en ${P.N > 1 ? 'cada cruce' : 'el cruce'}).`);
@@ -1568,7 +1728,10 @@ function addLoop(turns, sep, sideMode, radius = 0) {
 function refreshLoopInfo() {
   const el = document.getElementById('loopInfo');
   if (!el) return;
-  const P = loopPlan(parseFloat($('loopTurns').value) || 1, parseFloat($('loopSep').value) || 7, $('loopSide').value, parseFloat($('loopRadius').value) || 0);
+  const af = activeFeature('loop');
+  $('loopEditing').hidden = !af;
+  $('btnLoopAdd').hidden = !!af;
+  const P = loopPlan(parseFloat($('loopTurns').value) || 1, parseFloat($('loopSep').value) || 7, $('loopSide').value, parseFloat($('loopRadius').value) || 0, af ? af.f : null);
   if (!P.error && !(parseFloat($('loopRadius').value) > 0)) $('loopRadius').placeholder = `auto ${P.Rauto.toFixed(0)}`;
   el.textContent = P.error ? P.error : `radio ${P.R.toFixed(1)} m${P.clampedR ? ` (mínimo para que se cruce: ${P.Rmin.toFixed(1)} m)` : ''}${P.tight ? ' (muy cerrado para el ancho de la pista)' : ''} · +${P.len.toFixed(0)} m · pendiente ≈ ${(P.grade * 100).toFixed(1)} %${P.grade * 100 > state.elev.maxGrade ? ' (sube la pendiente máxima)' : ''}${P.overlap ? ` · las vueltas se pisan: elige puntos que abarquen ≥ ${P.needD.toFixed(0)} m` : ''}`;
   el.classList.toggle('warn', !P.error && (P.grade * 100 > state.elev.maxGrade || P.overlap || P.clampedR || P.tight));
@@ -1789,6 +1952,7 @@ function forkSelection(side, sepM) {
   toast(`Bifurcación creada ${where}: ${len.toFixed(0)} m de pista, separación máxima ${total.toFixed(0)} m${total < sep - 1 ? ' (limitada por la curva)' : ''}.`);
 }
 function refreshArcBox() {
+  if (typeof app !== 'undefined' && app.loadFeatureParams) setTimeout(() => app.loadFeatureParams(), 0);
   if (typeof app !== 'undefined' && app.refreshLoopInfo && document.getElementById('loopBox') && !document.getElementById('loopBox').hidden) setTimeout(() => app.refreshLoopInfo(), 0);
   if (typeof app !== 'undefined' && app.refreshHelixInfo && document.getElementById('helixBox') && !document.getElementById('helixBox').hidden) setTimeout(() => app.refreshHelixInfo(), 0);
   refreshForkBox();
@@ -2272,6 +2436,7 @@ function tick() {
           state.elev.flatZones = app.flatZonesS();
           state.elev.profileZones = app.profileZonesS();
           state.scene.suspRanges = app.suspZonesS();
+          state.scene.cutRanges = app.cutZonesS();
           state.result = computeElevation(state.layout, state.elev, overridesMap(state.layout), collectPins());
         } catch (err) {
           console.error(err);
@@ -2668,6 +2833,24 @@ function refreshPanels() {
   // zonas planas
   const fl = $('flatZoneList');
   fl.innerHTML = '';
+  const czl = $('cutZoneList');
+  if (czl && !draggingIn(czl)) {
+    czl.innerHTML = '';
+    const cz = app.cutZonesS();
+    state.cutZones.forEach((Z, i) => {
+      const c = cz.find((q) => q.idx === i);
+      const div = document.createElement('div');
+      div.className = 'item';
+      div.innerHTML = `<div class="head"><span><strong>socavado_${String(i + 1).padStart(2, '0')}</strong>${c ? ` · s ${c.s0.toFixed(0)}–${c.s1.toFixed(0)} m` : ''}</span><button class="x del" title="Quitar (el terreno vuelve a adaptarse a la pista)">✕</button></div>
+        <div class="field"><label>Paredes</label><select class="czW"><option value="art"${Z.walls !== 'nat' ? ' selected' : ''}>Artificiales (lisas)</option><option value="nat"${Z.walls === 'nat' ? ' selected' : ''}>Naturales (rocosas)</option></select></div>
+        <div class="field"><label>Densidad de las paredes <span class="val czV">${Z.wallSubdiv ?? 2} (×${subdivFactor(Z.wallSubdiv ?? 2)} pol.)</span></label><input type="range" class="czD" min="0" max="6" step="1" value="${Z.wallSubdiv ?? 2}"></div>`;
+      div.querySelector('.czW').addEventListener('change', (e) => { pushUndo(); Z.walls = e.target.value; scheduleElev(); });
+      div.querySelector('.czD').addEventListener('input', (e) => { Z.wallSubdiv = Math.round(parseFloat(e.target.value)); div.querySelector('.czV').textContent = `${Z.wallSubdiv} (×${subdivFactor(Z.wallSubdiv)} pol.)`; });
+      div.querySelector('.czD').addEventListener('change', () => { pushUndo(); scheduleElev(); });
+      div.querySelector('.del').addEventListener('click', () => { pushUndo(); state.cutZones.splice(i, 1); scheduleElev(); });
+      czl.appendChild(div);
+    });
+  }
   const sl = $('suspZoneList');
   if (sl && !draggingIn(sl)) {
     sl.innerHTML = '';
@@ -2867,28 +3050,45 @@ function bindControls() {
     if (!openEndsSelected()) { toast('Para un puente: abre el circuito (borra un punto con «Abrir» activado) y selecciona los dos extremos con Shift.'); return; }
     createBridge(parseFloat($('bridgeWidthNum').value) || state.geom.width);
   });
+  // sección socavada: botón de la barra con sus opciones; «Socavar selección» la crea sobre los puntos seleccionados
+  $('btnCut').addEventListener('click', () => {
+    const box = $('cutBox');
+    box.hidden = !box.hidden;
+    $('btnCut').classList.toggle('active', !box.hidden);
+    if (!box.hidden && state.tool !== 'edit') setTool('edit');
+  });
+  $('cutDensity').addEventListener('input', () => { $('cutDensityVal').textContent = $('cutDensity').value; });
+  $('cutDensityVal').textContent = $('cutDensity').value;
+  $('btnCutAdd').addEventListener('click', () => app.addCutFromSelection($('cutWalls').value, Math.round(parseFloat($('cutDensity').value))));
+  for (const [id, key] of [['cutArtTex', 'cutArtTex'], ['cutNatTex', 'cutNatTex']]) {
+    $(id + 'Btn').addEventListener('click', () => $(id + 'File').click());
+    $(id + 'File').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) loadTexture(f, key); });
+    $(id + 'Remove').addEventListener('click', () => { state[key] = null; syncSceneControls(); sceneChanged(); });
+  }
   // helix: igual que el rizo (botón de la barra con sus parámetros)
   $('btnHelix').addEventListener('click', () => {
     const box = $('helixBox');
     box.hidden = !box.hidden;
     $('btnHelix').classList.toggle('active', !box.hidden);
-    if (!box.hidden) { $('loopBox').hidden = true; $('btnLoop').classList.remove('active'); if (state.tool !== 'edit') setTool('edit'); }
+    if (!box.hidden) { $('loopBox').hidden = true; $('btnLoop').classList.remove('active'); if (state.tool !== 'edit') setTool('edit'); loadFeatureParams.lastH = null; loadFeatureParams(); }
     refreshHelixInfo();
   });
-  const helixSync = () => {
+  const helixSync = (live = true) => {
     const r = parseFloat($('helixRadius').value) || 30;
     $('helixRadiusR').value = Math.min(+$('helixRadiusR').max, r);
     $('helixRBox').classList.toggle('disabled', !$('helixDiff').checked);
     if (!$('helixDiff').checked) { $('helixR0').value = r; $('helixR1').value = r; }
     $('helixPitchVal').textContent = `${$('helixPitch').value} m`;
+    if (live === true) liveHelix(); // helix seleccionado: se ajusta en vivo
     refreshHelixInfo();
   };
-  $('helixRadiusR').addEventListener('input', (e) => { $('helixRadius').value = e.target.value; helixSync(); });
-  for (const id of ['helixRadius', 'helixTurns', 'helixDiff', 'helixR0', 'helixR1', 'helixPitch', 'helixDir', 'helixSide']) $(id).addEventListener('input', helixSync);
-  $('helixDiff').addEventListener('change', helixSync);
+  $('helixRadiusR').addEventListener('input', (e) => { $('helixRadius').value = e.target.value; helixSync(true); });
+  for (const id of ['helixRadius', 'helixTurns', 'helixDiff', 'helixR0', 'helixR1', 'helixPitch', 'helixDir', 'helixSide']) $(id).addEventListener('input', () => helixSync(true));
+  $('helixDiff').addEventListener('change', () => helixSync(true));
   $('btnHelixAdd').addEventListener('click', () => { if (addHelix(...helixInputs())) refreshHelixInfo(); });
-  helixSync();
+  helixSync(false);
   app.refreshHelixInfo = refreshHelixInfo;
+  app.loadFeatureParams = loadFeatureParams;
   // aplanar (en la barra del perfil): una sola vez, los puntos siguen editables
   $('btnFlatten').addEventListener('click', () => { app.flattenSelected(); });
   // rizo: el botón de la barra muestra sus parámetros; «Añadir rizo» lo crea en los puntos seleccionados
@@ -2896,7 +3096,7 @@ function bindControls() {
     const box = $('loopBox');
     box.hidden = !box.hidden;
     $('btnLoop').classList.toggle('active', !box.hidden);
-    if (!box.hidden) { $('helixBox').hidden = true; $('btnHelix').classList.remove('active'); if (state.tool !== 'edit') setTool('edit'); }
+    if (!box.hidden) { $('helixBox').hidden = true; $('btnHelix').classList.remove('active'); if (state.tool !== 'edit') setTool('edit'); loadFeatureParams.lastL = null; loadFeatureParams(); }
     refreshLoopInfo();
   });
   // radio: barra deslizable (0 = automático) y número (acepta más que la barra), sincronizados
@@ -2913,9 +3113,9 @@ function bindControls() {
   };
   { let m0 = 150; try { m0 = parseFloat(localStorage.getItem('tsg.loopRadiusMax')) || 150; } catch { /* sin almacenamiento */ } setLoopMax(m0, false); }
   $('loopRadiusMax').addEventListener('change', (e) => setLoopMax(parseFloat(e.target.value)));
-  $('loopRadiusR').addEventListener('input', (e) => { const v = parseFloat(e.target.value) || 0; $('loopRadius').value = v > 0 ? v : ''; refreshLoopInfo(); });
+  $('loopRadiusR').addEventListener('input', (e) => { const v = parseFloat(e.target.value) || 0; $('loopRadius').value = v > 0 ? v : ''; liveLoop(); refreshLoopInfo(); });
   $('loopRadius').addEventListener('input', (e) => { const m = parseFloat($('loopRadiusMax').value) || 150; let v = parseFloat(e.target.value) || 0; if (v > m) { v = m; e.target.value = m; } $('loopRadiusR').value = Math.max(0, v); });
-  for (const id of ['loopTurns', 'loopSep', 'loopSide', 'loopRadius']) $(id).addEventListener('input', () => { $('loopSepVal').textContent = `${$('loopSep').value} m`; refreshLoopInfo(); });
+  for (const id of ['loopTurns', 'loopSep', 'loopSide', 'loopRadius']) $(id).addEventListener('input', () => { $('loopSepVal').textContent = `${$('loopSep').value} m`; liveLoop(); refreshLoopInfo(); }); // rizo seleccionado: en vivo
   $('btnLoopAdd').addEventListener('click', () => { if (addLoop(parseFloat($('loopTurns').value), parseFloat($('loopSep').value), $('loopSide').value, parseFloat($('loopRadius').value) || 0)) refreshLoopInfo(); });
   $('loopSepVal').textContent = `${$('loopSep').value} m`;
   app.refreshLoopInfo = refreshLoopInfo;
@@ -2966,7 +3166,7 @@ function bindControls() {
   $('btnNew').addEventListener('click', () => {
     pushUndo();
     state.project = { main: null, alts: [], start: null, reverse: false };
-    state.flatZones = []; state.profileZones = []; state.profileSel = null; state.suspZones = []; state.overrides = []; state.image = null;
+    state.flatZones = []; state.profileZones = []; state.profileSel = null; state.suspZones = []; state.cutZones = []; state.overrides = []; state.image = null;
     syncControls(); scheduleBuild(); setTool('draw');
     setTimeout(() => editor.fit(), 0);
   });
@@ -3165,7 +3365,7 @@ function setImage(cv) {
   state.image = { canvas: cv, w: cv.width, h: cv.height };
   pushUndo();
   state.project = { main: null, alts: [], start: null, reverse: false };
-  state.flatZones = []; state.profileZones = []; state.profileSel = null; state.suspZones = []; state.overrides = [];
+  state.flatZones = []; state.profileZones = []; state.profileSel = null; state.suspZones = []; state.cutZones = []; state.overrides = [];
   refreshPanels();
   setTimeout(() => editor.fit(), 0);
   scheduleBuild();
@@ -3187,7 +3387,7 @@ function runTrace() {
     pushUndo();
     state.project = { main: e.data.main, alts: e.data.alts, start: null, reverse: false };
     state.closed = e.data.main.closed;
-    state.overrides = []; state.flatZones = []; state.profileZones = []; state.profileSel = null; state.suspZones = [];
+    state.overrides = []; state.flatZones = []; state.profileZones = []; state.profileSel = null; state.suspZones = []; state.cutZones = [];
     const inf = e.data.info;
     $('traceInfo').textContent = `Trazado en ${inf.ms} ms · modo: ${inf.modeName} · ${inf.crossNodes} cruce(s) y ${inf.forkNodes} bifurcación(es) en el esqueleto · ${e.data.alts.length} ruta(s) alternativa(s) · ${e.data.main.closed ? 'circuito cerrado' : 'ruta abierta'}.`;
     state.imageOpacity = Math.min(state.imageOpacity, 0.35);
@@ -3204,7 +3404,7 @@ function loadSample(k) {
   state.project = { ...s.build(), start: null, reverse: false };
   state.closed = true;
   state.geom.lapLength = s.lap || 1000;
-  state.flatZones = []; state.profileZones = []; state.profileSel = null; state.suspZones = []; state.overrides = []; state.image = null;
+  state.flatZones = []; state.profileZones = []; state.profileSel = null; state.suspZones = []; state.cutZones = []; state.overrides = []; state.image = null;
   syncControls();
   scheduleBuild();
   preview.fitted = false;
@@ -3221,7 +3421,7 @@ function saveProject() {
     stats: state.layout ? { length: Math.round(state.layout.routes[0].L), routes: state.layout.routes.length, crossings: state.result ? state.result.crossings.length : 0, hills: state.hills.length } : null,
     project: state.project, geom: state.geom, closed: state.closed,
     elev: { ...state.elev, flatZones: undefined, profileZones: undefined }, exp: state.exp, trace: state.trace,
-    overrides: state.overrides, flatZones: state.flatZones, profileZones: state.profileZones, suspZones: state.suspZones,
+    overrides: state.overrides, flatZones: state.flatZones, profileZones: state.profileZones, suspZones: state.suspZones, cutZones: state.cutZones,
     image: state.image ? state.image.canvas.toDataURL('image/png') : null,
     scene: state.scene,
     densityPaint: state.densityPaint,
@@ -3242,6 +3442,8 @@ function saveProject() {
     dirtTex: state.dirtTex ? state.dirtTex.toDataURL('image/png') : null,
     riverWallTex: state.riverWallTex ? state.riverWallTex.toDataURL('image/png') : null,
     suspTex: state.suspTex ? state.suspTex.toDataURL('image/png') : null,
+    cutArtTex: state.cutArtTex ? state.cutArtTex.toDataURL('image/png') : null,
+    cutNatTex: state.cutNatTex ? state.cutNatTex.toDataURL('image/png') : null,
     suspBarrierTex: state.suspBarrierTex ? state.suspBarrierTex.toDataURL('image/png') : null,
     suspDirtTex: state.suspDirtTex ? state.suspDirtTex.toDataURL('image/png') : null,
     fallWallTex: state.fallWallTex ? state.fallWallTex.toDataURL('image/png') : null,
@@ -3380,6 +3582,7 @@ async function openProject(text) {
   state.flatZones = d.flatZones || [];
   state.profileZones = d.profileZones || []; state.profileSel = null;
   state.suspZones = d.suspZones || [];
+  state.cutZones = d.cutZones || [];
   state.imageOpacity = d.imageOpacity ?? 0.35;
   state.image = null;
   if (d.image) {
@@ -3427,6 +3630,8 @@ async function openProject(text) {
   state.dirtTex = await toCanvas(d.dirtTex);
   state.riverWallTex = await toCanvas(d.riverWallTex);
   state.suspTex = await toCanvas(d.suspTex);
+  state.cutArtTex = await toCanvas(d.cutArtTex);
+  state.cutNatTex = await toCanvas(d.cutNatTex);
   state.suspBarrierTex = await toCanvas(d.suspBarrierTex);
   state.suspDirtTex = await toCanvas(d.suspDirtTex);
   state.fallWallTex = await toCanvas(d.fallWallTex);
@@ -3646,8 +3851,9 @@ function syncSceneControls() {
   thumb('trackTexThumb', state.trackTex || defaultTrackCanvas(), 'btnTrackTexRemove');
   $('btnTrackTexRemove').disabled = !state.trackTex;
   thumb('bridgeTexThumb', state.bridgeTex || defaultBridgeCanvas(), 'btnBridgeTexRemove');
-  for (const [k, id] of [['riverWallTex', 'riverWall'], ['fallWallTex', 'fallWall'], ['suspTex', 'suspTex'], ['suspBarrierTex', 'suspBarrierTex'], ['suspDirtTex', 'suspDirtTex']]) { const img = $(id + 'Thumb'); img.hidden = !state[k]; if (state[k]) img.src = thumbURL(state[k]); $(id + 'Remove').disabled = !state[k]; }
+  for (const [k, id] of [['cutArtTex', 'cutArtTex'], ['cutNatTex', 'cutNatTex'], ['riverWallTex', 'riverWall'], ['fallWallTex', 'fallWall'], ['suspTex', 'suspTex'], ['suspBarrierTex', 'suspBarrierTex'], ['suspDirtTex', 'suspDirtTex']]) { const img = $(id + 'Thumb'); img.hidden = !state[k]; if (state[k]) img.src = thumbURL(state[k]); $(id + 'Remove').disabled = !state[k]; }
   set('riverWallTile', sc.riverWallTile ?? 4); set('riverWallTileNum', sc.riverWallTile ?? 4);
+  set('cutWallTile', sc.cutWallTile ?? 4); set('cutWallTileNum', sc.cutWallTile ?? 4);
   thumb('coveredTexThumb', app.coveredTexCanvas(), 'btnCoveredTexRemove'); $('btnCoveredTexRemove').disabled = !state.coveredTex;
   thumb('barrierTexThumb', state.barrierTex || defaultBarrierCanvas(), 'btnBarrierTexRemove');
   $('btnBarrierTexRemove').disabled = !state.barrierTex;
@@ -3981,7 +4187,7 @@ function focusPanel(id, sub = null) {
 /** Botones (fuera de la barra lateral) con parámetros asociados: a qué sección llevan. */
 const PANEL_FOR_BUTTON = {
   'tool:edit': 'arc', 'tool:draw': 'trace', 'tool:extend': 'trace', 'tool:alt': 'alts', 'tool:start': 'gate', 'tool:ref': 'ref',
-  btnDecoNew: 'deco', 'tool:hill': 'hills', 'tool:river': 'rivers', 'tool:paint': 'terrain', 'tool:sculpt': 'terrain', 'tool:flat': 'elev', 'tool:profile': 'elev', 'tool:susp': 'susp', btnSculptTool: 'terrain', btnRef3dTop: 'ref3d',
+  btnDecoNew: 'deco', 'tool:hill': 'hills', 'tool:river': 'rivers', 'tool:paint': 'terrain', 'tool:sculpt': 'terrain', 'tool:flat': 'elev', 'tool:profile': 'elev', 'tool:susp': 'susp', btnCut: 'cut', btnSculptTool: 'terrain', btnRef3dTop: 'ref3d',
   btnGame: 'sky', btnExportBlender: 'export', btnExportMax: 'export', btnExportJSON: 'export', btnExportOBJ: 'export',
   btnExportGLB2: 'export', btnExportFBX2: 'export', btnTbRadius: 'arc', btnTbFork: 'arc', btnGenTerrain: 'terrain', btnGenTrees: 'trees',
 };
@@ -4286,6 +4492,7 @@ function bindSceneControls() {
   pair('terrainTexRepX', 'terrainTexRepXNum', 'terrainTexRepX', 0.1, false);
   pair('terrainTexRepY', 'terrainTexRepYNum', 'terrainTexRepY', 0.1, false);
   pair('riverWallTile', 'riverWallTileNum', 'riverWallTile', 0.5, false); // paredes socavadas de ríos y cascadas
+  pair('cutWallTile', 'cutWallTileNum', 'cutWallTile', 0.5, false); // paredes de las secciones socavadas
   // texturas
   $('btnTrackTex').addEventListener('click', () => $('fileTrackTex').click());
   $('fileTrackTex').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) loadTexture(f, 'trackTex'); });
@@ -4346,7 +4553,7 @@ function bindSceneControls() {
     const { exportGLB } = await import('./export-glb.js');
     toast('Generando escena .glb…');
     try {
-      const { buffer, info } = await exportGLB(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: state.bridgeTex || defaultBridgeCanvas(), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
+      const { buffer, info } = await exportGLB(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: state.bridgeTex || defaultBridgeCanvas(), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
       download('track_scene.glb', buffer, 'model/gltf-binary');
       toast(`Escena exportada: pista ${info.trackTris.toLocaleString('es')} triángulos${info.terrainTris ? `, terreno ${info.terrainTris.toLocaleString('es')}` : ''}${info.hills ? `, ${info.hills} cerro(s)` : ''}${info.tunnels ? `, ${info.tunnels} túnel(es)` : ''}${info.gateTris ? ', pórtico de salida' : ''}${info.items ? `, ${info.items} elementos de pista` : ''}${info.trees ? `, ${info.trees} árboles` : ''}. Todo como objetos separados.`);
     } catch (err) { console.error(err); toast('No se pudo exportar la escena: ' + err.message); }
@@ -4358,7 +4565,7 @@ function bindSceneControls() {
     const { exportFBX } = await import('./export-fbx.js');
     toast('Generando escena .fbx…');
     try {
-      const { buffer, info } = await exportFBX(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: state.bridgeTex || defaultBridgeCanvas(), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
+      const { buffer, info } = await exportFBX(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: state.bridgeTex || defaultBridgeCanvas(), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
       download('track_scene.fbx', buffer, 'application/octet-stream');
       toast(`FBX exportado (${(buffer.length / 1048576).toFixed(1)} MB): pista${info.terrainTris ? ', terreno' : ''}${info.hills ? `, ${info.hills} cerro(s)` : ''}${info.tunnels ? `, ${info.tunnels} túnel(es)` : ''}${info.gateTris ? ', pórtico' : ''}${info.items ? `, ${info.items} elementos de pista` : ''}${info.trees ? `, ${info.trees} árboles` : ''}${info.grass ? ', hierba' : ''}. Z arriba, en metros, con texturas incrustadas.`);
     } catch (err) { console.error(err); toast('No se pudo exportar el FBX: ' + err.message); }

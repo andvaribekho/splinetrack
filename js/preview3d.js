@@ -640,6 +640,7 @@ export class Preview3D {
   buildExtras() {
     const L = this.app.state.layout, E = this.app.state.result;
     const sp = this.app.state.scene;
+    this.app.state.groundLine = null;
     this.disposeGroup(this.extras);
     if (this.paintOverlay) { for (const c of [...this.paintOverlay.children]) { this.paintOverlay.remove(c); if (c.userData.ownGeo) c.geometry.dispose(); } this.paintOverlay.userData.key = null; }
     // la exageración Z se aplica por vértice (applyExag): terreno y pista se estiran; cerros, túneles, árboles, hierba y pórtico no
@@ -681,13 +682,35 @@ export class Preview3D {
         const m = tex
           ? new THREE.MeshStandardMaterial({ map: tex, roughness: 1, metalness: 0, vertexColors: !!cols })
           : new THREE.MeshStandardMaterial({ color: cols ? 0xffffff : 0x4f7d3a, roughness: 1, metalness: 0, vertexColors: !!cols });
-        const tgeo = mkGeo(T.wall ? { ...T, indices: T.baseIndices } : T); // sin los cauces socavados (van aparte)
+        const tgeo = mkGeo(T.baseIndices ? { ...T, indices: T.baseIndices } : T); // sin cauces ni paredes socavadas (van aparte)
         if (cols) tgeo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
         const tmesh = new THREE.Mesh(tgeo, m);
         tmesh.userData.terrain = true;
         this.markExag(tmesh, (x, y, z) => z);
         this.terrainMesh = tmesh;
         this.extras.add(tmesh);
+        // paredes de las secciones socavadas: artificiales (lisas) o naturales (roca)
+        for (const [kind, geo] of Object.entries(T.cutWalls || {})) {
+          if (!geo) continue;
+          const cv = this.app.cutWallTexCanvas ? this.app.cutWallTexCanvas(kind) : null;
+          const t = this.texture(cv);
+          if (t) { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.needsUpdate = true; }
+          const mat = new THREE.MeshStandardMaterial({ map: t, color: t ? 0xffffff : kind === 'art' ? 0x9c9d98 : 0x6b6158, roughness: kind === 'art' ? 0.85 : 1, metalness: 0, flatShading: kind === 'nat', side: THREE.DoubleSide });
+          const wm = new THREE.Mesh(mkGeo(geo), mat);
+          wm.userData.cutWall = kind;
+          this.markExag(wm, (x, y, z) => z);
+          this.wallMeshes.push(wm);
+          this.extras.add(wm);
+          info.terrainTris += geo.tris;
+        }
+        // nivel natural del suelo a lo largo de la ruta principal (para el gráfico de perfil)
+        {
+          const r0 = L.routes[0], step = Math.max(1, Math.round(2 / r0.ds));
+          const sArr = [], zArr = [];
+          for (let i = 0; i < r0.n; i += step) { sArr.push(r0.s[i]); zArr.push(T.ctx.groundAt(r0.x[i], r0.y[i])); }
+          this.app.state.groundLine = { s: sArr, z: zArr };
+          if (this.app.onGroundLine) setTimeout(() => this.app.onGroundLine(), 0);
+        }
         if (T.wall) { // lecho y paredes de los ríos socavados: su propio material
           const wm = new THREE.Mesh(mkGeo(T.wall), this.wallMaterial('river'));
           wm.userData.riverWall = 'river';
@@ -1036,6 +1059,7 @@ export class Preview3D {
     if (this.app.state.selBridge != null && !(onTrack && this.app.bridgeAtWorld(h[0].point.x, h[0].point.y) === this.app.state.selBridge)) this.app.selectBridge(null);
     if (h.length && (h[0].object === this.terrainMesh || h[0].object.userData.water) && this.app.focusPanel) this.app.focusPanel('terrain'); // clic en el terreno o el agua: sus parámetros
     if (ud.ref3d) { this.app.selectRef3d(true); return; } // modelo de referencia: se selecciona entero
+    if (ud.cutWall) { this.app.selectHill(null); if (this.app.focusPanel) this.app.focusPanel('cut'); return; } // paredes de una sección socavada
     if (ud.riverWall) { this.app.selectHill(null); if (this.app.focusPanel) this.app.focusPanel('rivers', document.getElementById('riverWallHead')); return; } // paredes de un cauce: su material
     if (ud.riverId != null) { this.app.selectHill(null); if (this.app.selectRiver) this.app.selectRiver(ud.riverId); return; } // río o cascada: su tarjeta
     if (ud.decoSet != null) { // elemento decorativo: su set
