@@ -78,7 +78,7 @@ const BY_ID = {
   btnTbRadius: 'radius', btnArcApply: 'check', btnArcDone: 'deselect', btnTbFork: 'fork', btnFork: 'fork', btnTbBridge: 'bridge', btnBridge: 'bridge',
   btnCtrlMore: 'plus', btnCtrlLess: 'minus', btnCtrlReset: 'reset', btnDice: 'dice', btnTreeDice: 'dice', btnDockAll: 'anchor',
   btnSkyLoad: 'cloud', btnSkyReset: 'reset', btnPaintTool: 'brush', btnPaintClear: 'trash', btnSculptTool: 'sculpt', btnSculptClear: 'trash',
-  btnSmooth: 'smooth', btnLine: 'line', btnLineChord: 'line', btnLineX: 'axisX', btnLineY: 'axisY', btnLineAngle: 'angle',
+  btnElevAuto: 'wand', btnFixCross: 'bridge', btnSmooth: 'smooth', btnLine: 'line', btnLineChord: 'line', btnLineX: 'axisX', btnLineY: 'axisY', btnLineAngle: 'angle',
   btnHillTool: 'mountain', btnHillClear: 'trash', btnHillDelete: 'trash', btnHillDeselect: 'deselect',
   btnRef3d: 'box', btnRef3dTop: 'box', btnRef3dCenter: 'target', btnRef3dReset: 'reset', btnRef3dSelect: 'cursor', btnRef3dRemove: 'trash',
   btnAssetLoad: 'upload', btnDecoNew: 'plus', btnExportJSON: 'code', btnExportOBJ: 'box', btnExportBlender: 'download', btnExportMax: 'download',
@@ -88,7 +88,7 @@ const BY_TOOL = { pan: 'move', draw: 'pen', alt: 'penAlt', edit: 'cursor', exten
 const BY_GIZMO = { free: 'move', xy: 'axisXY', z: 'axisZ' };
 const BY_TYPE = { forest: 'tree', beach: 'waves', mountain: 'mountain' };
 const BY_CAM = { first: 'eye', third: 'gamepad' };
-const BY_MODE = { uniform: 'uniform', optimized: 'optimized' };
+const BY_MODE = { uniform: 'uniform', optimized: 'optimized', auto: 'sparkle', direct: 'axisZ' };
 // palabras del texto (en orden de prioridad)
 const WORDS = [
   [/pausa/i, 'pause'], [/seguir|reanudar/i, 'play'], [/salir|cerrar/i, 'exit'], [/cancelar/i, 'close'],

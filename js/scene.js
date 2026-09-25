@@ -137,7 +137,9 @@ function trackSamples(layout, elev, sp = {}) {
       const cut = sp.cutRanges && sp.cutRanges.length ? cutZoneAt(layout, k, r.s[i], sp.cutRanges) : null;
       const susp = !!cut || !!(sp.suspRanges && isCovered(layout, k, r.s[i], sp.suspRanges)); // tramo suspendido: el terreno no se adapta
       const uL = r.w[i] / 2 + X.left, uR = r.w[i] / 2 + X.right; // calzada + camino de tierra + barrera
-      out.push({ x: r.x[i], y: r.y[i], z: low, zc: e.z[i], sr: Math.sin(e.roll[i]), tx: r.tx[i], ty: r.ty[i], w: r.w[i], uL, uR, ew: 2 * Math.max(uL, uR), k, i, s: r.s[i], j: out.length, bridge, susp, cut, ds: r.ds });
+      // tramo elevado con suelo guardado: el terreno bajo él queda a esa altura (no sigue a la pista al subirla)
+      const gz = susp && !cut ? suspGroundAt(layout, k, r.s[i], sp.suspRanges) : null;
+      out.push({ gz, x: r.x[i], y: r.y[i], z: low, zc: e.z[i], sr: Math.sin(e.roll[i]), tx: r.tx[i], ty: r.ty[i], w: r.w[i], uL, uR, ew: 2 * Math.max(uL, uR), k, i, s: r.s[i], j: out.length, bridge, susp, cut, ds: r.ds });
     }
   });
   return out;
@@ -185,6 +187,26 @@ export function isCovered(layout, k, sv, ranges) {
     if (ss >= c.s0 && ss <= c.s1) return true;
   }
   return false;
+}
+
+/**
+ * Suelo guardado de un tramo elevado en la posición sv (la altura que tenía la pista al marcarlo), o null.
+ * ranges = sp.suspRanges con {k, s0, s1, ground: [[t 0..1, z], ...]}.
+ */
+export function suspGroundAt(layout, k, sv, ranges) {
+  if (!ranges || !ranges.length) return null;
+  const r = layout.routes[k];
+  for (const c of ranges) {
+    if (c.k !== k || !c.ground || c.ground.length < 2) continue;
+    let ss = sv;
+    if (r.closed) { while (ss < c.s0) ss += r.L; while (ss > c.s1 + r.L) ss -= r.L; }
+    if (ss < c.s0 || ss > c.s1) continue;
+    const t = c.s1 > c.s0 ? (ss - c.s0) / (c.s1 - c.s0) : 0, G = c.ground;
+    if (t <= G[0][0]) return G[0][1];
+    for (let i = 1; i < G.length; i++) if (t <= G[i][0]) { const u = (t - G[i - 1][0]) / Math.max(1e-9, G[i][0] - G[i - 1][0]); return G[i - 1][1] + (G[i][1] - G[i - 1][1]) * u; }
+    return G[G.length - 1][1];
+  }
+  return null;
 }
 
 /** Tramo de puente (índice en r.bridges) que contiene la posición sv, o -1. */
@@ -581,7 +603,10 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
   const gap = sp.terrainGap;
   const fine = new SpatialGrid(Math.max(maxW, 8));
   for (const p of S) fine.insert(p.x, p.y, p);
-  const sub = S.filter((p, j) => j % 4 === 0 && !p.bridge && !p.susp); // bajo un puente o un tramo suspendido el terreno no sube hasta la calzada
+  // bajo un puente o un tramo suspendido el terreno no sube hasta la calzada; en un tramo elevado con suelo guardado el
+  // terreno toma ese suelo (como si la pista siguiera ahí, a la altura que tenía al marcarlo)
+  const groundOf = (p) => ({ ...p, z: p.gz, zc: p.gz, sr: 0, susp: false, virt: true });
+  const sub = S.filter((p, j) => j % 4 === 0 && !p.bridge && (!p.susp || p.gz != null)).map((p) => (p.susp ? groundOf(p) : p));
   const falloff = Math.max(5, sp.terrainFalloff);
   // costado de cada punto respecto de la pista (para playa / montaña): muestra más cercana y distancia lateral con signo
   const noise = valueNoise2((sp.treeSeed | 0) + 101);
@@ -685,7 +710,7 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
   // relieve general: IDW en una grilla gruesa
   const gx = 40, gy = 40;
   const base = new Float64Array((gx + 1) * (gy + 1));
-  const idwPts = S.filter((p, j) => j % 12 === 0 && !p.bridge && !p.susp);
+  const idwPts = S.filter((p, j) => j % 12 === 0 && !p.bridge && (!p.susp || p.gz != null)).map((p) => (p.susp ? groundOf(p) : p));
   for (let j = 0; j <= gy; j++) for (let i = 0; i <= gx; i++) {
     const x = minX + (W * i) / gx, y = minY + (H * j) / gy;
     let ws = 0, zs = 0;

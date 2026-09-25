@@ -837,6 +837,68 @@ for (const [key, s] of Object.entries(SAMPLES)) {
   check(old && old[0] === 0 && old[1] === 0, `proyecto anterior (un solo valor apagado): sin ambas (${old})`);
 }
 
+// ---- modo directo de elevación: la curva pasa exactamente por las alturas fijadas ----
+{
+  const L = buildLayout(SAMPLES.oval.build(), { lapLength: 1000 });
+  const r = L.routes[0];
+  const pins = [[50, 2], [200, 10], [320, 10], [450, 4], [700, -3], [900, 1]].map(([sv, z]) => ({ route: 0, s: sv, z, local: false }));
+  const E = computeElevation(L, { mode: 'direct', hills: 1 }, {}, pins);
+  const zAt = (sv) => { const u = sv / r.ds, i = Math.floor(u), t = u - i; return E.routes[0].z[i % r.n] * (1 - t) + E.routes[0].z[(i + 1) % r.n] * t; };
+  const worst = Math.max(...pins.map((p) => Math.abs(zAt(p.s) - p.z)));
+  check(worst < 0.02, `modo directo: pasa por los puntos (${worst.toFixed(3)} m)`);
+  let flat = 0, over = 0;
+  for (let i = 0; i < r.n; i++) { const sv = r.s[i], z = E.routes[0].z[i]; if (sv >= 200 && sv <= 320) flat = Math.max(flat, Math.abs(z - 10)); over = Math.max(over, z - 10, -3 - z); }
+  check(flat < 1e-6 && over < 1e-6, `modo directo: plano entre alturas iguales y sin pasarse de largo (${flat.toExponential(1)}, ${over.toFixed(3)})`);
+  const z0 = E.routes[0].z[0], zl = E.routes[0].z[r.n - 1];
+  check(Math.abs(z0 - zl) < 0.2, `modo directo: continuo en la meta (${z0.toFixed(2)} / ${zl.toFixed(2)})`);
+  check(E.pins.length === pins.length && E.pins.every((p) => Math.abs(p.got - p.z) < 0.05) && !E.validation.msgs.some((m) => /Altura fijada/.test(m.msg)), 'modo directo: sin avisos de alturas no logradas');
+  // sin alturas: plano (nada automático)
+  const E0 = computeElevation(L, { mode: 'direct', hills: 1 }, {}, []);
+  check(Math.max(...E0.routes[0].z) - Math.min(...E0.routes[0].z) < 1e-9, 'modo directo: sin puntos fijados la pista es plana');
+  // cruce sin altura suficiente: se avisa (no se corrige solo)
+  const L8 = buildLayout(SAMPLES.figure8.build(), { lapLength: 1000 });
+  const E8 = computeElevation(L8, { mode: 'direct' }, {}, []);
+  check(L8.crossings.length > 0 && E8.validation.msgs.some((m) => /Corregir cruces/.test(m.msg)), 'modo directo: cruce sin separación se avisa');
+  const c = L8.crossings[0], hi = 8;
+  const E8b = computeElevation(L8, { mode: 'direct' }, {}, [{ route: 0, s: c.sa, z: hi }, { route: 0, s: c.sb, z: 0 }]);
+  check(!E8b.validation.msgs.some((m) => /Cruce 1/.test(m.msg)) && E8b.crossings[0].clearance > 6.9, `modo directo: con alturas en el cruce queda separado (${E8b.crossings[0].clearance.toFixed(2)} m)`);
+  // atajo: empalma con la principal
+  const LS = buildLayout(SAMPLES.shortcut.build(), { lapLength: 1000 });
+  const ES = computeElevation(LS, { mode: 'direct' }, {}, [{ route: 0, s: 100, z: 5 }, { route: 0, s: 600, z: 15 }]);
+  const a = LS.routes[1], za = ES.routes[1].z;
+  const zm = (sv) => { const m = LS.routes[0], u = (((sv % m.L) + m.L) % m.L) / m.ds, i = Math.floor(u); return ES.routes[0].z[i % m.n]; };
+  check(Math.abs(za[0] - zm(a.forkS)) < 0.3 && Math.abs(za[a.n - 1] - zm(a.mergeS)) < 0.3, `modo directo: el atajo empalma con la principal (${(za[0] - zm(a.forkS)).toFixed(2)}, ${(za[a.n - 1] - zm(a.mergeS)).toFixed(2)})`);
+}
+
+// ---- terreno elevado: el terreno queda con el suelo guardado al marcar el tramo ----
+{
+  const L = buildLayout(SAMPLES.oval.build(), { lapLength: 1000 });
+  const r = L.routes[0];
+  const E0 = computeElevation(L, { hills: 0.5 }, {}, []);
+  const s0 = 300, s1 = 460, N = 40;
+  const zAt = (E, sv) => E.routes[0].z[Math.round(sv / r.ds) % r.n];
+  const ground = Array.from({ length: N + 1 }, (_, i) => [i / N, +zAt(E0, s0 + (s1 - s0) * i / N).toFixed(3)]);
+  const zone = { k: 0, s0, s1, pillars: 4, barrier: true };
+  // sube el medio 12 m; los extremos anclados al suelo guardado
+  const pins = [{ route: 0, s: 380, z: zAt(E0, 380) + 6 }, { route: 0, s: s0, z: ground[0][1], anchor: true }, { route: 0, s: s1, z: ground[N][1], anchor: true }];
+  const E1 = computeElevation(L, { hills: 0.5 }, {}, pins);
+  check(!E1.pins.some((p) => p.anchor), 'terreno elevado: las anclas no se muestran como puntos');
+  check(Math.abs(zAt(E1, s0) - ground[0][1]) < 0.5 && Math.abs(zAt(E1, s1) - ground[N][1]) < 0.5, `terreno elevado: la subida queda dentro del tramo (${(zAt(E1, s0) - ground[0][1]).toFixed(2)}, ${(zAt(E1, s1) - ground[N][1]).toFixed(2)})`);
+  const base = { terrain: true, terrainDensity: 40 };
+  const Tref = buildTerrain(L, E1, { ...base, suspRanges: [{ ...zone, ground }] });
+  const Told = buildTerrain(L, E1, { ...base, suspRanges: [zone] });
+  const i = Math.round(380 / r.ds) % r.n, lx = -r.ty[i], ly = r.tx[i];
+  const off = r.w[i] / 2 + 3;
+  const gRef = Tref.sample(r.x[i] + lx * off, r.y[i] + ly * off), gOld = Told.sample(r.x[i] + lx * off, r.y[i] + ly * off);
+  const want = zAt(E0, 380) - 0.3;
+  check(Math.abs(gRef - want) < 1.2, `terreno elevado: el terreno queda donde estaba (${gRef.toFixed(2)} vs ${want.toFixed(2)})`);
+  check(zAt(E1, 380) - gRef > 5, `terreno elevado: solo sube la pista (${(zAt(E1, 380) - gRef).toFixed(1)} m sobre el suelo)`);
+  const G = makeGround(Tref, null);
+  const pl = suspPillars(L, E1, { ...base, suspRanges: [{ ...zone, ground }] }, G);
+  check(pl.length > 0 && pl.every((q) => Math.abs(q.zBot - G.sample(q.x, q.y)) < 0.6), `terreno elevado: pilares del suelo a la pista (${pl.length})`);
+  void gOld;
+}
+
 // ---- atajos con puntos de control: pasan por todos sus puntos y empalman tangentes ----
 {
   const proj = SAMPLES.shortcut.build();

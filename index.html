@@ -165,6 +165,16 @@
 
       <section class="panel" data-panel="elev">
         <h2>Elevación</h2>
+        <div class="seg" id="elevMode" role="group" aria-label="Modo de elevación">
+          <button data-mode="auto" title="El optimizador arma la elevación: colinas automáticas, rampas en los cruces, pendiente y radios dentro del límite. Las alturas fijadas (puntos naranjos) son pedidos">Automático</button>
+          <button data-mode="direct" title="Cada punto naranjo es un fotograma clave: la curva pasa exactamente por él. Sin colinas automáticas; pendiente y cruces solo se avisan">Directo</button>
+        </div>
+        <p class="hint" id="elevModeHint"></p>
+        <div class="row gap" id="directTools">
+          <button id="btnElevAuto" title="Corre el optimizador automático una vez (con las colinas y la semilla de abajo) y deja sus alturas como fotogramas clave en todos los puntos">Generar alturas automáticas</button>
+          <button id="btnFixCross" title="Sube el paso de arriba de cada cruce sin separación suficiente (agrega puntos si hace falta)">Corregir cruces</button>
+        </div>
+        <div id="autoElevBox">
         <div class="field big"><label>Colinas <span class="val" id="hillsVal"></span></label><input type="range" id="hills" min="0" max="1" step="0.01"></div>
         <div class="field"><label>Colinas por vuelta <span class="val" id="hillCountVal"></span></label><input type="range" id="hillCount" min="1" max="8" step="0.5"></div>
         <div class="field"><label>Amplitud máxima <span class="val" id="hillsMaxVal"></span></label><input type="range" id="hillsMax" min="2" max="40" step="1"></div>
@@ -174,6 +184,7 @@
           <div class="row"><input type="number" id="seed" min="0" step="1"><button id="btnDice" title="Semilla aleatoria">Aleatoria</button></div>
         </div>
         <div class="field"><label>Suavizado <span class="val" id="smoothVal"></span></label><input type="range" id="smooth" min="0" max="1" step="0.01"></div>
+        </div>
         <div class="field"><label>Pendiente máxima <span class="val" id="maxGradeVal"></span></label><input type="range" id="maxGrade" min="3" max="25" step="0.5"></div>
         <div class="field"><label>Radio vertical mín. en cresta <span class="val" id="rCrestVal"></span></label><input type="range" id="rCrest" min="15" max="300" step="5"></div>
         <div class="field"><label>Radio vertical mín. en valle <span class="val" id="rSagVal"></span></label><input type="range" id="rSag" min="10" max="300" step="5"></div>

@@ -2,7 +2,7 @@
 import { buildLayout, DEFAULT_GEOM, deriveControlPoints, respaceControlPoints } from './build.js';
 import { computeElevation, DEFAULT_ELEV } from './elevation.js';
 import { exportBlender, exportMax, exportJSON, exportOBJ, DEFAULT_EXPORT, routeSamples, bezierKnots, bezierError, edgeSamples } from './export.js';
-import { nearestOnSamples, evalAt, resampleUniform, taubinSmooth, catmullRom } from './geometry.js';
+import { nearestOnSamples, evalAt, resampleUniform, taubinSmooth, catmullRom, clamp } from './geometry.js';
 import { SAMPLES, rasterizeLayout } from './samples.js';
 import { Editor2D } from './editor2d.js';
 import { ProfileView } from './profile.js';
@@ -97,7 +97,7 @@ const state = {
 const undoStack = [];
 function snapshot() {
   const ref = state.ref ? { x: state.ref.x, y: state.ref.y, scale: state.ref.scale, opacity: state.ref.opacity } : null;
-  return JSON.stringify({ project: state.project, flatZones: state.flatZones, suspZones: state.suspZones, cutZones: state.cutZones, overrides: state.overrides, ref, refCanvas: !!state.ref, densityPaint: state.densityPaint, terrainSculpt: state.terrainSculpt, sculptCurves: state.sculptCurves, decoSets: state.decoSets, hills: state.hills, selHill: state.selHill, rivers: state.rivers, items: state.items });
+  return JSON.stringify({ elevMode: state.elev.mode || 'auto', project: state.project, flatZones: state.flatZones, suspZones: state.suspZones, cutZones: state.cutZones, overrides: state.overrides, ref, refCanvas: !!state.ref, densityPaint: state.densityPaint, terrainSculpt: state.terrainSculpt, sculptCurves: state.sculptCurves, decoSets: state.decoSets, hills: state.hills, selHill: state.selHill, rivers: state.rivers, items: state.items });
 }
 function pushUndo() {
   undoStack.push(snapshot());
@@ -111,6 +111,7 @@ function undo() {
   state.project = o.project;
   state.flatZones = o.flatZones;
   if (o.suspZones) state.suspZones = o.suspZones;
+  if (o.elevMode && o.elevMode !== (state.elev.mode || 'auto')) { state.elev.mode = o.elevMode; if (typeof syncElevMode === 'function') syncElevMode(); }
   if (o.cutZones) state.cutZones = o.cutZones;
   state.overrides = o.overrides;
   if (o.ref && state.ref) Object.assign(state.ref, o.ref);
@@ -624,8 +625,24 @@ const app = {
     return state.suspZones.map((Z, idx) => {
       const s0 = app.nearestMainS(Z.a, Infinity), s1 = app.nearestMainS(Z.b, Infinity);
       if (s0 === null || s1 === null) return null;
-      return { k: 0, idx, s0: Math.min(s0, s1), s1: Math.max(s0, s1), pillars: Z.pillars ?? 3, dirt: !!Z.dirt, barrier: !!Z.barrier };
+      // suelo guardado (de a hacia b): si el tramo quedó al revés en s, se invierte
+      const ground = Z.ground && Z.ground.length >= 2 ? (s1 < s0 ? Z.ground.map(([t, z]) => [+(1 - t).toFixed(4), z]).reverse() : Z.ground) : null;
+      return { k: 0, idx, s0: Math.min(s0, s1), s1: Math.max(s0, s1), pillars: Z.pillars ?? 3, dirt: !!Z.dirt, barrier: !!Z.barrier, ground };
     }).filter((Z) => Z && Z.s1 - Z.s0 > 2);
+  },
+  /** Suelo de un tramo elevado: la altura actual de la pista entre s0 y s1 ([[t, z], ...], de a hacia b). */
+  captureSuspGround(Z) {
+    const L = state.layout, E = state.result;
+    if (!L || !E) return false;
+    const s0 = app.nearestMainS(Z.a, Infinity), s1 = app.nearestMainS(Z.b, Infinity);
+    if (s0 === null || s1 === null) return false;
+    const r = L.routes[0], z = E.routes[0].z, lo = Math.min(s0, s1), hi = Math.max(s0, s1);
+    const N = Math.max(8, Math.min(400, Math.round((hi - lo) / 2)));
+    const zAt = (sv) => { const u = sv / r.ds, i = Math.floor(u), t = u - i; return z[i % r.n] * (1 - t) + z[(i + 1) % r.n] * t; };
+    const G = [];
+    for (let i = 0; i <= N; i++) G.push([+(i / N).toFixed(4), +zAt(lo + ((hi - lo) * i) / N).toFixed(3)]);
+    Z.ground = s1 < s0 ? G.map(([t, zz]) => [+(1 - t).toFixed(4), zz]).reverse() : G; // guardado de a hacia b
+    return true;
   },
   /** Convierte los puntos seleccionados (ruta principal, seguidos) en un tramo suspendido (terreno elevado). */
   addSuspFromSelection() {
@@ -649,9 +666,11 @@ const app = {
     const lo = Math.min(s0, s1), hi = Math.max(s0, s1);
     const cur = app.suspZonesS();
     state.suspZones = state.suspZones.filter((Z, i) => { const c = cur.find((q) => q.idx === i); return !c || c.s1 < lo || c.s0 > hi; }); // reemplaza los que se superponen
-    state.suspZones.push({ a: app.mainLayoutAt(lo), b: app.mainLayoutAt(hi), pillars: Math.max(1, Math.round((hi - lo) / 25)), dirt: false, barrier: true });
+    const Z = { a: app.mainLayoutAt(lo), b: app.mainLayoutAt(hi), pillars: Math.max(1, Math.round((hi - lo) / 25)), dirt: false, barrier: true };
+    app.captureSuspGround(Z); // el terreno queda con este suelo aunque después subas el tramo
+    state.suspZones.push(Z);
     scheduleElev();
-    toast(`Tramo suspendido entre s=${lo.toFixed(0)} y ${hi.toFixed(0)} m: súbelo con el perfil (o las alturas de sus puntos).`);
+    toast(`Tramo elevado entre s=${lo.toFixed(0)} y ${hi.toFixed(0)} m: sube sus puntos del medio; el terreno queda donde estaba y los pilares lo conectan con la pista. El primero y el último punto quedan en el suelo (ahí empiezan las rampas).`);
   },
   /** Tramo elegido para el perfil, en s: [s0, s1] o null. */
   profileSelS() {
@@ -1978,7 +1997,7 @@ function addLoop(turns, sep, sideMode, radius = 0) {
   feats.push({ id: `f${Date.now().toString(36)}${feats.length}`, type: 'loop', key: P.key, A: P.A, B: P.B, side: P.side, params: { turns: P.N, sep: +sep, radius: radius || 0, sideMode: sideMode || 'auto' }, pts: P.pts.map((q) => q.slice()), overrides: P.crosses.map((c) => [c.lx, c.ly]) });
   state.sel = null; state.selSet = { key: P.key, idxs: new Set(newSel) }; endArc(); refreshArcBox();
   scheduleBuild();
-  toast(`Rizo de ${P.N} vuelta${P.N > 1 ? 's' : ''} (radio ${P.R.toFixed(0)} m, +${P.len.toFixed(0)} m de pista, ${sep} m de separación en ${P.N > 1 ? 'cada cruce' : 'el cruce'}).`);
+  toast(`Rizo de ${P.N} vuelta${P.N > 1 ? 's' : ''} (radio ${P.R.toFixed(0)} m, +${P.len.toFixed(0)} m de pista, ${sep} m de separación en ${P.N > 1 ? 'cada cruce' : 'el cruce'}).${state.elev.mode === 'direct' ? ' Modo directo: pulsa «Corregir cruces» (Elevación) para subir la pasada de arriba.' : ''}`);
   return true;
 }
 function refreshLoopInfo() {
@@ -2754,6 +2773,24 @@ function collectPinFlats() {
   });
   return out;
 }
+/**
+ * Anclas de los tramos elevados: sus extremos quedan en el suelo guardado, así la subida ocurre dentro del tramo y no
+ * empuja la pista de afuera (ni el terreno). Un punto con altura fijada justo en el extremo manda sobre el ancla.
+ */
+function suspAnchors() {
+  const out = [], L = state.layout;
+  if (!L) return out;
+  const pins = collectPins().filter((p) => p.route === 0);
+  const r = L.routes[0];
+  for (const Z of state.scene.suspRanges || []) {
+    if (!Z.ground || Z.ground.length < 2 || Z.k !== 0) continue;
+    for (const [sv, z] of [[Z.s0, Z.ground[0][1]], [Z.s1, Z.ground[Z.ground.length - 1][1]]]) {
+      const near = pins.some((p) => { const d = Math.abs(p.s - sv); return Math.min(d, r.closed ? r.L - d : d) < 1.5; });
+      if (!near) out.push({ route: 0, s: sv, z, local: false, anchor: true });
+    }
+  }
+  return out;
+}
 /** Crea puntos de control editables para las rutas que aún no los tienen. Devuelve true si cambió algo. */
 function ensureCtrl() {
   const L = state.layout, p = state.project;
@@ -2911,9 +2948,25 @@ function tick() {
           state.elev.flatZones = app.flatZonesS();
           state.elev.profileZones = [];
           state.elev.pinFlats = collectPinFlats();
+          // tramos elevados sin suelo guardado (proyectos anteriores): se guarda el de ahora
+          if (state.result) for (const Z of state.suspZones) if (!Z.ground) app.captureSuspGround(Z);
           state.scene.suspRanges = app.suspZonesS();
           state.scene.cutRanges = app.cutZonesS();
-          state.result = computeElevation(state.layout, state.elev, overridesMap(state.layout), collectPins());
+          state.result = computeElevation(state.layout, state.elev, overridesMap(state.layout), [...collectPins(), ...suspAnchors()]);
+          // tramos elevados: aviso si la subida no cabe dentro del tramo (la rampa sale y el terreno de afuera la sigue)
+          {
+            const r0 = state.layout.routes[0], z0 = state.result.routes[0].z;
+            (state.scene.suspRanges || []).forEach((Z, zi) => {
+              if (!Z.ground || Z.ground.length < 2) return;
+              for (const [sv, g] of [[Z.s0, Z.ground[0][1]], [Z.s1, Z.ground[Z.ground.length - 1][1]]]) {
+                const zt = z0[Math.round(sv / r0.ds) % r0.n];
+                if (Math.abs(zt - g) > 0.5) {
+                  state.result.validation.msgs.push({ level: 'warn', route: 0, s: sv, msg: `Tramo elevado ${zi + 1}: su extremo (s≈${sv.toFixed(0)} m) quedó ${(zt - g).toFixed(1)} m ${zt > g ? 'sobre' : 'bajo'} el suelo: la subida no cabe en el tramo con la pendiente máxima (o el extremo tiene altura propia) y la rampa sigue afuera. Alarga el tramo, sube menos o deja el primer y el último punto en el suelo.` });
+                  break;
+                }
+              }
+            });
+          }
         } catch (err) {
           console.error(err);
           state.result = null;
@@ -3346,7 +3399,8 @@ function refreshPanels() {
       div.innerHTML = `<div class="head"><span><strong>suspendido_${String(i + 1).padStart(2, '0')}</strong>${c ? ` · s ${c.s0.toFixed(0)}–${c.s1.toFixed(0)} m` : ''}</span><button class="x del" title="Quitar (el terreno vuelve a adaptarse)">✕</button></div>
         <div class="field"><label>Pilares <span class="val"><input type="number" class="spN" min="0" max="200" step="1" style="width:52px" value="${Z.pillars ?? 3}"></span></label><input type="range" class="spR" min="0" max="40" step="1" value="${Math.min(40, Z.pillars ?? 3)}"></div>
         <label class="check small"><input type="checkbox" class="spDirt"${Z.dirt ? ' checked' : ''}> Camino de tierra</label>
-        <label class="check small"><input type="checkbox" class="spBar"${Z.barrier ? ' checked' : ''}> Barreras</label>`;
+        <label class="check small"><input type="checkbox" class="spBar"${Z.barrier ? ' checked' : ''}> Barreras</label>
+        <div class="row gap"><button class="spGround" title="El suelo bajo el tramo toma la altura que tiene la pista ahora (por ejemplo: bájala a donde quieres el suelo, pulsa esto y vuelve a subirla)">Tomar el suelo de la pista actual</button></div>`;
       let editing = false;
       const upd = (patch, done = true) => {
         if (!editing) { pushUndo(); editing = true; }
@@ -3361,6 +3415,7 @@ function refreshPanels() {
       div.querySelector('.spN').addEventListener('change', (e) => pil(parseFloat(e.target.value), true));
       div.querySelector('.spDirt').addEventListener('change', (e) => upd({ dirt: e.target.checked }));
       div.querySelector('.spBar').addEventListener('change', (e) => upd({ barrier: e.target.checked }));
+      div.querySelector('.spGround').addEventListener('click', () => { pushUndo(); if (app.captureSuspGround(Z)) { scheduleElev(); toast('Suelo del tramo actualizado a la altura actual de la pista.'); } });
       div.querySelector('.del').addEventListener('click', () => { pushUndo(); state.suspZones.splice(i, 1); scheduleElev(); });
       sl.appendChild(div);
     });
@@ -3408,7 +3463,7 @@ function refreshPanels() {
   if (L && E) {
     const v = E.validation;
     const alts = L.routes.length - 1;
-    $('stats').textContent = `vuelta ${L.routes[0].L.toFixed(0)} m · desnivel ${(v.zMax - v.zMin).toFixed(1)} m · pendiente máx ${(v.maxGrade * 100).toFixed(1)} % · R cresta ${isFinite(v.minRc) ? v.minRc.toFixed(0) : '∞'} m · ${E.crossings.length} cruces${alts ? ` · ${alts} atajo(s)` : ''} · ${E.solver.ms.toFixed(0)} ms`;
+    $('stats').textContent = `vuelta ${L.routes[0].L.toFixed(0)} m · desnivel ${(v.zMax - v.zMin).toFixed(1)} m · pendiente máx ${(v.maxGrade * 100).toFixed(1)} % · R cresta ${isFinite(v.minRc) ? v.minRc.toFixed(0) : '∞'} m · ${E.crossings.length} cruces${alts ? ` · ${alts} atajo(s)` : ''}${E.solver ? ` · ${E.solver.ms.toFixed(0)} ms` : " · modo directo"}`;
     // info de export
     try {
       const pts = routeSamples(L, E, 0);
@@ -3465,6 +3520,124 @@ const PARAMS = [
   ['designSpeed', 'elev', fmt.kmh, 'elev'],
   ['knotSpacing', 'exp', fmt.m, 'panels'],
 ];
+/** Barra del modo de elevación (Automático / Directo) y lo que depende de él. */
+function syncElevMode() {
+  const direct = state.elev.mode === 'direct';
+  document.querySelectorAll('#elevMode button').forEach((b) => b.classList.toggle('on', b.dataset.mode === (direct ? 'direct' : 'auto')));
+  $('directTools').hidden = !direct;
+  $('autoElevBox').classList.toggle('dimmed', direct);
+  $('elevModeHint').textContent = direct
+    ? 'Directo: cada punto naranjo es un fotograma clave y la curva pasa exactamente por él (lo plano queda plano, sin pasarse de largo). Los puntos blancos siguen la curva. Pendiente y cruces se avisan en rojo. Colinas y semilla solo se usan al generar alturas automáticas.'
+    : 'Automático: el optimizador arma la elevación (colinas, rampas en los cruces, pendiente y radios). Las alturas fijadas (puntos naranjos) son pedidos que se equilibran con esas reglas.';
+  for (const id of ['pinLocal', 'pinLocal3d']) { const el = $(id); const lab = el && el.closest('label'); if (lab) lab.hidden = direct; } // en Directo no aplica
+}
+/** Cambia el modo de elevación. A Directo: las alturas actuales de todos los puntos quedan como fotogramas clave. */
+function setElevMode(mode) {
+  if (mode === (state.elev.mode || 'auto')) return;
+  pushUndo();
+  if (mode === 'direct') {
+    if (!hasCtrl() && state.layout) { ensureCtrl(); computeCtrlS(); }
+    let n = 0;
+    for (const pt of app.ctrlPoints()) {
+      const za = zArray(pt.key);
+      if (!za) continue;
+      za[pt.idx] = +((pt.pin !== null ? pt.pin : pt.z)).toFixed(3);
+      n++;
+    }
+    state.elev.mode = 'direct';
+    toast(`Modo directo: ${n} puntos quedan como fotogramas clave con su altura actual. La curva pasa exactamente por ellos.`);
+  } else {
+    state.elev.mode = 'auto';
+    toast('Modo automático: las alturas fijadas quedan como pedidos al optimizador (clic derecho en el perfil las vuelve automáticas).');
+  }
+  syncElevMode();
+  scheduleBuild();
+}
+/** Directo: corre el optimizador automático (sin las alturas fijadas) y deja sus alturas como fotogramas clave. */
+function generateAutoHeights() {
+  const L = state.layout;
+  if (!L) return;
+  if (!hasCtrl()) { ensureCtrl(); computeCtrlS(); }
+  const E = computeElevation(L, { ...state.elev, mode: 'auto', flatZones: app.flatZonesS(), profileZones: [], pinFlats: [] }, overridesMap(L), suspAnchors());
+  pushUndo();
+  let n = 0;
+  L.routes.forEach((r, k) => {
+    const key = k === 0 ? 'main' : r.altIndex, za = zArray(key), S = state.ctrlS && state.ctrlS[k];
+    if (!za || !S) return;
+    S.forEach((sv, idx) => { const i = Math.min(r.n - 1, Math.max(0, Math.round(sv / r.ds))) % r.n; za[idx] = +E.routes[k].z[i].toFixed(3); n++; });
+  });
+  scheduleElev();
+  toast(`Alturas automáticas en ${n} puntos (colinas ${Math.round(state.elev.hills * 100)} %, semilla ${state.elev.seed}). Ahora puedes editarlas libremente.`);
+}
+/**
+ * Directo: corrige los cruces sin separación. El paso de arriba sube y el de abajo baja (la mitad de lo que falta cada
+ * uno): los puntos que rodean el cruce en cada paso toman esa altura (la curva pasa por ellos, así el tablero queda
+ * parejo) y los siguientes arman rampas con la pendiente máxima. Las rampas de un paso no tocan al otro (rizos). No
+ * mueve nada en planta.
+ */
+function fixCrossings() {
+  const L = state.layout, E = state.result;
+  if (!L || !E || !state.ctrlS) return;
+  const bad = E.crossings.filter((c) => Number.isFinite(c.clearance) && c.clearance < c.hreq - 0.05);
+  if (!bad.length) { toast('Todos los cruces tienen su separación.'); return; }
+  pushUndo();
+  let set = 0;
+  const g = (state.elev.maxGrade / 100) * 0.65; // margen: la curva entre puntos puede ser algo más empinada que la recta
+  for (const c of bad) {
+    const src = L.crossings.find((q) => q.id === c.id);
+    if (!src || !src.pairs || !src.pairs.length) continue;
+    const upA = c.up === 'a';
+    // bandas de cada paso: puntos de control que rodean el cruce (el último antes, el primero después y los de adentro)
+    const band = (k, sc, fineIdx) => {
+      const r = L.routes[k], key = k === 0 ? 'main' : r.altIndex, za = zArray(key), S = state.ctrlS[k];
+      const rel = (sv) => { let d = sv - sc; if (r.closed) d = ((d % r.L) + r.L * 1.5) % r.L - r.L / 2; return d; };
+      let lo = 0, hi = 0;
+      for (const i of fineIdx) { const d = rel(r.s[i]); lo = Math.min(lo, d); hi = Math.max(hi, d); }
+      let before = -1, bd = -Infinity, after = -1, ad = Infinity;
+      const idxs = [];
+      (S || []).forEach((sv, idx) => {
+        const d = rel(sv);
+        if (d >= lo - 1 && d <= hi + 1) idxs.push(idx);
+        else if (d < lo && d > bd) { bd = d; before = idx; }
+        else if (d > hi && d < ad) { ad = d; after = idx; }
+      });
+      if (before >= 0) idxs.push(before);
+      if (after >= 0) idxs.push(after);
+      const zOf = (i) => E.routes[k].z[i];
+      return { k, r, key, za, S, rel, before, after, idxs, zs: fineIdx.map(zOf) };
+    };
+    const iA = src.pairs.map((q) => q[0]), iB = src.pairs.map((q) => q[1]);
+    const U = upA ? band(c.ra, c.sa, iA) : band(c.rb, c.sb, iB);
+    const D = upA ? band(c.rb, c.sb, iB) : band(c.ra, c.sa, iA);
+    if (!U.za || !D.za || !U.S || !D.S) continue;
+    const zUp = Math.min(...U.zs), zLo = Math.max(...D.zs);
+    const d = c.hreq + 0.15 - (zUp - zLo);
+    if (d <= 0) continue;
+    const newUp = zUp + d / 2, newLo = zLo - d / 2;
+    const zCur = (B, idx) => { const v = pinVal(B.za[idx]); if (v !== null) return v; const i = Math.min(B.r.n - 1, Math.max(0, Math.round(B.S[idx] / B.r.ds))) % B.r.n; return E.routes[B.k].z[i]; };
+    const apply = (B, target, sign, other) => {
+      const prot = new Set(other.k === B.k ? other.idxs : []);
+      for (const idx of B.idxs) { if (prot.has(idx)) continue; const cur = zCur(B, idx); if (sign * (target - cur) > 0) { B.za[idx] = +target.toFixed(3); set++; } }
+      // rampas hacia cada lado, sin entrar al otro paso
+      const n = B.S.length;
+      for (const [start, step] of [[B.before, -1], [B.after, 1]]) {
+        if (start < 0) continue;
+        for (let t = 1; t < n; t++) {
+          let idx = start + step * t;
+          if (B.r.closed) idx = ((idx % n) + n) % n; else if (idx < 0 || idx >= n) break;
+          if (B.idxs.includes(idx) || prot.has(idx)) break;
+          const need = target - sign * g * Math.abs(B.rel(B.S[idx]) - B.rel(B.S[start]));
+          if (sign * (need - zCur(B, idx)) <= 0.01) break;
+          B.za[idx] = +need.toFixed(3); set++;
+        }
+      }
+    };
+    apply(U, newUp, 1, D);
+    apply(D, newLo, -1, U);
+  }
+  scheduleElev();
+  toast(`${bad.length} cruce${bad.length > 1 ? 's' : ''} corregido${bad.length > 1 ? 's' : ''}: ${set} altura${set === 1 ? '' : 's'} ajustada${set === 1 ? '' : 's'} (el paso de arriba sube y el de abajo baja, con rampas). Si queda algún aviso, vuelve a pulsar o revisa las pendientes en rojo.`);
+}
 function groupObj(g) { return g === 'geom' ? state.geom : g === 'elev' ? state.elev : state.exp; }
 function syncControls() {
   for (const [id, g, f] of PARAMS) {
@@ -3481,6 +3654,7 @@ function syncControls() {
   $('closed').checked = state.closed;
   $('reverse').checked = !!state.project.reverse;
   $('seed').value = state.elev.seed;
+  syncElevMode();
   $('crossType').value = state.elev.crossType;
   $('bank').checked = state.elev.bank;
   $('edges').checked = state.exp.edges;
@@ -3510,6 +3684,9 @@ function bindControls() {
       else refreshPanels();
     });
   }
+  document.querySelectorAll('#elevMode button').forEach((b) => b.addEventListener('click', () => setElevMode(b.dataset.mode)));
+  $('btnElevAuto').addEventListener('click', generateAutoHeights);
+  $('btnFixCross').addEventListener('click', fixCrossings);
   $('useImageWidth').addEventListener('change', (e) => { state.geom.useImageWidth = e.target.checked; scheduleBuild(); });
   $('altWidthSame').addEventListener('change', (e) => { state.geom.altWidthSame = e.target.checked; syncControls(); scheduleBuild(); });
   $('altInheritWidth').addEventListener('change', (e) => { state.geom.altInheritWidth = e.target.checked; scheduleBuild(); });

@@ -19,6 +19,7 @@ export const DEFAULT_ELEV = {
   flatZones: [], // [[s0, s1], ...] en la ruta principal
   profileZones: [], // perfiles dibujados en la ruta principal: [{s0, s1, pts: [[t 0..1, z], ...]}]
   baseHeight: 0,
+  mode: 'auto', // 'auto' = optimizador (colinas, rampas de cruce, pendientes) | 'direct' = la curva pasa exactamente por las alturas fijadas
   bank: false,
   bankMax: 12, // grados
   designSpeed: 90, // km/h para peralte
@@ -238,6 +239,22 @@ export function computeElevation(layout, epIn = {}, overrides = {}, pinsIn = [])
   const inProfile = (sv) => (ep.profileZones || []).some((Z) => { let d = sv - Z.s0; if (main.closed) d = ((d % main.L) + main.L) % main.L; return d >= 0 && d <= Z.s1 - Z.s0; });
   // dentro de un perfil dibujado manda el perfil: se ignoran las alturas fijadas en los puntos de ese tramo
   const pinsBy = routes.map((_, k) => (pinsIn || []).filter((p) => p.route === k && isFinite(p.z) && isFinite(p.s) && !(k === 0 && inProfile(p.s))));
+  if (ep.mode === 'direct') {
+    // modo directo: cada punto con altura es un fotograma clave y la curva pasa exactamente por él (interpolación
+    // cúbica monótona: no se pasa de largo, lo plano queda plano). Sin colinas automáticas; las reglas (pendiente,
+    // cruces) solo se avisan.
+    const out = directProfiles(routes, main, pinsBy, edgeDelta, ep, grids);
+    crossings.forEach((c) => {
+      const src = layout.crossings.find((q) => q.id === c.id) || c;
+      const pr = src.pairs && src.pairs.length ? src.pairs[Math.floor(src.pairs.length / 2)] : null;
+      const za = pr ? out[c.ra].z[pr[0]] : 0, zb = pr ? out[c.rb].z[pr[1]] : 0;
+      c.up = c.order === 'a' || c.order === 'b' ? c.order : za >= zb ? 'a' : 'b';
+      c.autoUp = c.order === 'auto';
+    });
+    const res = finish(out, null);
+    for (const m of res.validation.msgs) if (/^Cruce \d+: separación/.test(m.msg)) m.msg = m.msg.replace(/Sube la pendiente máxima.*$/, 'Usa «Corregir cruces» o sube el paso de arriba en el perfil.');
+    return res;
+  }
   const composeZ = () => {
     const z = zN.map((a) => Float64Array.from(a));
     // bumps
@@ -389,48 +406,54 @@ export function computeElevation(layout, epIn = {}, overrides = {}, pinsIn = [])
     return { z, zCoarse: Float64Array.from(zc), sCoarse: grids[k].s, dsCoarse: grids[k].ds };
   });
 
-  // --- peralte
-  out.forEach((o, k) => {
-    const r = routes[k];
-    // en los extremos de un atajo el peralte es el de la principal (el borde del atajo empalma con el de la pista)
-    if (ep.bank) o.roll = k === 0 ? mainRoll : r.kind === 'alt' ? altRoll[k] : bankRoll(r, ep);
-    else o.roll = new Float64Array(r.n);
-  });
+  return finish(out, sol);
 
-  // los atajos nunca asoman por encima de la pista principal donde se superponen (salida y llegada)
-  routes.forEach((r, k) => { if (r.kind === 'alt') sinkAltUnderMain(main, out[0], r, out[k]); });
+  /** Peralte, validación y avisos (común a los dos modos). */
+  function finish(out, sol) {
+    // --- peralte
+    out.forEach((o, k) => {
+      const r = routes[k];
+      // en los extremos de un atajo el peralte es el de la principal (el borde del atajo empalma con el de la pista)
+      if (ep.bank) o.roll = k === 0 ? mainRoll : r.kind === 'alt' ? altRoll[k] : bankRoll(r, ep);
+      else o.roll = new Float64Array(r.n);
+    });
 
-  const validation = validate(layout, out, crossings, ep, sol, Hreq);
-  // perfiles dibujados: aviso si la pendiente máxima, un radio vertical o un cruce no dejan seguir la forma
-  for (const Z of ep.profileZones || []) {
-    if (!Z.pts || Z.pts.length < 2) continue;
-    const pt = profileTargets(main, main.s, [Z]);
-    let worst = 0, ws = Z.s0;
-    for (let i = 0; i < main.n; i++) if (pt.w[i] >= 1) { const d = Math.abs(out[0].z[i] - pt.z[i]); if (d > worst) { worst = d; ws = main.s[i]; } }
-    if (worst > 0.5) validation.msgs.push({ level: 'warn', route: 0, s: ws, msg: `El perfil dibujado (s≈${Z.s0.toFixed(0)}–${Z.s1.toFixed(0)} m) se sigue con hasta ${worst.toFixed(1)} m de diferencia: lo limita la pendiente máxima, un radio vertical o un cruce.` });
-  }
-  const pinsOut = [];
-  routes.forEach((r, k) => {
-    for (const p of pinsBy[k]) {
-      const i = Math.min(r.n - 1, Math.max(0, Math.round(p.s / r.ds))) % r.n;
-      const got = out[k].z[i];
-      pinsOut.push({ ...p, got });
-      if (Math.abs(got - p.z) > 0.35) {
-        validation.msgs.push({ level: 'warn', route: k, s: p.s, msg: `Altura fijada en ${r.name} (s≈${p.s.toFixed(0)} m) pedida ${p.z.toFixed(1)} m, lograda ${got.toFixed(1)} m: la limita la pendiente máxima, un radio vertical o un cruce.` });
-      }
+    // los atajos nunca asoman por encima de la pista principal donde se superponen (salida y llegada)
+    routes.forEach((r, k) => { if (r.kind === 'alt') sinkAltUnderMain(main, out[0], r, out[k]); });
+
+    const validation = validate(layout, out, crossings, ep, sol, Hreq);
+    // perfiles dibujados: aviso si la pendiente máxima, un radio vertical o un cruce no dejan seguir la forma
+    for (const Z of ep.profileZones || []) {
+      if (!Z.pts || Z.pts.length < 2) continue;
+      const pt = profileTargets(main, main.s, [Z]);
+      let worst = 0, ws = Z.s0;
+      for (let i = 0; i < main.n; i++) if (pt.w[i] >= 1) { const d = Math.abs(out[0].z[i] - pt.z[i]); if (d > worst) { worst = d; ws = main.s[i]; } }
+      if (worst > 0.5) validation.msgs.push({ level: 'warn', route: 0, s: ws, msg: `El perfil dibujado (s≈${Z.s0.toFixed(0)}–${Z.s1.toFixed(0)} m) se sigue con hasta ${worst.toFixed(1)} m de diferencia: lo limita la pendiente máxima, un radio vertical o un cruce.` });
     }
-  });
-  return {
-    routes: out,
-    crossings: crossings.map((c) => ({
-      id: c.id, ra: c.ra, rb: c.rb, sa: c.sa, sb: c.sb, x: c.x, y: c.y, up: c.up, type: c.type,
-      order: c.order, autoUp: c.autoUp, clearance: c.clearance, hreq: c.hreq, sepOwn: c.sepOwn, pinned: c.pinned,
-    })),
-    validation,
-    pins: pinsOut,
-    solver: sol && { status: sol.status, iter: sol.iter, ms: sol.ms, rank: sol.rank },
-    ep,
-  };
+    const pinsOut = [];
+    routes.forEach((r, k) => {
+      for (const p of pinsBy[k]) {
+        const i = Math.min(r.n - 1, Math.max(0, Math.round(p.s / r.ds))) % r.n;
+        const got = out[k].z[i];
+        if (p.anchor) continue; // ancla del suelo de un tramo elevado: no es un punto del usuario
+        pinsOut.push({ ...p, got });
+        if (Math.abs(got - p.z) > 0.35) {
+          validation.msgs.push({ level: 'warn', route: k, s: p.s, msg: `Altura fijada en ${r.name} (s≈${p.s.toFixed(0)} m) pedida ${p.z.toFixed(1)} m, lograda ${got.toFixed(1)} m: la limita la pendiente máxima, un radio vertical o un cruce.` });
+        }
+      }
+    });
+    return {
+      routes: out,
+      crossings: crossings.map((c) => ({
+        id: c.id, ra: c.ra, rb: c.rb, sa: c.sa, sb: c.sb, x: c.x, y: c.y, up: c.up, type: c.type,
+        order: c.order, autoUp: c.autoUp, clearance: c.clearance, hreq: c.hreq, sepOwn: c.sepOwn, pinned: c.pinned,
+      })),
+      validation,
+      pins: pinsOut,
+      solver: sol && { status: sol.status, iter: sol.iter, ms: sol.ms, rank: sol.rank },
+      ep,
+    };
+  }
 }
 
 /** Desplaza el perfil para que pase por las alturas fijadas, con influencia local suave (RBF de Wendland). */
@@ -600,6 +623,84 @@ function chooseOrientation(crossings, routes, grids, zN, Hreq, g) {
     }
   }
   crossings.forEach((c, i) => { c.up = best[i]; c.autoUp = c.order === 'auto'; });
+}
+
+/**
+ * Interpolación cúbica monótona (Fritsch–Carlson) por los puntos (xs crecientes). m0 / m1 = pendientes impuestas en
+ * los extremos (null = las de Fritsch–Carlson). Devuelve f(x); fuera del rango queda constante.
+ */
+export function monoInterp(xs, ys, m0 = null, m1 = null) {
+  const n = xs.length;
+  if (n === 1) return () => ys[0];
+  const d = [], m = new Array(n).fill(0);
+  for (let i = 0; i < n - 1; i++) d.push((ys[i + 1] - ys[i]) / Math.max(1e-9, xs[i + 1] - xs[i]));
+  m[0] = d[0]; m[n - 1] = d[n - 2];
+  for (let i = 1; i < n - 1; i++) m[i] = d[i - 1] * d[i] <= 0 ? 0 : (d[i - 1] + d[i]) / 2;
+  if (m0 !== null) m[0] = m0;
+  if (m1 !== null) m[n - 1] = m1;
+  for (let i = 0; i < n - 1; i++) {
+    if (Math.abs(d[i]) < 1e-12) { m[i] = 0; m[i + 1] = 0; continue; }
+    if (m[i] * d[i] < 0) m[i] = 0;
+    if (m[i + 1] * d[i] < 0) m[i + 1] = 0;
+    const a = m[i] / d[i], b = m[i + 1] / d[i], q = a * a + b * b;
+    if (q > 9) { const t = 3 / Math.sqrt(q); m[i] = t * a * d[i]; m[i + 1] = t * b * d[i]; }
+  }
+  let last = 0;
+  return (x) => {
+    if (x <= xs[0]) return ys[0];
+    if (x >= xs[n - 1]) return ys[n - 1];
+    let i = last;
+    if (!(x >= xs[i] && x <= xs[i + 1])) { let lo = 0, hi = n - 2; while (lo < hi) { const md = (lo + hi + 1) >> 1; if (xs[md] <= x) lo = md; else hi = md - 1; } i = lo; }
+    last = i;
+    const h = xs[i + 1] - xs[i], t = (x - xs[i]) / h, t2 = t * t, t3 = t2 * t;
+    return (2 * t3 - 3 * t2 + 1) * ys[i] + (t3 - 2 * t2 + t) * h * m[i] + (-2 * t3 + 3 * t2) * ys[i + 1] + (t3 - t2) * h * m[i + 1];
+  };
+}
+
+/** Perfiles del modo directo: la curva de cada ruta pasa por sus fotogramas clave (alturas fijadas). */
+function directProfiles(routes, main, pinsBy, edgeDelta, ep, grids) {
+  const keysOf = (list, L) => {
+    const K = list.map((p) => [((p.s % L) + L) % L, p.z]).sort((a, b) => a[0] - b[0]);
+    const out = [];
+    for (const k of K) { if (out.length && Math.abs(k[0] - out[out.length - 1][0]) < 0.05) out[out.length - 1] = k; else out.push(k); }
+    return out;
+  };
+  const pack = (r, k, z) => {
+    const gr = grids[k], zc = new Float64Array(gr.n);
+    for (let i = 0; i < gr.n; i++) { const f = Math.min(r.n - 1, Math.round(gr.s[i] / r.ds)); zc[i] = z[f % r.n]; }
+    return { z, zCoarse: zc, sCoarse: gr.s, dsCoarse: gr.ds };
+  };
+  const out = [];
+  // principal (cerrada: la interpolación da la vuelta)
+  {
+    const r = main, K = keysOf(pinsBy[0], r.L), z = new Float64Array(r.n);
+    if (!K.length) z.fill(ep.baseHeight || 0);
+    else {
+      let xs = K.map((q) => q[0]), ys = K.map((q) => q[1]);
+      if (r.closed) { // copias a cada lado para que la curva sea continua en la meta
+        const pre = K.slice(-2).map((q) => [q[0] - r.L, q[1]]), post = K.slice(0, 2).map((q) => [q[0] + r.L, q[1]]);
+        const all = [...pre, ...K, ...post];
+        xs = all.map((q) => q[0]); ys = all.map((q) => q[1]);
+      }
+      const f = monoInterp(xs, ys);
+      for (let i = 0; i < r.n; i++) z[i] = f(r.s[i]);
+    }
+    out.push(pack(r, 0, z));
+  }
+  const zMainAt = (sv) => { const r = main, L = r.L, u = (r.closed ? ((sv % L) + L) % L : clamp(sv, 0, L)) / r.ds, i = Math.floor(u), t = u - i; const a = out[0].z[i % r.n], b = out[0].z[r.closed ? (i + 1) % r.n : Math.min(r.n - 1, i + 1)]; return a + (b - a) * t; };
+  const gradeMainAt = (sv) => (zMainAt(sv + 2) - zMainAt(sv - 2)) / 4;
+  // atajos: empalman con la altura (y la pendiente) de la principal en la salida y en la llegada
+  for (let k = 1; k < routes.length; k++) {
+    const r = routes[k], z = new Float64Array(r.n);
+    const zf = zMainAt(r.forkS) + edgeDelta(r, 'fork'), zm = zMainAt(r.mergeS) + edgeDelta(r, 'merge');
+    const edge = Math.max(2, r.ds * 2);
+    const K = keysOf(pinsBy[k].filter((p) => p.s > edge && p.s < r.L - edge), r.L);
+    const xs = [0, ...K.map((q) => q[0]), r.L], ys = [zf, ...K.map((q) => q[1]), zm];
+    const f = monoInterp(xs, ys, gradeMainAt(r.forkS), gradeMainAt(r.mergeS));
+    for (let i = 0; i < r.n; i++) z[i] = f(r.s[i]);
+    out.push(pack(r, k, z));
+  }
+  return out;
 }
 
 function validate(layout, out, crossings, ep, sol, Hreq) {
