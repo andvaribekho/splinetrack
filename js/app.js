@@ -50,6 +50,9 @@ const state = {
   drawSmooth: 4, // suavizado del dibujo a mano (0..10)
   pinLocal: true, // al fijar una altura, mover solo ese punto
   selSet: null, // selección múltiple {key, idxs:Set}
+  subObj: 'vertex', // nivel de edición del spline (como en 3ds Max): 'vertex' | 'segment'
+  xform: 'move', // transformación activa al editar: 'move' | 'rotate' | 'scale'
+  segSel: null, // segmentos seleccionados {key, segs:Set, sig} (el segmento i va del vértice i al siguiente)
   arc: null, // sesión de curva de radio fijo
   arcPreview: null,
   scene: { ...DEFAULT_SCENE }, // terreno, árboles, texturas
@@ -297,6 +300,7 @@ function clearAllSelections() {
   if (state.selCross != null) { state.selCross = null; refreshPanels(); }
   state.sel = null;
   state.selSet = null;
+  state.segSel = null;
   endArc();
   if (state.selItem) selectItem(null);
   if (state.selHill != null || state.selTunnel != null) selectHill(null);
@@ -945,6 +949,201 @@ const app = {
     editor.draw();
   },
   clearMultiSel() { endArc(); state.selSet = null; refreshArcBox(); editor.draw(); },
+  // ---- nivel Segmento y transformaciones (mover / rotar / escalar) ----
+  /** Arcos en s de cada segmento de una ruta: [{i, j, s0, len}] (el segmento i va del vértice i al j = siguiente). */
+  segmentArcs(k) {
+    const L = state.layout;
+    if (!L || !state.ctrlS || !state.ctrlS[k]) return [];
+    const r = L.routes[k], S = state.ctrlS[k], n = S.length;
+    const closed = k === 0 && state.project.main.closed !== false;
+    const m = closed ? n : n - 1, out = [];
+    for (let i = 0; i < m; i++) {
+      const j = (i + 1) % n, a = S[i], b = S[j];
+      if (a == null || b == null) continue;
+      let s0, len;
+      if (r.closed) {
+        const f = (((b - a) % r.L) + r.L) % r.L, g = (((a - b) % r.L) + r.L) % r.L;
+        if (f <= g) { s0 = a; len = f; } else { s0 = b; len = g; }
+      } else { s0 = Math.min(a, b); len = Math.abs(b - a); }
+      out.push({ i, j, s0, len });
+    }
+    return out;
+  },
+  /** Segmento bajo un punto del lienzo (o null): {key, seg}. tol en unidades del lienzo. */
+  segmentAt(p, tol) {
+    const L = state.layout;
+    if (!L || !state.ctrlS) return null;
+    const [X, Y] = L.toWorld(p[0], p[1]);
+    let best = null;
+    L.routes.forEach((r, k) => {
+      const key = k === 0 ? 'main' : r.altIndex;
+      const arr = ctrlArray(key);
+      if (!arr || !state.ctrlS[k] || (k > 0 && state.project.alts[key] && state.project.alts[key].keep === false)) return;
+      const q = nearestOnSamples(r, X, Y);
+      if (q.d / L.scale > tol || (best && q.d >= best.d)) return;
+      let seg = null, sl = Infinity;
+      for (const A of app.segmentArcs(k)) {
+        const d = r.closed ? (((q.s - A.s0) % r.L) + r.L) % r.L : q.s - A.s0;
+        if (d >= -1e-6 && d <= A.len + 1e-6 && A.len < sl) { sl = A.len; seg = A.i; }
+      }
+      if (seg !== null) best = { key, seg, d: q.d };
+    });
+    return best ? { key: best.key, seg: best.seg } : null;
+  },
+  toast(m) { toast(m); },
+  segmentAtWorld(x, y, tolM = 12) { const L = state.layout; if (!L) return null; return app.segmentAt(L.toLayout(x, y), tolM / L.scale); },
+  segEnds(key, seg) {
+    const arr = ctrlArray(key);
+    if (!arr) return null;
+    const n = arr.length, closed = key === 'main' && state.project.main.closed !== false;
+    const j = seg + 1 < n ? seg + 1 : closed ? 0 : null;
+    return j === null ? null : [seg, j];
+  },
+  /** Deja state.selSet con los vértices de los segmentos seleccionados (así Recta, Aplanar, el perfil, etc. los ven). */
+  syncSegSel() {
+    const G = state.segSel;
+    if (!G || !G.segs.size) { state.segSel = null; state.selSet = null; }
+    else {
+      const idxs = new Set();
+      for (const sg of G.segs) { const e = app.segEnds(G.key, sg); if (e) { idxs.add(e[0]); idxs.add(e[1]); } }
+      state.selSet = idxs.size ? { key: G.key, idxs } : null;
+      G.sig = selSig();
+    }
+    state.sel = null;
+    endArc(); refreshArcBox();
+    editor.draw(); profile.draw(); preview.updateHandles();
+  },
+  /** Segmentos seleccionados vigentes: si la selección de vértices cambió por otra vía, los segmentos cuyos dos vértices están seleccionados. */
+  segSelEffective() {
+    const ms = state.selSet;
+    if (!ms || !ms.idxs.size) return null;
+    const G = state.segSel;
+    if (G && G.key === ms.key && G.sig === selSig()) return { key: G.key, segs: [...G.segs] };
+    const arr = ctrlArray(ms.key);
+    if (!arr) return null;
+    const segs = [];
+    for (let i = 0; i < arr.length; i++) { const e = app.segEnds(ms.key, i); if (e && ms.idxs.has(e[0]) && ms.idxs.has(e[1])) segs.push(i); }
+    return segs.length ? { key: ms.key, segs } : null;
+  },
+  /** Selecciona un segmento (hit = {key, seg}); additive = Shift/Ctrl: suma o quita. */
+  selectSegment(hit, additive = false) {
+    const cur = app.segSelEffective();
+    if (!hit) { if (!additive) { state.segSel = null; app.syncSegSel(); } return; }
+    let segs = additive && cur && cur.key === hit.key ? new Set(cur.segs) : new Set();
+    if (additive && segs.has(hit.seg)) segs.delete(hit.seg); else segs.add(hit.seg);
+    state.segSel = { key: hit.key, segs };
+    app.syncSegSel();
+  },
+  /** Caja en el lienzo: segmentos con sus dos vértices dentro. mode: false = reemplaza, true = suma, 'sub' = quita. */
+  segBoxSelect(x0, y0, x1, y1, mode) {
+    const [ax, bx] = [Math.min(x0, x1), Math.max(x0, x1)], [ay, by] = [Math.min(y0, y1), Math.max(y0, y1)];
+    const inBox = (q) => q[0] >= ax && q[0] <= bx && q[1] >= ay && q[1] <= by;
+    let best = null;
+    for (const r of app.ctrlRoutes()) {
+      const segs = [];
+      for (let i = 0; i < r.pts.length; i++) { const e = app.segEnds(r.key, i); if (e && inBox(r.pts[e[0]]) && inBox(r.pts[e[1]])) segs.push(i); }
+      if (segs.length && (!best || segs.length > best.segs.length)) best = { key: r.key, segs };
+    }
+    app.segSelectMany(best, mode);
+  },
+  /** Selección de segmentos a partir de una lista {key, segs} (o de vértices {key, idxs} con verts = true). */
+  segSelectMany(best, mode, verts = false) {
+    if (best && verts) {
+      const S = new Set(best.idxs), segs = [];
+      const arr = ctrlArray(best.key) || [];
+      for (let i = 0; i < arr.length; i++) { const e = app.segEnds(best.key, i); if (e && S.has(e[0]) && S.has(e[1])) segs.push(i); }
+      best = segs.length ? { key: best.key, segs } : null;
+    }
+    const cur = app.segSelEffective();
+    let segs;
+    if (mode === 'sub') { if (!cur || !best || cur.key !== best.key) return; segs = new Set(cur.segs); best.segs.forEach((i) => segs.delete(i)); best = { key: cur.key }; }
+    else if (!best) { if (mode) return; segs = new Set(); best = { key: 'main' }; }
+    else if (mode && cur && cur.key === best.key) { segs = new Set(cur.segs); best.segs.forEach((i) => segs.add(i)); }
+    else segs = new Set(best.segs);
+    state.segSel = segs.size ? { key: best.key, segs } : null;
+    app.syncSegSel();
+  },
+  /** Rangos en s de los segmentos seleccionados (para resaltarlos): [{k, s0, s1}] (s1 puede pasar de L en rutas cerradas). */
+  segSelRanges() {
+    const G = app.segSelEffective(), L = state.layout;
+    if (!G || !L) return [];
+    const k = G.key === 'main' ? 0 : L.routes.findIndex((r) => r.altIndex === G.key);
+    if (k < 0) return [];
+    const arcs = app.segmentArcs(k), S = new Set(G.segs);
+    return arcs.filter((A) => S.has(A.i)).map((A) => ({ k, s0: A.s0, s1: A.s0 + A.len }));
+  },
+  setSubObj(level) {
+    if (level !== 'vertex' && level !== 'segment') return;
+    if (state.tool !== 'edit') setTool('edit');
+    const was = state.subObj;
+    state.subObj = level;
+    if (level === 'segment' && was !== 'segment') {
+      const eff = app.segSelEffective();
+      state.segSel = eff ? { key: eff.key, segs: new Set(eff.segs) } : null;
+      if (state.segSel) app.syncSegSel(); else { state.selSet = null; state.sel = null; }
+    }
+    refreshXformBar();
+    editor.draw(); profile.draw(); preview.updateHandles();
+  },
+  setXform(mode) {
+    if (!['move', 'rotate', 'scale'].includes(mode)) return;
+    if (state.tool !== 'edit') setTool('edit');
+    state.xform = mode;
+    refreshXformBar();
+    editor.draw(); preview.updateHandles();
+  },
+  /** Vértices que transforma la selección actual (varios) y su centro, en coordenadas del lienzo. */
+  xformTargets() {
+    const ms = state.selSet && state.selSet.idxs.size ? state.selSet : state.sel ? { key: state.sel.key, idxs: new Set([state.sel.idx]) } : null;
+    if (!ms) return null;
+    const arr = ctrlArray(ms.key);
+    if (!arr) return null;
+    const idxs = [...ms.idxs].filter((i) => arr[i]);
+    if (!idxs.length) return null;
+    let x = 0, y = 0;
+    for (const i of idxs) { x += arr[i][0]; y += arr[i][1]; }
+    return { key: ms.key, idxs, pivot: [x / idxs.length, y / idxs.length] };
+  },
+  beginXform() {
+    const T = app.xformTargets();
+    if (!T) return null;
+    pushUndo();
+    endArc();
+    const arr = ctrlArray(T.key);
+    state.xformDrag = { key: T.key, pivot: T.pivot, items: T.idxs.map((i) => ({ i, x: arr[i][0], y: arr[i][1] })) };
+    return T.pivot;
+  },
+  /** t = {type:'rotate', a (rad, en el lienzo: y hacia abajo)} | {type:'scale', sx, sy} | {type:'move', dx, dy}. */
+  applyXform(t) {
+    const g = state.xformDrag;
+    if (!g) return;
+    const arr = ctrlArray(g.key);
+    const [px, py] = g.pivot;
+    const c = t.type === 'rotate' ? Math.cos(t.a) : 1, sn = t.type === 'rotate' ? Math.sin(t.a) : 0;
+    for (const it of g.items) {
+      let x = it.x, y = it.y;
+      if (t.type === 'rotate') { const dx = x - px, dy = y - py; x = px + dx * c - dy * sn; y = py + dx * sn + dy * c; }
+      else if (t.type === 'scale') { x = px + (x - px) * t.sx; y = py + (y - py) * t.sy; }
+      else { x += t.dx; y += t.dy; }
+      arr[it.i] = [+x.toFixed(4), +y.toFixed(4), ...arr[it.i].slice(2)];
+    }
+    const info = t.type === 'rotate' ? `Rotación ${(-t.a * 180 / Math.PI).toFixed(1)}°` : t.type === 'scale' ? (Math.abs(t.sx - t.sy) < 1e-9 ? `Escala ${(t.sx * 100).toFixed(1)} %` : `Escala X ${(t.sx * 100).toFixed(1)} % · Y ${(t.sy * 100).toFixed(1)} %`) : '';
+    state.xformInfo = info;
+    scheduleBuild();
+  },
+  endXform() { state.xformDrag = null; state.xformInfo = ''; refreshPanels(); editor.draw(); },
+  /** Aplica una rotación (grados, antihorario en planta) o una escala (%) escrita a mano sobre la selección. */
+  applyXformNumeric(mode, v) {
+    if (!Number.isFinite(v)) return false;
+    const T = app.xformTargets();
+    if (!T || T.idxs.length < 2) { toast(state.subObj === 'segment' ? 'Selecciona uno o más segmentos para transformarlos.' : 'Selecciona 2 o más puntos para rotarlos o escalarlos.'); return false; }
+    if (mode === 'scale' && !(v > 0)) { toast('La escala debe ser mayor que 0 %.'); return false; }
+    app.beginXform();
+    if (mode === 'rotate') app.applyXform({ type: 'rotate', a: (-v * Math.PI) / 180 });
+    else app.applyXform({ type: 'scale', sx: v / 100, sy: v / 100 });
+    app.endXform();
+    return true;
+  },
   // ---- pintura: densidad del terreno y cerros ----
   /** Empieza una sesión de pincel. Cerros: si empieza sobre un cerro lo extiende (y lo selecciona); si no, crea uno nuevo. */
   beginPaint(kind, ses = null, p = null, hitHill = null) {
@@ -1384,6 +1583,22 @@ const app = {
     setCrossingOverride(id, { order: c.up === 'a' ? 'b' : 'a' });
   },
 };
+
+/** Firma de la selección de vértices (para saber si cambió fuera del nivel Segmento). */
+function selSig() { const m = state.selSet; return m ? `${m.key}:${[...m.idxs].sort((a, b) => a - b).join(',')}` : ''; }
+/** Barra de nivel (Vértice / Segmento) y transformación (Mover / Rotar / Escalar) en «Editar puntos». */
+function refreshXformBar() {
+  document.querySelectorAll('#xformBox [data-sub]').forEach((b) => b.classList.toggle('active', b.dataset.sub === state.subObj));
+  document.querySelectorAll('#xformBox [data-xf]').forEach((b) => b.classList.toggle('active', b.dataset.xf === state.xform));
+  const num = $('xformNumLbl');
+  if (num) {
+    num.style.visibility = state.xform === 'move' ? 'hidden' : ''; // ocupa su lugar igual: la barra no cambia de alto
+    $('xformNumTxt').textContent = state.xform === 'rotate' ? 'Rotar' : 'Escalar';
+    $('xformNumUnit').textContent = state.xform === 'rotate' ? '°' : '%';
+    const inp = $('xformNum');
+    if (inp.dataset.mode !== state.xform) { inp.dataset.mode = state.xform; inp.value = state.xform === 'rotate' ? 15 : 110; inp.step = state.xform === 'rotate' ? 1 : 5; }
+  }
+}
 
 // ---------- curva de radio fijo (selección múltiple) ----------
 function contiguousRun(key) {
@@ -3305,6 +3520,25 @@ function bindControls() {
   $('loopSepVal').textContent = `${$('loopSep').value} m`;
   app.refreshLoopInfo = refreshLoopInfo;
   app.alignSelection = alignSelection;
+  // nivel Vértice / Segmento y transformación Mover / Rotar / Escalar (como en 3ds Max: 1 / 2 y W / E / R)
+  document.querySelectorAll('#xformBox [data-sub]').forEach((b) => b.addEventListener('click', () => app.setSubObj(b.dataset.sub)));
+  document.querySelectorAll('#xformBox [data-xf]').forEach((b) => b.addEventListener('click', () => app.setXform(b.dataset.xf)));
+  const xfApply = () => { if (app.applyXformNumeric(state.xform, parseFloat($('xformNum').value))) toast(state.xform === 'rotate' ? `Selección rotada ${$('xformNum').value}° (antihorario).` : `Selección escalada al ${$('xformNum').value} %.`); };
+  $('btnXformApply').addEventListener('click', xfApply);
+  $('xformNum').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); xfApply(); } });
+  refreshXformBar();
+  document.addEventListener('keydown', (e) => {
+    if (state.tool !== 'edit' || e.ctrlKey || e.metaKey || e.altKey || (preview.game && preview.game.active)) return;
+    const t = e.target || {};
+    if (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA') return;
+    const k = e.code === 'Digit1' || e.code === 'Numpad1' ? '1' : e.code === 'Digit2' || e.code === 'Numpad2' ? '2' : /^Key[WER]$/.test(e.code) ? e.code.slice(3) : null;
+    if (!k) return;
+    // no pisa un atajo que el usuario haya asignado a esa tecla
+    try { const hk = JSON.parse(localStorage.getItem('tsg.hotkeys.v1') || '{}'); if (Object.values(hk).includes(k)) return; } catch { /* sin almacenamiento */ }
+    e.preventDefault();
+    if (k === '1') app.setSubObj('vertex'); else if (k === '2') app.setSubObj('segment');
+    else app.setXform(k === 'W' ? 'move' : k === 'E' ? 'rotate' : 'scale');
+  });
   $('btnTbFork').addEventListener('click', () => {
     focusPanel('arc');
     const sel = state.selSet;
@@ -3499,7 +3733,7 @@ function setTool(t) {
   const p = state.project;
   const needs = p.main && (!p.main.ctrl || p.alts.some((a) => !a.ctrl));
   if (t === 'edit' && state.layout && needs) { pushUndo(); ensureCtrl(); scheduleBuild(); }
-  if (t !== 'edit') { state.sel = null; state.selSet = null; endArc(); }
+  if (t !== 'edit') { state.sel = null; state.selSet = null; state.segSel = null; endArc(); }
   refreshArcBox();
   refreshCtrlBox();
   if (typeof editor !== 'undefined') { editor.draw(); profile.draw(); preview.updateHandles(); }

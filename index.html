@@ -687,6 +687,15 @@
             <span class="small muted">cerro seleccionado = cascada</span>
           </span>
           <span id="editBox" class="row" hidden>
+            <span id="xformBox" class="row">
+              <button data-sub="vertex" data-icon="vertex" class="active" title="Nivel Vértice (tecla 1): seleccionas y transformas puntos de control">Vértice</button>
+              <button data-sub="segment" data-icon="segment" title="Nivel Segmento (tecla 2): seleccionas tramos entre dos puntos (clic sobre la pista; Shift suma o arrastra una caja, Alt quita) y los mueves, rotas o escalas. Sus extremos son compartidos: los tramos vecinos se adaptan">Segmento</button>
+              <span class="sep"></span>
+              <button data-xf="move" data-icon="move" class="active" title="Mover (W): arrastra la selección o las flechas del gizmo">Mover</button>
+              <button data-xf="rotate" data-icon="rotate" title="Rotar (E): arrastra el aro del gizmo o la selección; gira alrededor del centro de la selección. Shift = de a 5°">Rotar</button>
+              <button data-xf="scale" data-icon="scale" title="Escalar (R): arrastra el triángulo del gizmo o la selección (uniforme) o sus ejes X / Y; desde el centro de la selección">Escalar</button>
+              <label class="small" id="xformNumLbl" style="visibility:hidden" title="Valor exacto para la selección (Enter o Aplicar)"><span id="xformNumTxt">Rotar</span> <input type="number" id="xformNum" value="15" style="width:56px"> <span id="xformNumUnit">°</span> <button id="btnXformApply" data-icon="check">Aplicar</button></label>
+            </span>
             <button id="btnTbRadius">Radio</button>
             <button id="btnTbFork">Bifurcar</button>
             <button id="btnTbBridge">Puente</button>

@@ -52,6 +52,8 @@ export class Preview3D {
     // --- edición de puntos en 3D ---
     this.handleGroup = new THREE.Group();
     this.scene.add(this.handleGroup);
+    this.segGroup = new THREE.Group(); // segmentos seleccionados (nivel Segmento)
+    this.scene.add(this.segGroup);
     this.proxy = new THREE.Object3D();
     this.scene.add(this.proxy);
     this.tc = new TransformControls(this.camera, this.renderer.domElement);
@@ -208,6 +210,12 @@ export class Preview3D {
         this.box = null;
         div.remove();
         this.controls.enabled = true;
+        const segMode = this.app.state.subObj === 'segment';
+        if (segMode && Math.abs(b.x1 - b.x0) + Math.abs(b.y1 - b.y0) < 5) {
+          const sh = this.pickSegment(ev);
+          if (sh && b.sub) this.app.segSelectMany({ key: sh.key, segs: [sh.seg] }, 'sub'); else if (sh) this.app.selectSegment(sh, true);
+          return;
+        }
         if (Math.abs(b.x1 - b.x0) + Math.abs(b.y1 - b.y0) < 5) {
           const hit = this.pickHandle(ev);
           if (hit && !b.sub) this.app.toggleMultiSel(hit);
@@ -223,7 +231,8 @@ export class Preview3D {
           const sx = (v.x + 1) / 2 * r.width, sy = (1 - v.y) / 2 * r.height;
           if (sx >= ax && sx <= bx && sy >= ay && sy <= by) inside.push({ key: m.userData.key, idx: m.userData.idx });
         }
-        if (b.sub) this.app.subtractMultiSel(this.app.pickBest(inside)); else this.app.setMultiSel(this.app.pickBest(inside), b.add);
+        if (segMode) this.app.segSelectMany(this.app.pickBest(inside), b.sub ? 'sub' : true, true);
+        else if (b.sub) this.app.subtractMultiSel(this.app.pickBest(inside)); else this.app.setMultiSel(this.app.pickBest(inside), b.add);
       };
       window.addEventListener('pointermove', move, true);
       window.addEventListener('pointerup', up, true);
@@ -1278,10 +1287,51 @@ export class Preview3D {
 
   setGizmoMode(m) {
     this.gizmoMode = m;
-    this.tc.showX = m !== 'z';
-    this.tc.showY = m !== 'z';
-    this.tc.showZ = m !== 'xy';
+    const xf = (this.app.state && this.app.state.xform) || 'move';
+    if (xf === 'rotate') { this.tc.setMode('rotate'); this.tc.showX = false; this.tc.showY = false; this.tc.showZ = true; }
+    else if (xf === 'scale') { this.tc.setMode('scale'); this.tc.showX = true; this.tc.showY = true; this.tc.showZ = true; }
+    else {
+      this.tc.setMode('translate');
+      this.tc.showX = m !== 'z';
+      this.tc.showY = m !== 'z';
+      this.tc.showZ = m !== 'xy';
+    }
     this.needsFrame = true;
+  }
+  /** Cinta amarilla sobre los segmentos seleccionados (nivel Segmento). */
+  updateSegHighlight() {
+    for (const c of [...this.segGroup.children]) { this.segGroup.remove(c); c.geometry?.dispose(); c.material?.dispose(); }
+    const st = this.app.state, L = st.layout, E = st.result;
+    if (st.tool !== 'edit' || st.subObj !== 'segment' || !L || !E || !this.app.segSelRanges) return;
+    const ex = this.zExag;
+    for (const R of this.app.segSelRanges()) {
+      const r = L.routes[R.k], z = E.routes[R.k].z;
+      const i0 = Math.floor(R.s0 / r.ds), i1 = Math.ceil(R.s1 / r.ds);
+      const pos = [], idx = [];
+      for (let ii = i0; ii <= i1; ii++) {
+        const i = r.closed ? ((ii % r.n) + r.n) % r.n : Math.max(0, Math.min(r.n - 1, ii));
+        const hw = r.w[i] * 0.32, nx = -r.ty[i], ny = r.tx[i], zz = z[i] * ex + 0.25;
+        pos.push(r.x[i] + nx * hw, r.y[i] + ny * hw, zz, r.x[i] - nx * hw, r.y[i] - ny * hw, zz);
+        const v = (ii - i0) * 2;
+        if (ii > i0) idx.push(v - 2, v - 1, v, v - 1, v + 1, v);
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      g.setIndex(idx);
+      const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: 0xffe066, transparent: true, opacity: 0.55, depthTest: false, side: THREE.DoubleSide }));
+      m.renderOrder = 9;
+      this.segGroup.add(m);
+    }
+  }
+  /** Segmento de la pista bajo el cursor en 3D (nivel Segmento) o null. */
+  pickSegment(e) {
+    const r = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(ndc, this.camera);
+    const h = ray.intersectObjects(this.trackGroup.children, false);
+    if (!h.length) return null;
+    return this.app.segmentAtWorld(h[0].point.x, h[0].point.y, 12);
   }
 
   handleRadius() {
@@ -1313,6 +1363,8 @@ export class Preview3D {
       return;
     }
     if (!this.tc.dragging) this.setGizmoMode(this.gizmoMode || 'free');
+    this.updateSegHighlight();
+    const segMode = st.subObj === 'segment', xf = st.xform || 'move';
     const ex = this.zExag;
     const rad = this.handleRadius();
     const geo = new THREE.SphereGeometry(rad, 14, 10);
@@ -1322,12 +1374,12 @@ export class Preview3D {
     let cenN = 0;
     for (const pt of this.app.ctrlPoints()) {
       const inMulti = ms && ms.key === pt.key && ms.idxs.has(pt.idx);
-      const isSel = (st.sel && st.sel.key === pt.key && st.sel.idx === pt.idx) || inMulti;
+      const isSel = !segMode && ((st.sel && st.sel.key === pt.key && st.sel.idx === pt.idx) || inMulti);
       const color = isSel ? 0xffe066 : pt.pin !== null ? 0xf2a93b : pt.k > 0 ? 0x9fd4ff : 0xffffff;
       const m = new THREE.Mesh(geo.clone(), new THREE.MeshBasicMaterial({ color, depthTest: false, transparent: true, opacity: 0.95 }));
       const z = pt.pin !== null ? pt.pin : pt.z;
       m.position.set(pt.X, pt.Y, z * ex + rad * 0.6);
-      if (isSel) m.scale.setScalar(1.5);
+      if (isSel) m.scale.setScalar(1.5); else if (segMode) m.scale.setScalar(0.6);
       m.renderOrder = 10;
       m.userData = { key: pt.key, idx: pt.idx };
       this.handleGroup.add(m);
@@ -1335,10 +1387,13 @@ export class Preview3D {
       else if (isSel) selPt = m.position.clone();
     }
     if (cenN > 0) selPt = cen.multiplyScalar(1 / cenN);
+    if (xf !== 'move' && cenN < 2) selPt = null; // rotar / escalar necesitan 2 o más puntos
     geo.dispose();
     if (selPt) {
       if (!this.tc.dragging) {
         this.proxy.position.copy(selPt);
+        this.proxy.rotation.set(0, 0, 0);
+        this.proxy.scale.set(1, 1, 1);
         this.tc.attach(this.proxy);
       }
     } else if (!this.tc.dragging) this.tc.detach();
@@ -1355,6 +1410,7 @@ export class Preview3D {
   }
 
   pick(e) {
+    if (this.app.state.subObj === 'segment') { this.app.selectSegment(this.pickSegment(e), false); return; }
     const r = this.renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
     const ray = new THREE.Raycaster();
@@ -1370,6 +1426,11 @@ export class Preview3D {
       this.itemDragMode = true;
       this.dragStart = this.proxy.position.clone();
       this.app.beginItemDrag(st.selItem);
+      return;
+    }
+    if ((st.xform === 'rotate' || st.xform === 'scale') && st.selSet && st.selSet.idxs.size > 1 && this.app.beginXform()) {
+      this.xformMode = st.xform;
+      this.dragSel = { group: true };
       return;
     }
     if (st.selSet && st.selSet.idxs.size > 0 && this.app.beginGroupDrag()) {
@@ -1397,6 +1458,13 @@ export class Preview3D {
     const d = this.dragSel;
     if (!d) return;
     const p = this.proxy.position;
+    if (this.xformMode === 'rotate') { this.app.applyXform({ type: 'rotate', a: -this.proxy.rotation.z }); return; } // y del lienzo invertida
+    if (this.xformMode === 'scale') {
+      const c = (v) => Math.max(0.02, Math.min(50, v));
+      const S = this.proxy.scale, u = this.tc.axis === 'XYZ';
+      this.app.applyXform({ type: 'scale', sx: c(u ? S.x : S.x), sy: c(u ? S.x : S.y) });
+      return;
+    }
     if (this.groupMode) {
       const L = this.app.state.layout;
       const dX = p.x - this.dragStart.x, dY = p.y - this.dragStart.y, dZ = p.z - this.dragStart.z;
@@ -1427,7 +1495,8 @@ export class Preview3D {
       return;
     }
     this.dragSel = null;
-    if (this.groupMode) { this.groupMode = false; this.app.endGroupDrag(); } else this.app.endCtrlDrag();
+    if (this.xformMode) { this.xformMode = null; this.app.endXform(); this.proxy.rotation.set(0, 0, 0); this.proxy.scale.set(1, 1, 1); }
+    else if (this.groupMode) { this.groupMode = false; this.app.endGroupDrag(); } else this.app.endCtrlDrag();
     this.updateHandles();
   }
 

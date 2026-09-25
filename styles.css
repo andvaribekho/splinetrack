@@ -336,3 +336,7 @@ button.small svg.bi { width: 11px; height: 11px; }
 .sculpt-curve .row label { white-space: nowrap; }
 .sculpt-curve select { flex: 1 1 auto; min-width: 0; font-size: 12px; }
 #sculptCurveCv { display: block; width: 100%; height: 150px; margin-top: 6px; border-radius: 6px; background: rgba(0,0,0,0.28); border: 1px solid rgba(255,255,255,0.08); cursor: crosshair; touch-action: none; }
+
+#xformBox { gap: 4px; flex-wrap: nowrap; flex-basis: 100%; }
+#xformNumLbl button { margin-left: 2px; }
+#editBox { flex-wrap: wrap; flex-basis: 100%; gap: 6px; }

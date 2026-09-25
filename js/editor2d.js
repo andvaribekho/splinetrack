@@ -113,10 +113,12 @@ export class Editor2D {
         if (sx >= x0 && sx <= x1 && sy >= y0 && sy <= y1) { this.app.refBeginDrag(); this.refDrag = { mode: 'move', last: p0 }; return; }
       }
       if (tool === 'edit') {
-        const hit = this.hitCtrl(sx, sy);
-        // gizmo de traslación (X, Y o libre) sobre el punto o grupo seleccionado
+        const segMode = this.app.state.subObj === 'segment', xf = this.app.state.xform || 'move';
+        const hit = segMode ? null : this.hitCtrl(sx, sy);
+        // gizmo (mover: flechas X / Y / libre; rotar: aro; escalar: ejes X / Y y centro uniforme) sobre la selección
         const gz = e.button === 0 && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey ? this.hitGizmo(sx, sy) : null;
-        if (gz) {
+        if (gz && xf !== 'move') { if (this.beginXformDrag(gz, this.toLayout(sx, sy))) return; }
+        else if (gz) {
           const st = this.app.state, p0 = this.toLayout(sx, sy);
           if (st.selSet && st.selSet.idxs.size > 1 && this.app.beginGroupDrag()) { this.groupDrag = { start: p0, axis: gz }; return; }
           if (st.sel) {
@@ -124,6 +126,33 @@ export class Editor2D {
             const q = arr && arr.pts[st.sel.idx];
             if (q) { this.dragCtrl = { ...st.sel, axis: gz, start: p0, orig: [q[0], q[1]] }; this.app.beginCtrlDrag(st.sel.key, st.sel.idx); return; }
           }
+        }
+        if (segMode) {
+          // nivel Segmento: clic sobre la pista selecciona el tramo entre dos puntos; Shift / Ctrl suman (o caja), Alt quita
+          const p0 = this.toLayout(sx, sy);
+          const sh = this.app.segmentAt(p0, 10 / this.view.zoom);
+          if (e.button === 0 && (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey)) { this.box = { x0: sx, y0: sy, x1: sx, y1: sy, seg: true, segHit: sh, sub: e.altKey }; this.draw(); return; }
+          if (e.button === 0 && sh) {
+            const eff = this.app.segSelEffective();
+            const selected = !!(eff && eff.key === sh.key && eff.segs.includes(sh.seg));
+            if (!selected) this.app.selectSegment(sh, false);
+            if (xf === 'move') { if (this.app.beginGroupDrag()) this.groupDrag = { start: p0 }; }
+            else if (selected) this.beginXformDrag('drag', p0);
+            return;
+          }
+          if (e.button === 0) {
+            const m = this.hitMarker(sx, sy);
+            if (m) { this.app.selectCrossing(m.id); return; }
+            this.app.selectSegment(null, false);
+          }
+          this.panning = { sx, sy, ox: this.view.ox, oy: this.view.oy };
+          return;
+        }
+        if (hit && e.button === 0 && xf !== 'move' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          // rotar / escalar: arrastrar un punto de la selección transforma todo el grupo; si no, lo selecciona
+          if (this.app.isMultiSelected(hit.key, hit.idx)) { this.beginXformDrag('drag', this.toLayout(sx, sy)); return; }
+          this.app.selectCtrl(hit);
+          return;
         }
         if (e.button === 0 && e.altKey) {
           // Alt: arrastrar = caja que QUITA puntos de la selección; clic sobre un punto = borrarlo
@@ -201,6 +230,7 @@ export class Editor2D {
       if (this.bridgeDrag) { this.app.dragBridgeLayout(this.bridgeDrag.last, p); this.bridgeDrag.last = p; return; }
       if (this.ref3dDrag) { this.app.moveRef3dLayout(this.ref3dDrag.last, p); this.ref3dDrag.last = p; return; }
       if (this.box) { this.box.x1 = sx; this.box.y1 = sy; this.draw(); return; }
+      if (this.xformDrag) { this.moveXformDrag(p, e); return; }
       if (this.groupDrag) {
         const ax = this.groupDrag.axis;
         const dx = ax === 'y' ? 0 : p[0] - this.groupDrag.start[0], dy = ax === 'x' ? 0 : p[1] - this.groupDrag.start[1];
@@ -249,7 +279,20 @@ export class Editor2D {
         cv.style.cursor = Math.hypot(sx - x1, sy - y1) < 14 ? 'nwse-resize' : sx >= x0 && sx <= x1 && sy >= y0 && sy <= y1 ? 'move' : 'grab';
         return;
       }
-      if (tl === 'edit') { const gh = this.hitGizmo(sx, sy); if (gh !== this.gizmoHover) { this.gizmoHover = gh; this.draw(); } if (gh) { cv.style.cursor = gh === 'x' ? 'ew-resize' : gh === 'y' ? 'ns-resize' : 'move'; return; } }
+      if (tl === 'edit') {
+        const gh = this.hitGizmo(sx, sy);
+        if (gh !== this.gizmoHover) { this.gizmoHover = gh; this.draw(); }
+        const xf = this.app.state.xform || 'move';
+        if (gh) { cv.style.cursor = gh === 'rot' ? 'alias' : xf === 'scale' ? (gh === 'x' ? 'ew-resize' : gh === 'y' ? 'ns-resize' : 'nwse-resize') : gh === 'x' ? 'ew-resize' : gh === 'y' ? 'ns-resize' : 'move'; return; }
+        if (this.app.state.subObj === 'segment') {
+          const sh = this.app.segmentAt(p, 10 / this.view.zoom);
+          const key = sh ? `${sh.key}:${sh.seg}` : null;
+          if (key !== this.segHoverKey) { this.segHoverKey = key; this.segHover = sh; this.draw(); }
+          cv.style.cursor = sh ? (xf === 'move' ? 'move' : 'pointer') : 'grab';
+          if (s !== this.hoverS) { this.hoverS = s; this.app.setHover(s, 'map'); }
+          return;
+        }
+      }
       cv.style.cursor = tl === 'edit' && this.hitCtrl(sx, sy) ? 'move' : this.hitMarker(sx, sy) ? 'pointer' : tl === 'pan' || tl === 'edit' ? 'grab' : 'crosshair';
       if (s !== this.hoverS) { this.hoverS = s; this.app.setHover(s, 'map'); }
     });
@@ -265,6 +308,12 @@ export class Editor2D {
         this.box = null;
         const [ax, ay] = this.toLayout(b.x0, b.y0), [bx, by] = this.toLayout(b.x1, b.y1);
         const moved = Math.abs(b.x1 - b.x0) + Math.abs(b.y1 - b.y0) > 4;
+        if (b.seg) {
+          if (moved) this.app.segBoxSelect(ax, ay, bx, by, b.sub ? 'sub' : !!(e && (e.ctrlKey || e.metaKey)));
+          else if (b.segHit) { if (b.sub) this.app.segSelectMany({ key: b.segHit.key, segs: [b.segHit.seg] }, 'sub'); else this.app.selectSegment(b.segHit, true); }
+          this.draw();
+          return;
+        }
         if (b.sub) { if (moved) this.app.boxSelect(ax, ay, bx, by, 'sub'); else if (b.hit) this.app.deleteCtrl(b.hit.key, b.hit.idx); }
         else if (moved) this.app.boxSelect(ax, ay, bx, by, e && e.ctrlKey);
         else if (b.hit) this.app.toggleMultiSel(b.hit);
@@ -272,6 +321,7 @@ export class Editor2D {
         return;
       }
       if (this.refDrag) { this.refDrag = null; this.draw(); return; }
+      if (this.xformDrag) { this.xformDrag = null; this.app.endXform(); this.draw(); return; }
       if (this.groupDrag) { this.groupDrag = null; this.app.endGroupDrag(); return; }
       if (this.dragCtrl) { this.dragCtrl = null; this.app.endCtrlDrag(); return; }
       if (this.panning) {
@@ -701,6 +751,37 @@ export class Editor2D {
     ctx.fillRect(x1 - 6, y1 - 6, 12, 12);
   }
 
+  /** Empieza a rotar o escalar la selección (axis: 'rot' | 'x' | 'y' | 'xy' | 'drag'). */
+  beginXformDrag(axis, p0) {
+    const T = this.app.xformTargets();
+    if (!T || T.idxs.length < 2) { this.app.toast && this.app.toast('Selecciona 2 o más puntos (o un segmento) para rotar o escalar.'); return false; }
+    const pivot = this.app.beginXform();
+    if (!pivot) return false;
+    const mode = this.app.state.xform;
+    this.xformDrag = { mode, axis, p0, pivot, a0: Math.atan2(p0[1] - pivot[1], p0[0] - pivot[0]), d0: Math.hypot(p0[0] - pivot[0], p0[1] - pivot[1]) };
+    return true;
+  }
+  moveXformDrag(p, e) {
+    const X = this.xformDrag, pv = X.pivot, z = this.view.zoom;
+    if (X.mode === 'rotate') {
+      let a = Math.atan2(p[1] - pv[1], p[0] - pv[0]) - X.a0;
+      a = Math.atan2(Math.sin(a), Math.cos(a));
+      if (e && e.shiftKey) { const st = Math.PI / 36; a = Math.round(a / st) * st; }
+      this.app.applyXform({ type: 'rotate', a });
+      return;
+    }
+    const cl = (v) => Math.max(0.02, Math.min(50, v));
+    const ax = (i) => { const d0 = X.p0[i] - pv[i]; return Math.abs(d0) * z > 6 ? cl((p[i] - pv[i]) / d0) : cl(Math.exp(((p[i] - X.p0[i]) * (i ? -1 : 1) * z) / 80)); };
+    let sx, sy;
+    if (X.axis === 'x') { sx = ax(0); sy = 1; }
+    else if (X.axis === 'y') { sx = 1; sy = ax(1); }
+    else {
+      const f = X.d0 * z > 6 ? cl(Math.hypot(p[0] - pv[0], p[1] - pv[1]) / X.d0) : cl(Math.exp(((p[0] - X.p0[0]) - (p[1] - X.p0[1])) * z / 80));
+      sx = sy = f;
+    }
+    this.app.applyXform({ type: 'scale', sx, sy });
+  }
+
   hitCtrl(sx, sy) {
     let best = null, bd = 9;
     for (const r of this.app.ctrlRoutes()) {
@@ -733,11 +814,53 @@ export class Editor2D {
   }
 
   drawGizmo2D() {
-    const c = this.gizmoCenter();
-    this.gizmo2d = c ? { cx: c[0], cy: c[1] } : null;
+    const xf = this.app.state.xform || 'move';
+    let c = this.gizmoCenter();
+    if (c && xf !== 'move') { const T = this.app.xformTargets(); if (!T || T.idxs.length < 2) c = null; }
+    if (c && this.xformDrag) c = this.toScreen(this.xformDrag.pivot[0], this.xformDrag.pivot[1]); // el pivote no se mueve al escalar
+    this.gizmo2d = c ? { cx: c[0], cy: c[1], xf } : null;
     if (!c) return;
     const { ctx } = this;
     const [cx, cy] = c, L = 52, hv = this.gizmoHover;
+    if (this.app.state.xformInfo) {
+      ctx.save();
+      ctx.font = 'bold 12px system-ui, sans-serif';
+      const tw = ctx.measureText(this.app.state.xformInfo).width;
+      ctx.fillStyle = 'rgba(14,17,23,0.85)'; ctx.fillRect(cx - tw / 2 - 6, cy + 54, tw + 12, 20);
+      ctx.fillStyle = '#ffe066'; ctx.textAlign = 'center'; ctx.fillText(this.app.state.xformInfo, cx, cy + 68);
+      ctx.restore();
+    }
+    if (xf === 'rotate') {
+      ctx.save();
+      ctx.strokeStyle = hv === 'rot' ? '#fff3b0' : '#ffe066'; ctx.lineWidth = hv === 'rot' ? 4 : 2.5;
+      ctx.beginPath(); ctx.arc(cx, cy, 46, 0, Math.PI * 2); ctx.stroke();
+      ctx.strokeStyle = 'rgba(255,224,102,0.35)'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(cx - 6, cy); ctx.lineTo(cx + 6, cy); ctx.moveTo(cx, cy - 6); ctx.lineTo(cx, cy + 6); ctx.stroke();
+      if (this.xformDrag && this.xformDrag.mode === 'rotate') {
+        const X = this.xformDrag;
+        ctx.strokeStyle = 'rgba(255,224,102,0.6)'; ctx.setLineDash([3, 4]);
+        ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(X.a0) * 46, cy + Math.sin(X.a0) * 46); ctx.stroke(); ctx.setLineDash([]);
+      }
+      ctx.restore();
+      return;
+    }
+    if (xf === 'scale') {
+      const axis = (dx, dy, col, label, on) => {
+        ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = on ? 4 : 2.5;
+        ctx.beginPath(); ctx.moveTo(cx + dx * 12, cy + dy * 12); ctx.lineTo(cx + dx * (L - 6), cy + dy * (L - 6)); ctx.stroke();
+        ctx.fillRect(cx + dx * L - 6, cy + dy * L - 6, 12, 12);
+        ctx.font = 'bold 11px system-ui, sans-serif';
+        ctx.fillText(label, cx + dx * (L + 9) - 4 + (dy ? 6 : 0), cy + dy * (L + 10) + 4);
+      };
+      ctx.save();
+      axis(1, 0, '#ff5a5a', 'X', hv === 'x');
+      axis(0, -1, '#4ade80', 'Y', hv === 'y');
+      ctx.fillStyle = hv === 'xy' ? 'rgba(255,224,102,0.7)' : 'rgba(255,224,102,0.35)';
+      ctx.strokeStyle = '#ffe066'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(cx + 8, cy - 8); ctx.lineTo(cx + 28, cy - 8); ctx.lineTo(cx + 8, cy - 28); ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.restore();
+      return;
+    }
     const arrow = (dx, dy, col, label, on) => {
       ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = on ? 4 : 2.5;
       ctx.beginPath(); ctx.moveTo(cx + dx * 12, cy + dy * 12); ctx.lineTo(cx + dx * (L - 8), cy + dy * (L - 8)); ctx.stroke();
@@ -763,6 +886,13 @@ export class Editor2D {
     const g = this.gizmo2d;
     if (!g) return null;
     const dx = sx - g.cx, dy = sy - g.cy;
+    if (g.xf === 'rotate') return Math.abs(Math.hypot(dx, dy) - 46) <= 8 ? 'rot' : null;
+    if (g.xf === 'scale') {
+      if (dx >= 6 && dy <= -6 && dx - dy <= 36 + 2) return 'xy';
+      if (dx >= 12 && dx <= 60 && Math.abs(dy) <= 8) return 'x';
+      if (-dy >= 12 && -dy <= 60 && Math.abs(dx) <= 8) return 'y';
+      return null;
+    }
     if (dx >= 8 && dx <= 26 && dy >= -26 && dy <= -8) return 'xy';
     if (dx >= 12 && dx <= 56 && Math.abs(dy) <= 7) return 'x';
     if (-dy >= 12 && -dy <= 56 && Math.abs(dx) <= 7) return 'y';
@@ -783,6 +913,17 @@ export class Editor2D {
       ctx.fillStyle = 'rgba(255,224,102,0.8)';
       ctx.beginPath(); ctx.arc(cx, cy, 2.5, 0, Math.PI * 2); ctx.fill();
     }
+    const segMode = this.app.state.subObj === 'segment';
+    const L0 = this.app.state.layout;
+    if (segMode && L0) {
+      // segmentos seleccionados (amarillo) y bajo el cursor (blanco)
+      if (this.segHover) {
+        const k = this.segHover.key === 'main' ? 0 : L0.routes.findIndex((q) => q.altIndex === this.segHover.key);
+        const A = k >= 0 ? this.app.segmentArcs(k).find((q) => q.i === this.segHover.seg) : null;
+        if (A) this.strokeRange(L0, k, A.s0, A.s0 + A.len, 'rgba(255,255,255,0.35)', Math.max(7, (L0.routes[k].w[0] / L0.scale) * this.view.zoom * 0.8));
+      }
+      for (const R of this.app.segSelRanges()) this.strokeRange(L0, R.k, R.s0, R.s1, 'rgba(255,224,102,0.7)', Math.max(6, (L0.routes[R.k].w[0] / L0.scale) * this.view.zoom * 0.7));
+    }
     for (const r of this.app.ctrlRoutes()) {
       const alt = r.key !== 'main';
       ctx.strokeStyle = alt ? 'rgba(79,179,255,0.45)' : 'rgba(255,255,255,0.35)';
@@ -796,11 +937,12 @@ export class Editor2D {
       r.pts.forEach((p, i) => {
         const [x, y] = this.toScreen(p[0], p[1]);
         const ms = this.app.state.selSet;
-        const isSel = (sel && sel.key === r.key && sel.idx === i) || (ms && ms.key === r.key && ms.idxs.has(i));
+        const isSel = !segMode && ((sel && sel.key === r.key && sel.idx === i) || (ms && ms.key === r.key && ms.idxs.has(i)));
         const pinned = r.zs && r.zs[i] !== null && r.zs[i] !== undefined;
         ctx.beginPath();
-        if (pinned) { const q = isSel ? 6.5 : 5; ctx.rect(x - q, y - q, q * 2, q * 2); }
-        else ctx.arc(x, y, isSel ? 6.5 : 4.5, 0, Math.PI * 2);
+        const sm = segMode ? 0.6 : 1; // en nivel Segmento los vértices se ven más chicos
+        if (pinned) { const q = (isSel ? 6.5 : 5) * sm; ctx.rect(x - q, y - q, q * 2, q * 2); }
+        else ctx.arc(x, y, (isSel ? 6.5 : 4.5) * sm, 0, Math.PI * 2);
         const cut = r.key === 'main' && this.app.ctrlInCut && this.app.ctrlInCut('main', i); // sección socavada: café
         const susp = !cut && r.key === 'main' && this.app.ctrlInSusp && this.app.ctrlInSusp('main', i); // tramo suspendido: celeste
         ctx.fillStyle = isSel ? '#ffe066' : cut ? '#8d5a2b' : susp ? '#5ad8ff' : pinned ? '#f2a93b' : alt ? '#cfe9ff' : '#ffffff';
