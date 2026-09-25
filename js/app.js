@@ -615,6 +615,20 @@ const app = {
       return { k: 0, idx, s0: Math.min(s0, s1), s1: Math.max(s0, s1), pillars: Z.pillars ?? 3, dirt: !!Z.dirt, barrier: !!Z.barrier };
     }).filter((Z) => Z && Z.s1 - Z.s0 > 2);
   },
+  /** Convierte los puntos seleccionados (ruta principal, seguidos) en un tramo suspendido (terreno elevado). */
+  addSuspFromSelection() {
+    const L = state.layout;
+    if (!L) return false;
+    const sel = state.selSet && state.selSet.idxs.size ? state.selSet : null;
+    if (!sel || sel.idxs.size < 2) { toast('Selecciona dos o más puntos seguidos de la ruta principal (Editar puntos, Shift + clic o caja).'); return false; }
+    if (sel.key !== 'main') { toast('Los tramos elevados van en la ruta principal.'); return false; }
+    const run = contiguousRun('main');
+    if (!run || run.length !== sel.idxs.size) { toast('Los puntos del tramo elevado deben ser seguidos.'); return false; }
+    const cp = app.ctrlPoints().filter((q) => q.key === 'main');
+    const sA = cp.find((c) => c.idx === run[0]).s, sB = cp.find((c) => c.idx === run[run.length - 1]).s;
+    app.addSuspZone(app.mainLayoutAt(Math.min(sA, sB)), app.mainLayoutAt(Math.max(sA, sB)));
+    return true;
+  },
   addSuspZone(a, b) {
     if (!state.layout) return;
     const s0 = app.nearestMainS(a, Infinity), s1 = app.nearestMainS(b, Infinity);
@@ -1289,6 +1303,17 @@ const app = {
     if (!za || idx >= za.length) return;
     za[idx] = makePin(z);
     scheduleElev();
+  },
+  /** Varios puntos vuelven a altura automática de una vez (un solo paso de deshacer). */
+  unpinMany(key, idxs) {
+    const za = zArray(key);
+    if (!za) return;
+    const list = idxs.filter((i) => za[i] !== null && za[i] !== undefined);
+    if (!list.length) { toast('Esos puntos ya tienen altura automática.'); return; }
+    pushUndo();
+    for (const i of list) za[i] = null;
+    scheduleElev();
+    toast(`${list.length} punto${list.length > 1 ? 's' : ''} con altura automática.`);
   },
   unpin(key, idx) {
     const za = zArray(key);
@@ -4187,7 +4212,7 @@ function focusPanel(id, sub = null) {
 /** Botones (fuera de la barra lateral) con parámetros asociados: a qué sección llevan. */
 const PANEL_FOR_BUTTON = {
   'tool:edit': 'arc', 'tool:draw': 'trace', 'tool:extend': 'trace', 'tool:alt': 'alts', 'tool:start': 'gate', 'tool:ref': 'ref',
-  btnDecoNew: 'deco', 'tool:hill': 'hills', 'tool:river': 'rivers', 'tool:paint': 'terrain', 'tool:sculpt': 'terrain', 'tool:flat': 'elev', 'tool:profile': 'elev', 'tool:susp': 'susp', btnCut: 'cut', btnSculptTool: 'terrain', btnRef3dTop: 'ref3d',
+  btnDecoNew: 'deco', 'tool:hill': 'hills', 'tool:river': 'rivers', 'tool:paint': 'terrain', 'tool:sculpt': 'terrain', 'tool:flat': 'elev', 'tool:profile': 'elev', btnSusp: 'susp', btnCut: 'cut', btnSculptTool: 'terrain', btnRef3dTop: 'ref3d',
   btnGame: 'sky', btnExportBlender: 'export', btnExportMax: 'export', btnExportJSON: 'export', btnExportOBJ: 'export',
   btnExportGLB2: 'export', btnExportFBX2: 'export', btnTbRadius: 'arc', btnTbFork: 'arc', btnGenTerrain: 'terrain', btnGenTrees: 'trees',
 };
@@ -4375,7 +4400,11 @@ function bindSceneControls() {
     $(id + 'File').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) loadTexture(f, key); });
     $(id + 'Remove').addEventListener('click', () => { state[key] = null; syncSceneControls(); sceneChanged(); editor.draw(); });
   }
-  $('btnSuspTool').addEventListener('click', () => setTool('susp'));
+  // terreno elevado (tramo suspendido) desde los puntos seleccionados, igual que la sección socavada
+  const suspFromSel = () => { if (state.tool !== 'edit') { setTool('edit'); if (!state.selSet) { toast('Selecciona dos o más puntos seguidos de la ruta principal y vuelve a pulsar «Terreno elevado».'); return; } } app.addSuspFromSelection(); };
+  $('btnSusp').addEventListener('click', suspFromSel);
+  $('btnSuspTool').addEventListener('click', suspFromSel);
+  $('btnBankTop').addEventListener('click', () => focusPanel('bank'));
   $('caveRocks').addEventListener('change', (e) => { sc.caveRocks = e.target.checked; sceneChanged(); });
   // material de las paredes socavadas (ríos y cascadas)
   for (const [id, key] of [['riverWall', 'riverWallTex'], ['fallWall', 'fallWallTex']]) {

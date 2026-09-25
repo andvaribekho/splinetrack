@@ -112,6 +112,9 @@ export class ProfileView {
       this.box = { x0: x, y0: y, x1: x, y1: y, hit: h, add: e.ctrlKey || e.metaKey };
       return;
     }
+    // clic derecho con varios puntos seleccionados (sobre uno de ellos o en el vacío): todos vuelven a altura automática
+    const ms = this.app.state.selSet;
+    if (e.button === 2 && ms && ms.idxs.size > 1 && (!h || this.app.isMultiSelected(h.key, h.idx))) { this.app.unpinMany(ms.key, [...ms.idxs]); return; }
     if (!h) { if (e.button === 0 && this.app.state.selSet) this.app.clearMultiSel(); return; }
     if (e.button === 2 || e.altKey) { this.app.unpin(h.key, h.idx); return; }
     if (e.button !== 0) return;

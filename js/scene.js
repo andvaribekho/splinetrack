@@ -1,6 +1,6 @@
 // Geometría de escena: malla de pista con UV, terreno y árboles (conos).
 // Todo en metros, Z arriba. Devuelve arrays planos listos para three.js o para exportar.
-import { SpatialGrid, rng, clamp, smoothstep } from './geometry.js';
+import { SpatialGrid, rng, clamp, smoothstep, nearestOnSamples } from './geometry.js';
 import Delaunator from '../vendor/delaunator.js';
 import { riverField, subdivFactor } from './rivers.js';
 import { hillFieldOne, detectTunnels, tunnelTop, buildTunnelGeometry, applyTunnelOverrides, portalBox, frameAt, edgeExtents, tunnelInnerWidth } from './tunnels.js';
@@ -1676,6 +1676,54 @@ export function buildStartGate(layout, elev, spIn = {}) {
 
 /** Pilares bajo los puentes de la ruta principal: [{x, y, zTop, zBot, size, angle, bridge}] (pivote en la base). */
 /**
+ * ¿Un pilar en (x, y), de lado «size», que sube hasta zTop, pisaría alguna calzada (con su camino de tierra y su
+ * barrera) o un atajo que pase por debajo? La ruta que el pilar sostiene (ownK) no cuenta cerca de su propia
+ * posición ownS (es el tablero de arriba).
+ */
+export function pillarBlocked(layout, elev, spIn, x, y, size, zTop, ownK = -1, ownS = null) {
+  const sp = { ...DEFAULT_SCENE, ...(spIn || {}) };
+  for (let k = 0; k < layout.routes.length; k++) {
+    const r = layout.routes[k], e = elev.routes[k];
+    if (!e) continue;
+    // muestra más cercana; en la ruta del propio pilar, lejos de su posición (la misma ruta puede pasar por debajo)
+    let i = -1;
+    if (k === ownK && ownS != null) {
+      let bd = Infinity;
+      for (let q = 0; q < r.n; q++) {
+        const d = Math.abs(r.s[q] - ownS);
+        if (Math.min(d, r.closed ? r.L - d : d) < 3 * r.w[q] + size) continue;
+        const dd = (r.x[q] - x) ** 2 + (r.y[q] - y) ** 2;
+        if (dd < bd) { bd = dd; i = q; }
+      }
+      if (i < 0) continue;
+    } else i = Math.min(r.n - 1, Math.max(0, nearestOnSamples(r, x, y).i));
+    const X = edgeExtents(sp, r);
+    const u = (x - r.x[i]) * -r.ty[i] + (y - r.y[i]) * r.tx[i];
+    const a = Math.abs((x - r.x[i]) * r.tx[i] + (y - r.y[i]) * r.ty[i]);
+    if (a > r.ds * 1.5 + size) continue;
+    const ext = r.w[i] / 2 + (u >= 0 ? X.left : X.right) + size * 0.75 + 0.3;
+    if (Math.abs(u) > ext) continue;
+    if (e.z[i] > zTop - 0.3) continue; // esa ruta pasa por arriba del pilar: no la pisa
+    return true;
+  }
+  return false;
+}
+/** Busca, alrededor de sv (y dentro de [lo, hi]), la posición más cercana de la ruta k donde un pilar no pise nada. */
+function clearPillarS(layout, elev, sp, k, sv, lo, hi, size, zTopAt) {
+  const r = layout.routes[k];
+  const step = Math.max(1.5, size * 1.2);
+  for (let q = 0; q <= 40; q++) {
+    const off = q === 0 ? 0 : Math.ceil(q / 2) * step * (q % 2 ? 1 : -1);
+    const s2 = sv + off;
+    if (s2 < lo || s2 > hi) continue;
+    const ss = r.closed ? ((s2 % r.L) + r.L) % r.L : clamp(s2, 0, r.L);
+    const i = Math.min(r.n - 1, Math.max(0, Math.round(ss / r.ds))) % r.n;
+    if (!pillarBlocked(layout, elev, sp, r.x[i], r.y[i], size, zTopAt(i), k, ss)) return { s: ss, i };
+  }
+  return null;
+}
+
+/**
  * Pilares de los tramos suspendidos: sp.suspRanges = [{k, s0, s1, pillars}]; cada tramo lleva «pillars» pilares
  * repartidos a lo largo, desde bajo la calzada hasta el suelo (ground.sample: terreno y cerros). Si el suelo está
  * a menos de 0,6 m no hace falta pilar. Devuelve [{x, y, zTop, zBot, size, angle, zone, n}] (zone = índice del tramo).
@@ -1688,11 +1736,16 @@ export function suspPillars(layout, elev, sp, ground = null) {
     const n = Math.max(0, Math.round(z.pillars ?? 3));
     const len = z.s1 - z.s0;
     let cnt = 0;
+    const zTopAt = (i) => e.z[i] - Math.abs(Math.sin(e.roll[i])) * r.w[i] * 0.25 - 0.25;
     for (let q = 0; q < n; q++) {
-      let sv = z.s0 + (len * (q + 0.5)) / n;
-      if (r.closed) sv = ((sv % r.L) + r.L) % r.L;
-      const i = Math.min(r.n - 1, Math.max(0, Math.round(sv / r.ds))) % r.n;
-      const zTop = e.z[i] - Math.abs(Math.sin(e.roll[i])) * r.w[i] * 0.25 - 0.25;
+      const sv0 = z.s0 + (len * (q + 0.5)) / n;
+      // nunca sobre otra calzada, su camino de tierra o un atajo: se corre a lo largo del tramo hasta un lugar libre
+      const size0 = Math.min(2.2, Math.max(0.8, r.w[0] * 0.12));
+      const lo = z.s0 + (len * q) / n, hi = z.s0 + (len * (q + 1)) / n;
+      const c = clearPillarS(layout, elev, sp, z.k, sv0, lo, hi, size0, zTopAt);
+      if (!c) continue;
+      const i = c.i;
+      const zTop = zTopAt(i);
       const g = ground ? ground.sample(r.x[i], r.y[i]) : NaN;
       const zBot = (Number.isFinite(g) ? g : Math.min(...e.z) - 2) - 0.3;
       if (zTop - zBot < 0.6) continue;
@@ -1702,7 +1755,7 @@ export function suspPillars(layout, elev, sp, ground = null) {
   return out;
 }
 
-export function bridgePillars(layout, elev, terrain = null) {
+export function bridgePillars(layout, elev, terrain = null, sp = null) {
   const out = [];
   const r = layout.routes[0], e = elev.routes[0];
   (r.bridges || []).forEach((b, bi) => {
@@ -1710,7 +1763,11 @@ export function bridgePillars(layout, elev, terrain = null) {
     const n = Math.max(1, Math.round(len / 18));
     for (let q = 1; q < n || (n === 1 && q === 1); q++) {
       const s = b.s0 + (len * q) / Math.max(2, n);
-      const i = ((Math.round(s / r.ds) % r.n) + r.n) % r.n;
+      // nunca sobre otra calzada (la que pasa por debajo del puente), su camino de tierra o un atajo
+      const size0 = Math.max(1.5, r.w[0] * 0.18), half = len / Math.max(2, n) / 2;
+      const c = clearPillarS(layout, elev, sp, 0, s, Math.max(b.s0 + 1, s - half), Math.min(b.s1 - 1, s + half), size0, (ii) => e.z[ii] - 0.6);
+      if (!c) { if (n === 1) break; continue; }
+      const i = c.i;
       const zTop = e.z[i] - 0.6;
       const zBot = terrain ? terrain.sample(r.x[i], r.y[i]) - 0.3 : Math.min(...e.z) - 2;
       if (zTop - zBot < 1.2) continue;

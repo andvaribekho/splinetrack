@@ -175,7 +175,7 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
   }
   // puentes creados a mano: tablero (textura propia, café por defecto) y un objeto por pilar, pivote en la base
   {
-    const bp = bridgePillars(layout, elev, terrain);
+    const bp = bridgePillars(layout, elev, terrain, sp);
     let grp = null;
     if (bp.length || tm.bridgeParts.length) {
       grp = new THREE.Group();

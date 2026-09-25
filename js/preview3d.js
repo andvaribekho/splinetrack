@@ -6,7 +6,7 @@ import { edgeSamples } from './export.js';
 import { buildEdgeMeshes } from './edges.js';
 import { instancedGroup } from './assets.js';
 import { decoSetItems, treeModelItems, grassModelItems } from './deco.js';
-import { buildTrackMesh, trackRows, coveredRanges, terrainTint, buildTerrain, buildTrees, buildHills, buildStartGate, buildGrass, makeGround, bridgePillars, suspPillars } from './scene.js';
+import { buildTrackMesh, trackRows, coveredRanges, terrainTint, buildTerrain, buildTrees, buildHills, buildStartGate, buildGrass, makeGround, bridgePillars, suspPillars, pillarBlocked } from './scene.js';
 import { buildRivers } from './rivers.js';
 import { pillarGeometry } from './tunnels.js';
 import { applyRefLook } from './refmodel.js';
@@ -521,8 +521,15 @@ export class Preview3D {
       const r = L.routes[upR];
       const lc = L.crossings[c.id];
       const Rw = (lc && lc.window) || 15;
-      for (const off of [-Rw * 1.25, Rw * 1.25]) {
-        const i = ((Math.round((upS + off) / r.ds) % r.n) + r.n) % r.n;
+      for (const off0 of [-Rw * 1.25, Rw * 1.25]) {
+        // se aleja del cruce hasta un lugar donde el pilar no pise otra calzada, su camino de tierra ni un atajo
+        let i = -1;
+        for (let q = 0; q < 16; q++) {
+          const off = off0 + Math.sign(off0) * q * 2.5;
+          const ii = ((Math.round((upS + off) / r.ds) % r.n) + r.n) % r.n;
+          if (!pillarBlocked(L, E, this.app.state.scene, r.x[ii], r.y[ii], 2, E.routes[upR].z[ii] - 0.5, upR, r.s[ii])) { i = ii; break; }
+        }
+        if (i < 0) continue;
         const zTop = E.routes[upR].z[i] * ex - 0.5;
         const zBot = (T ? T.sample(r.x[i], r.y[i]) : v.zMin - 2) * ex;
         const h = zTop - zBot;
@@ -533,7 +540,7 @@ export class Preview3D {
       }
     });
     // pilares bajo los puentes creados a mano (cada ~18 m, si hay altura bajo la calzada)
-    for (const pl of bridgePillars(L, E, T)) {
+    for (const pl of bridgePillars(L, E, T, this.app.state.scene)) {
       const zTop = pl.zTop * ex, zBot = pl.zBot * ex, h = zTop - zBot;
       if (h <= 0.5) continue;
       const p = new THREE.Mesh(new THREE.BoxGeometry(pl.size, pl.size, h), new THREE.MeshStandardMaterial({ color: 0x7a818f, roughness: 0.9 }));

@@ -183,7 +183,6 @@ export class Editor2D {
       else if (tool === 'start') this.app.setStart(p);
       else if (tool === 'flat') this.dragFlat = { a: p, b: p };
       else if (tool === 'profile') this.dragProfile = { a: p, b: p }; // tramo para dibujar su perfil
-      else if (tool === 'susp') this.dragSusp = { a: p, b: p }; // tramo suspendido
       this.draw();
     });
 
@@ -884,7 +883,7 @@ export class Editor2D {
       const ctx = this.ctx;
       ctx.save();
       ctx.setLineDash([8, 6]);
-      for (const Z of this.app.suspZonesS()) this.strokeRange(L, 0, Z.s0, Z.s1, st.tool === 'susp' ? 'rgba(90,220,255,0.95)' : 'rgba(90,220,255,0.55)', st.tool === 'susp' ? 5 : 3);
+      for (const Z of this.app.suspZonesS()) this.strokeRange(L, 0, Z.s0, Z.s1, 'rgba(90,220,255,0.6)', 3);
       ctx.restore();
     }
     if (this.dragSusp && L) {

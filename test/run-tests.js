@@ -5,7 +5,7 @@ import { computeElevation } from '../js/elevation.js';
 import { traceImage } from '../js/trace.js';
 import { exportBlender, exportMax, exportJSON, exportOBJ, routeSamples, bezierKnots, bezierError } from '../js/export.js';
 import { rasterize } from './raster.js';
-import { buildTerrain, buildTrees, buildTrackMesh, trackRows, buildDecoInstances, coveredRanges, isCovered, buildHills, buildStartGate, buildGrass, makeGround, suspPillars } from '../js/scene.js';
+import { buildTerrain, buildTrees, buildTrackMesh, trackRows, buildDecoInstances, coveredRanges, isCovered, buildHills, buildStartGate, buildGrass, makeGround, suspPillars, pillarBlocked } from '../js/scene.js';
 import { edgeSamples } from '../js/export.js';
 import { computeItems, defaultGroup, itemAt } from '../js/items.js';
 import { nearestOnSamples } from '../js/geometry.js';
@@ -622,6 +622,26 @@ for (const [key, s] of Object.entries(SAMPLES)) {
   check(TA.cutWalls && TA.cutWalls.art && TA.cutWalls.art.tris > 20 && !TA.cutWalls.nat, `sección socavada: paredes artificiales aparte (${TA.cutWalls && TA.cutWalls.art && TA.cutWalls.art.tris})`);
   check(TR.cutWalls && TR.cutWalls.nat && TR.cutWalls.nat.tris > 20, 'sección socavada: paredes naturales (roca) aparte');
   check(Number.isFinite(g) && g > zt + 4, `sección socavada: nivel natural del suelo sobre la pista (${(g - zt).toFixed(1)} m)`);
+}
+
+// pilares: nunca sobre otra calzada, su camino de tierra o un atajo
+{
+  const L = buildLayout(SAMPLES.figure8.build(), { lapLength: 1000 });
+  const E = computeElevation(L, { hills: 0.3 });
+  const c = E.crossings[0];
+  const upS = c.up === 'a' ? c.sa : c.sb, dnS = c.up === 'a' ? c.sb : c.sa;
+  const r = L.routes[0];
+  const sp = { dirtSide: 'both', dirtWidth: 3, suspRanges: [{ k: 0, s0: upS - 40, s1: upS + 40, pillars: 9 }] };
+  const PL = suspPillars(L, E, sp, null);
+  let bad = 0;
+  for (const p of PL) {
+    const n = nearestOnSamples(r, p.x, p.y);
+    const dS = Math.abs(r.s[n.i] - dnS);
+    if (Math.min(dS, r.L - dS) < 60 && n.d < r.w[n.i] / 2 + 3 + p.size * 0.5) bad++;
+  }
+  check(PL.length >= 5 && bad === 0, `pilares: ninguno sobre la pista de abajo ni su camino de tierra (${PL.length} pilares, ${bad} mal puestos)`);
+  const i = Math.round(dnS / r.ds) % r.n;
+  check(pillarBlocked(L, E, sp, r.x[i], r.y[i], 1.5, E.routes[0].z[Math.round(upS / r.ds) % r.n], 0, upS), 'pilares: detecta una calzada debajo');
 }
 
 // tramos cubiertos (bajo cruces y en túneles): material propio, cortes exactos
