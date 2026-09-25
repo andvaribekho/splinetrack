@@ -165,7 +165,7 @@ export class GameCam {
     const r = L.routes[0];
     const sp0 = this.app.state.game.speed;
     const v = (sp0 === undefined || sp0 === null ? 120 : sp0) / 3.6; // negativa = marcha atrás
-    if (!this.paused) {
+    if (!this.paused && !this.dragging) { // mientras se arrastra el auto en el mapa, no avanza solo
       this.s += v * dt;
       this.lapTime += dt;
       if (this.s >= r.L) {

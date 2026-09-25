@@ -180,7 +180,9 @@
         <div class="field"><label>Plano a cada lado de la meta <span class="val" id="startFlatVal"></span></label><input type="range" id="startFlat" min="0" max="150" step="5"></div>
         <p class="hint">Usa la herramienta «Zona plana» para aplanar otros tramos.</p>
         <div id="flatZoneList" class="list"></div>
-      </section>
+        <h3 class="subhead" id="profileZonesHead">Perfiles dibujados</h3>
+        <p class="hint">Con <b>Perfil de tramo</b> (barra superior): arrastra sobre la pista en el mapa (o con Shift en el gráfico de perfil) para elegir un tramo y dibuja en el gráfico de perfil la forma de la elevación. Sin tramo elegido, el trazo define su propio tramo. Con <b>Editar puntos</b>, <b>Aplanar</b> deja los puntos seleccionados a su altura promedio.</p>
+        <div id="profileZoneList" class="list"></div>
 
       <section class="panel" data-panel="cross">
         <h2>Cruces <span class="badge" id="crossCount">0</span></h2>
@@ -562,6 +564,7 @@
           <button data-tool="paint" title="Pinta zonas del terreno (o del cerro seleccionado) que tendrán más polígonos (Alt o clic derecho borra)">Pintar subdivisión</button>
           <button data-tool="sculpt" title="Esculpe el terreno: clic derecho eleva, clic izquierdo hunde (en el mapa o en la vista 3D). [ y ] cambian el pincel">Esculpir relieve</button>
           <button data-tool="river" title="Pinta ríos sobre el terreno; con un cerro seleccionado, lo que pintes sobre él es una cascada. Empezar sobre un río lo extiende (y se bifurca). Alt o clic derecho borra">Ríos y cascadas</button>
+          <button data-tool="profile" title="Elige un tramo (arrastrando sobre la pista en el mapa, o con Shift en el gráfico de perfil) y dibuja en el gráfico de perfil cómo varía su elevación">Perfil de tramo</button>
           <button data-tool="flat" title="Arrastra sobre la pista para marcar un tramo plano">Zona plana</button>
           <span class="sep"></span>
           <button id="btnGenTerrain" class="gen">Generar terreno</button>
@@ -599,6 +602,7 @@
             <span class="small muted">cerro seleccionado = cascada</span>
           </span>
           <span id="editBox" class="row" hidden>
+            <button id="btnTbFlatten" title="Deja todos los puntos seleccionados a la elevación promedio que tenían">Aplanar</button>
             <button id="btnTbRadius">Radio</button>
             <button id="btnTbFork">Bifurcar</button>
             <button id="btnTbBridge">Puente</button>

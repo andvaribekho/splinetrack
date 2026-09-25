@@ -17,6 +17,7 @@ export const DEFAULT_ELEV = {
   crossType: 'mixed', // 'bridge' | 'tunnel' | 'mixed'
   startFlat: 40, // m planos a cada lado de la meta
   flatZones: [], // [[s0, s1], ...] en la ruta principal
+  profileZones: [], // perfiles dibujados en la ruta principal: [{s0, s1, pts: [[t 0..1, z], ...]}]
   baseHeight: 0,
   bank: false,
   bankMax: 12, // grados
@@ -81,6 +82,38 @@ function flatMask(route, s, ep) {
   return m;
 }
 
+/**
+ * Perfiles dibujados (ruta principal): para cada muestra, la altura pedida y el peso (1 dentro del tramo, se desvanece
+ * en una transición a cada lado). Devuelve null si no hay perfiles.
+ */
+function profileTargets(route, s, zones) {
+  if (!zones || !zones.length) return null;
+  const n = s.length;
+  const w = new Float64Array(n), z = new Float64Array(n);
+  const curve = (Z, t) => {
+    const P = Z.pts;
+    if (t <= P[0][0]) return P[0][1];
+    if (t >= P[P.length - 1][0]) return P[P.length - 1][1];
+    let a = 0;
+    while (a < P.length - 2 && P[a + 1][0] < t) a++;
+    const [t0, z0] = P[a], [t1, z1] = P[a + 1];
+    return t1 > t0 ? z0 + ((z1 - z0) * (t - t0)) / (t1 - t0) : z0;
+  };
+  for (const Z of zones) {
+    if (!Z.pts || Z.pts.length < 2 || !(Z.s1 > Z.s0)) continue;
+    const len = Z.s1 - Z.s0, T = clamp(len * 0.25, 8, 40); // transición hacia el resto de la pista
+    for (let i = 0; i < n; i++) {
+      let d = s[i] - Z.s0;
+      if (route.closed) { d = ((d % route.L) + route.L) % route.L; if (d > len + T) d -= route.L; }
+      if (d < -T || d > len + T) continue;
+      const t = clamp(d / len, 0, 1);
+      const wi = d < 0 ? smoothstep(0, T, T + d) : d > len ? smoothstep(0, T, T - (d - len)) : 1;
+      if (wi > w[i]) { w[i] = wi; z[i] = curve(Z, t); }
+    }
+  }
+  return { w, z };
+}
+
 function bumpProfile(d, plateau, ramp) {
   const a = Math.abs(d);
   if (a <= plateau) return 1;
@@ -108,6 +141,7 @@ export function computeElevation(layout, epIn = {}, overrides = {}, pinsIn = [])
   const amp = ep.hills * ep.hillsMax;
   const noise = routes.map((r, k) => hillNoise(grids[k].s, r.L, r.closed, r.kind === 'alt', ep, rand));
   const mask = routes.map((r, k) => (k === 0 ? flatMask(r, grids[k].s, ep) : new Float64Array(grids[k].n).fill(1)));
+  const prof = profileTargets(main, grids[0].s, ep.profileZones);
 
   // --- cruces: pares en rejilla gruesa y orientación
   const crossings = layout.crossings.map((c) => {
@@ -180,7 +214,9 @@ export function computeElevation(layout, epIn = {}, overrides = {}, pinsIn = [])
   // --- rampas de cruce iterativas
   const hUp = new Float64Array(crossings.length), hDn = new Float64Array(crossings.length);
   // alturas fijadas a mano: [{route, s, z}]
-  const pinsBy = routes.map((_, k) => (pinsIn || []).filter((p) => p.route === k && isFinite(p.z) && isFinite(p.s)));
+  const inProfile = (sv) => (ep.profileZones || []).some((Z) => { let d = sv - Z.s0; if (main.closed) d = ((d % main.L) + main.L) % main.L; return d >= 0 && d <= Z.s1 - Z.s0; });
+  // dentro de un perfil dibujado manda el perfil: se ignoran las alturas fijadas en los puntos de ese tramo
+  const pinsBy = routes.map((_, k) => (pinsIn || []).filter((p) => p.route === k && isFinite(p.z) && isFinite(p.s) && !(k === 0 && inProfile(p.s))));
   const composeZ = () => {
     const z = zN.map((a) => Float64Array.from(a));
     // bumps
@@ -191,6 +227,7 @@ export function computeElevation(layout, epIn = {}, overrides = {}, pinsIn = [])
       addBump(z[dnR], routes[dnR], grids[dnR], dnS, -hDn[ci], c.window, g);
     });
     applyPins(z[0], routes[0], grids[0], pinsBy[0], g);
+    if (prof) for (let i = 0; i < z[0].length; i++) if (prof.w[i] > 0) z[0][i] = z[0][i] * (1 - prof.w[i]) + prof.z[i] * prof.w[i];
     const base = altBaseline(z[0]);
     routes.forEach((r, k) => {
       if (!base[k]) return;
@@ -232,7 +269,7 @@ export function computeElevation(layout, epIn = {}, overrides = {}, pinsIn = [])
     const gr = grids[k], o = offs[k], n = gr.n, ds = gr.ds;
     const idx = (i) => o + (r.closed ? ((i % n) + n) % n : i);
     for (let i = 0; i < n; i++) {
-      const muI = 1 + (k === 0 ? 30 * (1 - mask[0][i]) : 0);
+      const muI = 1 + (k === 0 ? 30 * (1 - mask[0][i]) + (prof ? 400 * prof.w[i] : 0) : 0);
       diag[o + i] = 2 * muI;
       q[o + i] = -2 * muI * zObj[k][i];
       x0[o + i] = zObj[k][i];
@@ -341,6 +378,14 @@ export function computeElevation(layout, epIn = {}, overrides = {}, pinsIn = [])
   routes.forEach((r, k) => { if (r.kind === 'alt') sinkAltUnderMain(main, out[0], r, out[k]); });
 
   const validation = validate(layout, out, crossings, ep, sol, Hreq);
+  // perfiles dibujados: aviso si la pendiente máxima, un radio vertical o un cruce no dejan seguir la forma
+  for (const Z of ep.profileZones || []) {
+    if (!Z.pts || Z.pts.length < 2) continue;
+    const pt = profileTargets(main, main.s, [Z]);
+    let worst = 0, ws = Z.s0;
+    for (let i = 0; i < main.n; i++) if (pt.w[i] >= 1) { const d = Math.abs(out[0].z[i] - pt.z[i]); if (d > worst) { worst = d; ws = main.s[i]; } }
+    if (worst > 0.5) validation.msgs.push({ level: 'warn', route: 0, s: ws, msg: `El perfil dibujado (s≈${Z.s0.toFixed(0)}–${Z.s1.toFixed(0)} m) se sigue con hasta ${worst.toFixed(1)} m de diferencia: lo limita la pendiente máxima, un radio vertical o un cruce.` });
+  }
   const pinsOut = [];
   routes.forEach((r, k) => {
     for (const p of pinsBy[k]) {

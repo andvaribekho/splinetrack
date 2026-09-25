@@ -527,6 +527,27 @@ for (const [key, s] of Object.entries(SAMPLES)) {
   check(FW.length === 1 && FW[0].kind === 'fall' && FW[0].name === 'cascada_01', 'cascada: malla de agua propia');
 }
 
+// perfil dibujado en un tramo: la elevación sigue la forma dibujada, y fuera del tramo casi no cambia
+{
+  const L = buildLayout(SAMPLES.oval.build(), { lapLength: 1000 });
+  const E0 = computeElevation(L, { hills: 0.5 });
+  const r = L.routes[0];
+  const s0 = 300, s1 = 520;
+  const zAt = (E, sv) => E.routes[0].z[Math.round(sv / r.ds) % r.n];
+  const zb = zAt(E0, s0);
+  const pts = [];
+  for (let k = 0; k <= 40; k++) { const t = k / 40; pts.push([t, zb + 6 * Math.sin(Math.PI * t) - 2 * t]); }
+  const E1 = computeElevation(L, { hills: 0.5, profileZones: [{ s0, s1, pts }] });
+  let worst = 0;
+  for (let k = 2; k <= 38; k++) { const t = k / 40; worst = Math.max(worst, Math.abs(zAt(E1, s0 + t * (s1 - s0)) - (zb + 6 * Math.sin(Math.PI * t) - 2 * t))); }
+  check(worst < 0.5, `perfil dibujado: la elevación sigue la forma (error máx. ${worst.toFixed(2)} m)`);
+  const far = Math.abs(zAt(E1, 850) - zAt(E0, 850));
+  check(far < 1.5, `perfil dibujado: lejos del tramo casi no cambia (${far.toFixed(2)} m)`);
+  // un pin (altura fijada) dentro del tramo no le gana al perfil
+  const E2 = computeElevation(L, { hills: 0.5, profileZones: [{ s0, s1, pts }] }, {}, [{ route: 0, s: 410, z: zb + 30 }]);
+  check(Math.abs(zAt(E2, 410) - zAt(E1, 410)) < 0.3, 'perfil dibujado: manda sobre las alturas fijadas del tramo');
+}
+
 // tramos cubiertos (bajo cruces y en túneles): material propio, cortes exactos
 {
   const L = buildLayout(SAMPLES.figure8.build(), { lapLength: 1000 });

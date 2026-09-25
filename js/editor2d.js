@@ -95,6 +95,8 @@ export class Editor2D {
       const [sx, sy] = this.eventPos(e);
       cv.setPointerCapture(e.pointerId);
       const tool = this.app.state.tool;
+      // auto de la cámara de juego: se arrastra a lo largo de la pista
+      if (e.button === 0 && this.hitCar(sx, sy)) { this.carDrag = true; this.app.beginCarDrag(); cv.style.cursor = 'grabbing'; return; }
       if ((tool === 'paint' || tool === 'hill' || tool === 'itemPaint' || tool === 'sculpt' || tool === 'river') && (e.button === 0 || e.button === 2)) {
         this.painting = { kind: tool, erase: e.button === 2 || e.altKey || (tool !== 'sculpt' && this.app.state.paintErase), ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey, last: null };
         const p0 = this.toLayout(sx, sy);
@@ -180,6 +182,7 @@ export class Editor2D {
       if (tool === 'draw' || tool === 'alt' || tool === 'extend') this.stroke = { kind: tool, pts: [p] };
       else if (tool === 'start') this.app.setStart(p);
       else if (tool === 'flat') this.dragFlat = { a: p, b: p };
+      else if (tool === 'profile') this.dragProfile = { a: p, b: p }; // tramo para dibujar su perfil
       this.draw();
     });
 
@@ -192,6 +195,7 @@ export class Editor2D {
         return;
       }
       const p = this.toLayout(sx, sy);
+      if (this.carDrag) { const sv = this.app.nearestMainS(p, Infinity); if (sv !== null) this.app.moveCarTo(sv); return; }
       if (this.painting) { this.addPaint(p); return; }
       if (this.itemDrag) { this.app.dragItemToLayout(this.itemDrag.start, p); return; }
       if (this.bridgeDrag) { this.app.dragBridgeLayout(this.bridgeDrag.last, p); this.bridgeDrag.last = p; return; }
@@ -229,9 +233,11 @@ export class Editor2D {
         return;
       }
       if (this.dragFlat) { this.dragFlat.b = p; this.draw(); return; }
+      if (this.dragProfile) { this.dragProfile.b = p; this.draw(); return; }
       // hover sobre la ruta principal
       const s = this.app.nearestMainS(p, 25 / this.view.zoom);
  const tl = this.app.state.tool;
+      if (this.hitCar(sx, sy)) { cv.style.cursor = 'grab'; return; }
       if (tl === 'paint' || tl === 'hill' || tl === 'itemPaint' || tl === 'sculpt' || tl === 'river') { this.paintCursor = p; cv.style.cursor = 'none'; this.draw(); return; }
       if (tl === 'pan' && this.app.itemAtLayout(p, 6 / this.view.zoom)) { cv.style.cursor = 'move'; return; }
       if (tl === 'pan' && this.app.state.ref3d && this.app.state.ref3d.sel && !this.app.state.ref3d.locked && this.hitRef3d(p)) { cv.style.cursor = 'move'; return; }
@@ -248,6 +254,7 @@ export class Editor2D {
     });
 
     const end = (e) => {
+      if (this.carDrag) { this.carDrag = false; this.app.endCarDrag(); cv.style.cursor = 'grab'; return; }
       if (this.painting) { const ses = this.painting; this.painting = null; this.app.endPaint(ses.kind, ses); this.draw(); return; }
       if (this.itemDrag) { this.itemDrag = null; this.app.endItemDrag(); return; }
       if (this.bridgeDrag) { this.bridgeDrag = null; this.app.endBridgeDrag(); return; }
@@ -286,6 +293,12 @@ export class Editor2D {
         const d = this.dragFlat;
         this.dragFlat = null;
         this.app.addFlatZone(d.a, d.b);
+        this.draw();
+      }
+      if (this.dragProfile) {
+        const d = this.dragProfile;
+        this.dragProfile = null;
+        this.app.setProfileSel(d.a, d.b); // un clic sin arrastrar quita el tramo
         this.draw();
       }
     };
@@ -386,7 +399,13 @@ export class Editor2D {
     ctx.restore(); // (la etiqueta con el nombre se dibuja junto a las de los demás atajos, en amarillo)
   }
 
-  /** Auto de la cámara de juego sobre el mapa (flecha en el sentido de marcha). */
+  /** ¿(sx, sy) cae sobre el auto de la cámara de juego dibujado en el mapa? */
+  hitCar(sx, sy) {
+    const c = this.carScreen;
+    return !!(c && this.app.state.gameActive && this.gameS != null && Math.hypot(sx - c.x, sy - c.y) < c.k * 1.35);
+  }
+
+  /** Auto de la cámara de juego sobre el mapa (flecha en el sentido de marcha). Se puede arrastrar. */
   drawGameCar(L) {
     const r = L.routes[0];
     const s = ((this.gameS % r.L) + r.L) % r.L;
@@ -395,10 +414,11 @@ export class Editor2D {
     const [lx, ly] = L.toLayout(r.x[i], r.y[i]);
     const [x, y] = this.toScreen(lx, ly);
     const ang = Math.atan2(-r.ty[i], r.tx[i]); // Y del lienzo hacia abajo
+    const k = Math.max(9, Math.min(22, (6 / L.scale) * this.view.zoom * 1.4));
+    this.carScreen = { x, y, k };
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(ang);
-    const k = Math.max(9, Math.min(22, (6 / L.scale) * this.view.zoom * 1.4));
     ctx.fillStyle = 'rgba(0,0,0,0.35)';
     ctx.beginPath(); ctx.arc(0, 0, k * 1.25, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = '#e53935'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
@@ -848,6 +868,13 @@ export class Editor2D {
       const s0 = this.app.nearestMainS(this.dragFlat.a, Infinity);
       const s1 = this.app.nearestMainS(this.dragFlat.b, Infinity);
       if (s0 !== null && s1 !== null) this.strokeRange(L, 0, Math.min(s0, s1), Math.max(s0, s1), 'rgba(120,230,255,0.9)', 5);
+    }
+    // perfiles dibujados (violeta) y tramo elegido para dibujar su perfil (amarillo)
+    if (L && (st.tool === 'profile' || st.tool === 'flat' || this.dragProfile)) {
+      for (const Z of this.app.profileZonesS()) this.strokeRange(L, 0, Z.s0, Z.s1, 'rgba(186,120,255,0.75)', 4);
+      let selT = this.app.profileSelS();
+      if (this.dragProfile) { const s0 = this.app.nearestMainS(this.dragProfile.a, Infinity), s1 = this.app.nearestMainS(this.dragProfile.b, Infinity); selT = s0 !== null && s1 !== null ? [Math.min(s0, s1), Math.max(s0, s1)] : null; }
+      if (selT) this.strokeRange(L, 0, selT[0], selT[1], 'rgba(255,224,102,0.6)', 6);
     }
   }
 

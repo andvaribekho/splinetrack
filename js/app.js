@@ -32,6 +32,8 @@ const state = {
   trace: { threshold: null, invert: 'auto' },
   overrides: [], // [{lx, ly, upDir:[dx,dy]|null, type}]
   flatZones: [], // [[ [x,y], [x,y] ], ...] en coordenadas de lienzo
+  profileZones: [], // perfiles dibujados en la ruta principal: [{a:[x,y], b:[x,y], pts:[[t, z], ...]}] (extremos en coords del lienzo)
+  profileSel: null, // tramo elegido para dibujar un perfil: {a, b} (coords del lienzo)
   image: null, // {canvas, w, h}
   imageOpacity: 0.5,
   tool: 'pan',
@@ -82,7 +84,7 @@ const state = {
 const undoStack = [];
 function snapshot() {
   const ref = state.ref ? { x: state.ref.x, y: state.ref.y, scale: state.ref.scale, opacity: state.ref.opacity } : null;
-  return JSON.stringify({ project: state.project, flatZones: state.flatZones, overrides: state.overrides, ref, refCanvas: !!state.ref, densityPaint: state.densityPaint, terrainSculpt: state.terrainSculpt, decoSets: state.decoSets, hills: state.hills, selHill: state.selHill, rivers: state.rivers, items: state.items });
+  return JSON.stringify({ project: state.project, flatZones: state.flatZones, profileZones: state.profileZones, overrides: state.overrides, ref, refCanvas: !!state.ref, densityPaint: state.densityPaint, terrainSculpt: state.terrainSculpt, decoSets: state.decoSets, hills: state.hills, selHill: state.selHill, rivers: state.rivers, items: state.items });
 }
 function pushUndo() {
   undoStack.push(snapshot());
@@ -95,6 +97,7 @@ function undo() {
   const o = JSON.parse(s);
   state.project = o.project;
   state.flatZones = o.flatZones;
+  if (o.profileZones) state.profileZones = o.profileZones;
   state.overrides = o.overrides;
   if (o.ref && state.ref) Object.assign(state.ref, o.ref);
   if (o.items) { state.items = o.items; if (typeof itemsChanged === 'function') { renderItemsPanel(); itemsChanged(); } }
@@ -543,6 +546,103 @@ const app = {
     pushUndo();
     state.project.start = p;
     scheduleBuild();
+  },
+  /** Perfiles dibujados en s de la ruta principal: [{s0, s1, pts}] (t crece en el sentido de marcha). */
+  profileZonesS() {
+    const L = state.layout;
+    if (!L) return [];
+    return state.profileZones.map((Z, idx) => {
+      const s0 = app.nearestMainS(Z.a, Infinity), s1 = app.nearestMainS(Z.b, Infinity);
+      if (s0 === null || s1 === null) return null;
+      const flip = s1 < s0;
+      return { idx, s0: Math.min(s0, s1), s1: Math.max(s0, s1), pts: flip ? Z.pts.map(([t, z]) => [1 - t, z]).reverse() : Z.pts };
+    }).filter((Z) => Z && Z.s1 - Z.s0 > 2);
+  },
+  /** Tramo elegido para el perfil, en s: [s0, s1] o null. */
+  profileSelS() {
+    const P = state.profileSel;
+    if (!P || !state.layout) return null;
+    const s0 = app.nearestMainS(P.a, Infinity), s1 = app.nearestMainS(P.b, Infinity);
+    if (s0 === null || s1 === null || Math.abs(s1 - s0) < 3) return null;
+    return [Math.min(s0, s1), Math.max(s0, s1)];
+  },
+  /** Punto del lienzo sobre la ruta principal en la posición s. */
+  mainLayoutAt(sv) {
+    const L = state.layout, r = L.routes[0];
+    const i = Math.min(r.n - 1, Math.max(0, Math.round(sv / r.ds))) % r.n;
+    return L.toLayout(r.x[i], r.y[i]).map((v) => +v.toFixed(3));
+  },
+  setProfileSel(a, b) {
+    if (!state.layout) return;
+    if (!a || !b) { state.profileSel = null; editor.draw(); profile.draw(); return; }
+    state.profileSel = { a, b };
+    if (!app.profileSelS()) state.profileSel = null;
+    editor.draw(); profile.draw();
+  },
+  setProfileSelS(s0, s1) { if (!state.layout) return; this.setProfileSel(this.mainLayoutAt(Math.min(s0, s1)), this.mainLayoutAt(Math.max(s0, s1))); },
+  /**
+   * Aplica un perfil dibujado en el gráfico: pts = [[s, z], ...] tal como se dibujaron. El tramo es el elegido (el trazo
+   * se recorta a él) o, si no hay, el que cubre el trazo. Reemplaza los perfiles que se superponen.
+   */
+  applyDrawnProfile(raw) {
+    const L = state.layout;
+    if (!L || !raw || raw.length < 2) return false;
+    const Lm = L.routes[0].L;
+    const P = raw.map(([sv, z]) => [Math.max(0, Math.min(Lm, sv)), z]).sort((u, v) => u[0] - v[0]);
+    let a = P[0][0], b = P[P.length - 1][0];
+    const sel = app.profileSelS();
+    if (sel) { a = Math.max(a, sel[0]); b = Math.min(b, sel[1]); }
+    if (b - a < 5) { toast(sel ? 'Dibuja el perfil dentro del tramo elegido (resaltado).' : 'Dibuja el perfil a lo largo de al menos unos metros de pista.'); return false; }
+    const zAt = (sv) => {
+      if (sv <= P[0][0]) return P[0][1];
+      if (sv >= P[P.length - 1][0]) return P[P.length - 1][1];
+      let k = 0;
+      while (k < P.length - 2 && P[k + 1][0] < sv) k++;
+      const [s0, z0] = P[k], [s1, z1] = P[k + 1];
+      return s1 > s0 ? z0 + ((z1 - z0) * (sv - s0)) / (s1 - s0) : z0;
+    };
+    const N = Math.max(8, Math.min(200, Math.round((b - a) / 2)));
+    let zs = [];
+    for (let k = 0; k <= N; k++) zs.push(zAt(a + ((b - a) * k) / N));
+    for (let pass = 0; pass < 2; pass++) zs = zs.map((z, k) => (k === 0 || k === N ? z : (zs[k - 1] + 2 * z + zs[k + 1]) / 4)); // suaviza el trazo a mano
+    const pts = zs.map((z, k) => [+(k / N).toFixed(4), +z.toFixed(3)]);
+    pushUndo();
+    const cur = app.profileZonesS();
+    state.profileZones = state.profileZones.filter((Z, i) => { const c = cur.find((q) => q.idx === i); return !c || c.s1 < a || c.s0 > b; });
+    state.profileZones.push({ a: app.mainLayoutAt(a), b: app.mainLayoutAt(b), pts });
+    scheduleElev();
+    toast(`Perfil aplicado entre s=${a.toFixed(0)} y ${b.toFixed(0)} m.`);
+    return true;
+  },
+  /** Deja los puntos de control seleccionados a la elevación promedio que tenían. */
+  flattenSelected() {
+    const st = state;
+    const sel = st.selSet && st.selSet.idxs.size ? { key: st.selSet.key, idxs: st.selSet.idxs } : st.sel ? { key: st.sel.key, idxs: new Set([st.sel.idx]) } : null;
+    if (!sel) { toast('Selecciona puntos (Editar puntos: Shift + clic o caja) para aplanarlos.'); return false; }
+    const list = app.ctrlPoints().filter((q) => q.key === sel.key && sel.idxs.has(q.idx));
+    if (list.length < 2) { toast('Selecciona al menos dos puntos para aplanarlos.'); return false; }
+    const avg = list.reduce((acc, q) => acc + q.z, 0) / list.length;
+    const za = zArray(sel.key);
+    if (!za) return false;
+    pushUndo();
+    for (const q of list) za[q.idx] = makePin(avg);
+    // puntos seguidos de la ruta principal: el tramo entre ellos también queda plano (perfil horizontal)
+    let flatTramo = false;
+    if (sel.key === 'main' && state.layout) {
+      const ids = [...sel.idxs].sort((u, v) => u - v);
+      const consecutive = ids.every((v, k) => k === 0 || v === ids[k - 1] + 1);
+      const ss = list.map((q) => q.s);
+      const a = Math.min(...ss), b = Math.max(...ss);
+      if (consecutive && b - a > 3 && b - a < state.layout.routes[0].L * 0.9) {
+        const cur = app.profileZonesS();
+        state.profileZones = state.profileZones.filter((Z, i) => { const c = cur.find((q) => q.idx === i); return !c || c.s1 < a || c.s0 > b; });
+        state.profileZones.push({ a: app.mainLayoutAt(a), b: app.mainLayoutAt(b), pts: [[0, +avg.toFixed(3)], [1, +avg.toFixed(3)]], flat: true });
+        flatTramo = true;
+      }
+    }
+    scheduleElev();
+    toast(`${list.length} puntos a ${avg.toFixed(2)} m (su altura promedio)${flatTramo ? '; el tramo entre ellos queda plano' : ''}.`);
+    return true;
   },
   addFlatZone(a, b) {
     if (!state.layout) return;
@@ -1092,7 +1192,18 @@ const app = {
     if (el) el.textContent = B.dirt.length || B.barriers.length ? `${B.dirt.length ? `Camino de tierra: ${B.dirtTris.toLocaleString('es')} triángulos` : ''}${B.dirt.length && B.barriers.length ? ' · ' : ''}${B.barriers.length ? `barreras: ${B.barrierTris.toLocaleString('es')} triángulos` : ''}. Clic en una barrera o en el camino (vista 3D o mapa) trae esta sección. Se exportan en «bordes».` : 'Sin bordes.';
   },
   altAtWorld(x, y) { const L = state.layout; if (!L) return null; const [lx, ly] = L.toLayout(x, y); return altAt([lx, ly], 0.5 / L.scale); },
-  onGameMove(s) { editor.gameS = s; editor.draw(); },
+  onGameMove(s) { if (preview.game && preview.game.dragging) return; editor.gameS = s; editor.draw(); },
+  // arrastrar el auto de la cámara de juego en el mapa
+  beginCarDrag() { if (preview.game) preview.game.dragging = true; },
+  moveCarTo(sv) {
+    const g = preview.game;
+    if (!g || !g.active) return;
+    g.s = sv;
+    g.snapCamera = true; // la cámara salta con el auto
+    editor.gameS = sv; editor.draw();
+    app.setHover(sv, 'map');
+  },
+  endCarDrag() { if (preview.game) preview.game.dragging = false; },
   selectHill(id) { selectHill(id); },
   selectTunnel(id) { selectTunnel(id); },
   // ---- imagen de referencia ----
@@ -1884,6 +1995,7 @@ function tick() {
       if (state.layout) {
         try {
           state.elev.flatZones = app.flatZonesS();
+          state.elev.profileZones = app.profileZonesS();
           state.result = computeElevation(state.layout, state.elev, overridesMap(state.layout), collectPins());
         } catch (err) {
           console.error(err);
@@ -2280,6 +2392,20 @@ function refreshPanels() {
   // zonas planas
   const fl = $('flatZoneList');
   fl.innerHTML = '';
+  const pl = $('profileZoneList');
+  if (pl) {
+    pl.innerHTML = '';
+    const pz = app.profileZonesS();
+    state.profileZones.forEach((Z, i) => {
+      const c = pz.find((q) => q.idx === i);
+      const zs = Z.pts.map((q) => q[1]);
+      const div = document.createElement('div');
+      div.className = 'item';
+      div.innerHTML = `<div class="head"><span>${Z.flat ? 'Tramo aplanado' : 'Perfil'} ${i + 1}${c ? ` · s ${c.s0.toFixed(0)}–${c.s1.toFixed(0)} m` : ''} · z ${Math.min(...zs).toFixed(1)}–${Math.max(...zs).toFixed(1)} m</span><button class="x" title="Quitar (la elevación vuelve a ser automática)">✕</button></div>`;
+      div.querySelector('button').addEventListener('click', () => { pushUndo(); state.profileZones.splice(i, 1); scheduleElev(); });
+      pl.appendChild(div);
+    });
+  }
   const fz = app.flatZonesS();
   state.flatZones.forEach((z, i) => {
     const sr = fz[i];
@@ -2419,6 +2545,7 @@ function bindControls() {
   $('forkSep').addEventListener('input', () => { $('forkSepVal').textContent = `${$('forkSep').value} m`; });
   $('forkSepVal').textContent = `${$('forkSep').value} m`;
   // botones de la barra: radio fijo y bifurcar con los valores del panel «Puntos seleccionados»
+  $('btnTbFlatten').addEventListener('click', () => { app.flattenSelected(); });
   $('btnTbRadius').addEventListener('click', () => {
     focusPanel('arc');
     const sel = state.selSet, run = sel ? contiguousRun(sel.key) : null;
@@ -2482,7 +2609,7 @@ function bindControls() {
   $('btnNew').addEventListener('click', () => {
     pushUndo();
     state.project = { main: null, alts: [], start: null, reverse: false };
-    state.flatZones = []; state.overrides = []; state.image = null;
+    state.flatZones = []; state.profileZones = []; state.profileSel = null; state.overrides = []; state.image = null;
     syncControls(); scheduleBuild(); setTool('draw');
     setTimeout(() => editor.fit(), 0);
   });
@@ -2681,7 +2808,7 @@ function setImage(cv) {
   state.image = { canvas: cv, w: cv.width, h: cv.height };
   pushUndo();
   state.project = { main: null, alts: [], start: null, reverse: false };
-  state.flatZones = []; state.overrides = [];
+  state.flatZones = []; state.profileZones = []; state.profileSel = null; state.overrides = [];
   refreshPanels();
   setTimeout(() => editor.fit(), 0);
   scheduleBuild();
@@ -2703,7 +2830,7 @@ function runTrace() {
     pushUndo();
     state.project = { main: e.data.main, alts: e.data.alts, start: null, reverse: false };
     state.closed = e.data.main.closed;
-    state.overrides = []; state.flatZones = [];
+    state.overrides = []; state.flatZones = []; state.profileZones = []; state.profileSel = null;
     const inf = e.data.info;
     $('traceInfo').textContent = `Trazado en ${inf.ms} ms · modo: ${inf.modeName} · ${inf.crossNodes} cruce(s) y ${inf.forkNodes} bifurcación(es) en el esqueleto · ${e.data.alts.length} ruta(s) alternativa(s) · ${e.data.main.closed ? 'circuito cerrado' : 'ruta abierta'}.`;
     state.imageOpacity = Math.min(state.imageOpacity, 0.35);
@@ -2720,7 +2847,7 @@ function loadSample(k) {
   state.project = { ...s.build(), start: null, reverse: false };
   state.closed = true;
   state.geom.lapLength = s.lap || 1000;
-  state.flatZones = []; state.overrides = []; state.image = null;
+  state.flatZones = []; state.profileZones = []; state.profileSel = null; state.overrides = []; state.image = null;
   syncControls();
   scheduleBuild();
   preview.fitted = false;
@@ -2736,8 +2863,8 @@ function saveProject() {
     savedAt: new Date().toISOString(),
     stats: state.layout ? { length: Math.round(state.layout.routes[0].L), routes: state.layout.routes.length, crossings: state.result ? state.result.crossings.length : 0, hills: state.hills.length } : null,
     project: state.project, geom: state.geom, closed: state.closed,
-    elev: { ...state.elev, flatZones: undefined }, exp: state.exp, trace: state.trace,
-    overrides: state.overrides, flatZones: state.flatZones,
+    elev: { ...state.elev, flatZones: undefined, profileZones: undefined }, exp: state.exp, trace: state.trace,
+    overrides: state.overrides, flatZones: state.flatZones, profileZones: state.profileZones,
     image: state.image ? state.image.canvas.toDataURL('image/png') : null,
     scene: state.scene,
     densityPaint: state.densityPaint,
@@ -2883,12 +3010,13 @@ async function openProject(text) {
   pushUndo();
   state.project = d.project;
   if (d.geom) Object.assign(state.geom, d.geom);
-  if (d.elev) Object.assign(state.elev, d.elev, { flatZones: [] });
+  if (d.elev) Object.assign(state.elev, d.elev, { flatZones: [], profileZones: [] });
   if (d.exp) Object.assign(state.exp, d.exp);
   if (d.trace) Object.assign(state.trace, d.trace);
   state.closed = d.closed ?? (d.project.main ? d.project.main.closed !== false : true);
   state.overrides = d.overrides || [];
   state.flatZones = d.flatZones || [];
+  state.profileZones = d.profileZones || []; state.profileSel = null;
   state.imageOpacity = d.imageOpacity ?? 0.35;
   state.image = null;
   if (d.image) {
@@ -3480,7 +3608,7 @@ function focusPanel(id, sub = null) {
 /** Botones (fuera de la barra lateral) con parámetros asociados: a qué sección llevan. */
 const PANEL_FOR_BUTTON = {
   'tool:edit': 'arc', 'tool:draw': 'trace', 'tool:extend': 'trace', 'tool:alt': 'alts', 'tool:start': 'gate', 'tool:ref': 'ref',
-  btnDecoNew: 'deco', 'tool:hill': 'hills', 'tool:river': 'rivers', 'tool:paint': 'terrain', 'tool:sculpt': 'terrain', 'tool:flat': 'elev', btnSculptTool: 'terrain', btnRef3dTop: 'ref3d',
+  btnDecoNew: 'deco', 'tool:hill': 'hills', 'tool:river': 'rivers', 'tool:paint': 'terrain', 'tool:sculpt': 'terrain', 'tool:flat': 'elev', 'tool:profile': 'elev', btnSculptTool: 'terrain', btnRef3dTop: 'ref3d',
   btnGame: 'sky', btnExportBlender: 'export', btnExportMax: 'export', btnExportJSON: 'export', btnExportOBJ: 'export',
   btnExportGLB2: 'export', btnExportFBX2: 'export', btnTbRadius: 'arc', btnTbFork: 'arc', btnGenTerrain: 'terrain', btnGenTrees: 'trees',
 };

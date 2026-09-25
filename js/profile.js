@@ -19,6 +19,20 @@ export class ProfileView {
     canvas.addEventListener('pointerleave', () => { if (!this.drag) { this.tip.hidden = true; this.app.setHover(null, 'profile'); } });
     canvas.addEventListener('pointerdown', (e) => this.onDown(e));
     const up = () => {
+      if (this.selDrag) { // Perfil de tramo + Shift: elige el tramo
+        const d = this.selDrag;
+        this.selDrag = null; this.frozen = null;
+        if (Math.abs(d.s1 - d.s0) >= 3) this.app.setProfileSelS(d.s0, d.s1); else this.app.setProfileSel(null);
+        this.draw();
+        return;
+      }
+      if (this.drawStroke) { // Perfil de tramo: aplica la forma dibujada
+        const st = this.drawStroke;
+        this.drawStroke = null; this.frozen = null;
+        if (st.length >= 2) this.app.applyDrawnProfile(st);
+        this.draw();
+        return;
+      }
       if (this.box) {
         const b = this.box;
         this.box = null;
@@ -71,6 +85,18 @@ export class ProfileView {
   }
 
   onDown(e) {
+    if (this.app.state.tool === 'profile' && e.button === 0) {
+      const sc = this.scales();
+      if (!sc) return;
+      const [x, y] = this.localPos(e);
+      const sv = Math.max(0, Math.min(sc.Lm, ((x - sc.f.x0) / (sc.f.x1 - sc.f.x0)) * sc.Lm));
+      this.cv.setPointerCapture(e.pointerId);
+      this.frozen = sc; // la escala no cambia mientras se dibuja
+      if (e.shiftKey) this.selDrag = { s0: sv, s1: sv };
+      else this.drawStroke = [[sv, sc.zAt(y)]];
+      this.draw();
+      return;
+    }
     if (this.app.state.tool !== 'edit') return;
     const [x, y] = this.localPos(e);
     const h = this.hit(x, y);
@@ -140,6 +166,18 @@ export class ProfileView {
     const r = this.cv.getBoundingClientRect();
     const x = e.clientX - r.left;
     if (this.box) { this.box.x1 = x; this.box.y1 = e.clientY - r.top; this.draw(); return; }
+    if (this.selDrag || this.drawStroke) {
+      const sv = Math.max(0, Math.min(sc.Lm, ((x - sc.f.x0) / (sc.f.x1 - sc.f.x0)) * sc.Lm));
+      if (this.selDrag) this.selDrag.s1 = sv;
+      else { const last = this.drawStroke[this.drawStroke.length - 1]; if (Math.abs(sc.sx(sv) - sc.sx(last[0])) + Math.abs(sc.sy(sc.zAt(e.clientY - r.top)) - sc.sy(last[1])) > 1.5) this.drawStroke.push([sv, sc.zAt(e.clientY - r.top)]); }
+      this.tip.hidden = false;
+      this.tip.style.left = `${e.clientX + 12}px`;
+      this.tip.style.top = `${e.clientY - 30}px`;
+      this.tip.textContent = this.selDrag ? `tramo s ${Math.min(this.selDrag.s0, this.selDrag.s1).toFixed(0)}–${Math.max(this.selDrag.s0, this.selDrag.s1).toFixed(0)} m` : `s ${sv.toFixed(0)} m · z ${sc.zAt(e.clientY - r.top).toFixed(2)} m`;
+      this.draw();
+      return;
+    }
+    if (this.app.state.tool === 'profile') this.cv.style.cursor = 'crosshair';
     if (this.drag && this.group) {
       const dz = sc.zAt(e.clientY - r.top) - sc.zAt(this.group.y0);
       this.app.applyGroupDelta(0, 0, dz);
@@ -208,6 +246,22 @@ export class ProfileView {
     if (sf > 0 && L.routes[0].closed) {
       ctx.fillRect(sx(0), f.y0, sx(sf) - sx(0), f.y1 - f.y0);
       ctx.fillRect(sx(Lm - sf), f.y0, sx(Lm) - sx(Lm - sf), f.y1 - f.y0);
+    }
+    // perfiles dibujados (violeta) y tramo elegido para dibujar (amarillo suave)
+    for (const Z of this.app.profileZonesS ? this.app.profileZonesS() : []) {
+      ctx.fillStyle = 'rgba(186,120,255,0.08)';
+      ctx.fillRect(sx(Z.s0), f.y0, sx(Z.s1) - sx(Z.s0), f.y1 - f.y0);
+      ctx.strokeStyle = 'rgba(186,120,255,0.75)'; ctx.lineWidth = 1.2; ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      Z.pts.forEach(([t, z], k) => { const x = sx(Z.s0 + t * (Z.s1 - Z.s0)), y = sy(z); if (k) ctx.lineTo(x, y); else ctx.moveTo(x, y); });
+      ctx.stroke(); ctx.setLineDash([]);
+    }
+    const selT = this.selDrag ? [Math.min(this.selDrag.s0, this.selDrag.s1), Math.max(this.selDrag.s0, this.selDrag.s1)] : this.app.profileSelS ? this.app.profileSelS() : null;
+    if (selT) {
+      ctx.fillStyle = 'rgba(255,224,102,0.07)';
+      ctx.fillRect(sx(selT[0]), f.y0, sx(selT[1]) - sx(selT[0]), f.y1 - f.y0);
+      ctx.strokeStyle = 'rgba(255,224,102,0.5)'; ctx.lineWidth = 1;
+      for (const sv of selT) { ctx.beginPath(); ctx.moveTo(sx(sv), f.y0); ctx.lineTo(sx(sv), f.y1); ctx.stroke(); }
     }
     // cruces
     ctx.lineWidth = 1;
@@ -298,6 +352,13 @@ export class ProfileView {
       ctx.fillRect(Math.min(b.x0, b.x1), Math.min(b.y0, b.y1), Math.abs(b.x1 - b.x0), Math.abs(b.y1 - b.y0));
       ctx.strokeRect(Math.min(b.x0, b.x1), Math.min(b.y0, b.y1), Math.abs(b.x1 - b.x0), Math.abs(b.y1 - b.y0));
       ctx.setLineDash([]);
+    }
+    // trazo del perfil que se está dibujando
+    if (this.drawStroke && this.drawStroke.length > 1) {
+      ctx.strokeStyle = '#c792ff'; ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      this.drawStroke.forEach(([sv, z], k) => { const x = sx(sv), y = sy(z); if (k) ctx.lineTo(x, y); else ctx.moveTo(x, y); });
+      ctx.stroke();
     }
     // hover
     const hv = this.app.state.hover;

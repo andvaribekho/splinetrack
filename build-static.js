@@ -6,4 +6,3 @@ await copyFile('index.html', 'dist/index.html');
 await copyFile('styles.css', 'dist/styles.css');
 await cp('js', 'dist/js', { recursive: true });
 await cp('vendor', 'dist/vendor', { recursive: true });
-console.log('Static build ready in dist/');
