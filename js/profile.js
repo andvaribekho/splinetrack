@@ -14,11 +14,36 @@ export class ProfileView {
     this.handles = [];
     this.drag = null;
     this.frozen = null;
+    this.view = null; // zoom / pan: {s0, s1, z0, z1} o null = encuadre automático
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    canvas.addEventListener('mousedown', (e) => { if (e.button === 1) e.preventDefault(); }); // sin autodesplazamiento del navegador
+    // rueda = zoom horizontal en el cursor; Shift + rueda = zoom vertical; botón medio = desplazar en X e Y
+    canvas.addEventListener('wheel', (e) => {
+      const sc = this.scales();
+      if (!sc) return;
+      e.preventDefault();
+      const [x, y] = this.localPos(e);
+      const d = e.deltaY || e.deltaX;
+      const k = Math.exp(d * 0.0015);
+      const v = this.view || { s0: sc.s0, s1: sc.s1, z0: sc.zmin, z1: sc.zmax };
+      if (e.shiftKey) {
+        const zc = sc.zAt(y), z0 = zc - (zc - v.z0) * k, z1 = zc + (v.z1 - zc) * k;
+        if (z1 - z0 < 0.5 || z1 - z0 > 5000) return;
+        this.view = { ...v, z0, z1 };
+      } else {
+        const sv = sc.sAt(x);
+        let s0 = sv - (sv - v.s0) * k, s1 = sv + (v.s1 - sv) * k;
+        const span = Math.min(sc.Lm * 1.1, Math.max(15, s1 - s0));
+        if (s1 - s0 !== span) { const c = (s0 + s1) / 2; s0 = c - span / 2; s1 = c + span / 2; }
+        this.view = this.clampS({ ...v, s0, s1 }, sc.Lm);
+      }
+      this.draw();
+    }, { passive: false });
     canvas.addEventListener('pointermove', (e) => this.onMove(e));
     canvas.addEventListener('pointerleave', () => { if (!this.drag) { this.tip.hidden = true; this.app.setHover(null, 'profile'); } });
     canvas.addEventListener('pointerdown', (e) => this.onDown(e));
     const up = () => {
+      if (this.pan) { this.pan = null; this.cv.style.cursor = 'default'; return; }
       if (this.selDrag) { // Perfil de tramo + Shift: elige el tramo
         const d = this.selDrag;
         this.selDrag = null; this.frozen = null;
@@ -84,12 +109,34 @@ export class ProfileView {
     return best;
   }
 
+  /** Mantiene la ventana horizontal dentro de la pista (con un pequeño margen). */
+  clampS(v, Lm) {
+    const m = Lm * 0.05, span = v.s1 - v.s0;
+    let s0 = v.s0;
+    if (s0 < -m) s0 = -m;
+    if (s0 + span > Lm + m) s0 = Lm + m - span;
+    return { ...v, s0, s1: s0 + span };
+  }
+  /** Vuelve al encuadre automático (todo el perfil y todos los puntos a la vista). */
+  resetView() { this.view = null; this.frozen = null; this.draw(); }
+
   onDown(e) {
+    if (e.button === 1) {
+      // botón medio: desplazar la vista del perfil
+      const sc = this.scales();
+      if (!sc) return;
+      e.preventDefault();
+      const [x, y] = this.localPos(e);
+      this.cv.setPointerCapture(e.pointerId);
+      this.pan = { x, y, v: this.view || { s0: sc.s0, s1: sc.s1, z0: sc.zmin, z1: sc.zmax }, f: sc.f, Lm: sc.Lm };
+      this.cv.style.cursor = 'grabbing';
+      return;
+    }
     if (this.app.state.tool === 'profile' && e.button === 0) {
       const sc = this.scales();
       if (!sc) return;
       const [x, y] = this.localPos(e);
-      const sv = Math.max(0, Math.min(sc.Lm, ((x - sc.f.x0) / (sc.f.x1 - sc.f.x0)) * sc.Lm));
+      const sv = Math.max(0, Math.min(sc.Lm, sc.sAt(x)));
       this.cv.setPointerCapture(e.pointerId);
       this.frozen = sc; // la escala no cambia mientras se dibuja
       if (e.shiftKey) this.selDrag = { s0: sv, s1: sv };
@@ -136,12 +183,12 @@ export class ProfileView {
     const [x, y] = this.localPos(e);
     if (this.app.state.tool !== 'edit') {
       // doble clic fuera de «Editar puntos»: entra al modo edición con el punto más cercano a esa posición
-      const s0 = ((x - sc.f.x0) / (sc.f.x1 - sc.f.x0)) * sc.Lm;
+      const s0 = sc.sAt(x);
       if (s0 >= 0 && s0 <= sc.Lm && this.app.enterEditAtS) this.app.enterEditAtS(0, s0);
       return;
     }
     if (this.hit(x, y)) return;
-    const s = ((x - sc.f.x0) / (sc.f.x1 - sc.f.x0)) * sc.Lm;
+    const s = sc.sAt(x);
     if (s < 0 || s > sc.Lm) return;
     this.app.insertCtrlAtS(0, s, sc.zAt(y));
   }
@@ -153,16 +200,22 @@ export class ProfileView {
     const f = this.frame();
     const Lm = L.routes[0].L;
     const v = E.validation;
-    let zmin = v.zMin, zmax = v.zMax;
-    const GL = this.app.state.groundLine; // el nivel del suelo también entra en la escala (se ve la zanja)
-    if (GL && GL.z.length) for (const z of GL.z) { if (Number.isFinite(z)) { zmin = Math.min(zmin, z); zmax = Math.max(zmax, z); } }
-    const need = Math.max(4, (zmax - zmin) * 1.15);
-    const mid = (zmax + zmin) / 2;
-    zmin = mid - need / 2; zmax = mid + need / 2;
-    const sx = (s) => f.x0 + (s / Lm) * (f.x1 - f.x0);
+    let zmin = v.zMin, zmax = v.zMax, s0 = 0, s1 = Lm;
+    if (this.view) { s0 = this.view.s0; s1 = this.view.s1; zmin = this.view.z0; zmax = this.view.z1; }
+    else {
+      const GL = this.app.state.groundLine; // el nivel del suelo también entra en la escala (se ve la zanja)
+      if (GL && GL.z.length) for (const z of GL.z) { if (Number.isFinite(z)) { zmin = Math.min(zmin, z); zmax = Math.max(zmax, z); } }
+      // y las alturas pedidas en los puntos (aunque la pista no las alcance): ningún punto queda fuera
+      if (this.app.state.tool === 'edit') for (const pt of this.app.ctrlPoints()) { const z = pt.pin !== null ? pt.pin : pt.z; if (Number.isFinite(z)) { zmin = Math.min(zmin, z); zmax = Math.max(zmax, z); } }
+      const need = Math.max(4, (zmax - zmin) * 1.15);
+      const mid = (zmax + zmin) / 2;
+      zmin = mid - need / 2; zmax = mid + need / 2;
+    }
+    const sx = (s) => f.x0 + ((s - s0) / (s1 - s0)) * (f.x1 - f.x0);
+    const sAt = (x) => s0 + ((x - f.x0) / (f.x1 - f.x0)) * (s1 - s0);
     const sy = (z) => f.y1 - ((z - zmin) / (zmax - zmin)) * (f.y1 - f.y0);
     const zAt = (y) => zmin + ((f.y1 - y) / (f.y1 - f.y0)) * (zmax - zmin);
-    return { f, Lm, zmin, zmax, sx, sy, zAt };
+    return { f, Lm, s0, s1, zmin, zmax, sx, sAt, sy, zAt };
   }
 
   onMove(e) {
@@ -170,9 +223,16 @@ export class ProfileView {
     if (!sc) return;
     const r = this.cv.getBoundingClientRect();
     const x = e.clientX - r.left;
+    if (this.pan) {
+      const P = this.pan, y = e.clientY - r.top;
+      const ds = ((x - P.x) / (P.f.x1 - P.f.x0)) * (P.v.s1 - P.v.s0), dz = ((y - P.y) / (P.f.y1 - P.f.y0)) * (P.v.z1 - P.v.z0);
+      this.view = this.clampS({ s0: P.v.s0 - ds, s1: P.v.s1 - ds, z0: P.v.z0 + dz, z1: P.v.z1 + dz }, P.Lm);
+      this.draw();
+      return;
+    }
     if (this.box) { this.box.x1 = x; this.box.y1 = e.clientY - r.top; this.draw(); return; }
     if (this.selDrag || this.drawStroke) {
-      const sv = Math.max(0, Math.min(sc.Lm, ((x - sc.f.x0) / (sc.f.x1 - sc.f.x0)) * sc.Lm));
+      const sv = Math.max(0, Math.min(sc.Lm, sc.sAt(x)));
       if (this.selDrag) this.selDrag.s1 = sv;
       else { const last = this.drawStroke[this.drawStroke.length - 1]; if (Math.abs(sc.sx(sv) - sc.sx(last[0])) + Math.abs(sc.sy(sc.zAt(e.clientY - r.top)) - sc.sy(last[1])) > 1.5) this.drawStroke.push([sv, sc.zAt(e.clientY - r.top)]); }
       this.tip.hidden = false;
@@ -202,8 +262,8 @@ export class ProfileView {
       return;
     }
     if (this.app.state.tool === 'edit') this.cv.style.cursor = this.hit(x, e.clientY - r.top) ? 'ns-resize' : 'default';
-    const s = ((x - sc.f.x0) / (sc.f.x1 - sc.f.x0)) * sc.Lm;
-    if (s < 0 || s > sc.Lm) { this.tip.hidden = true; this.app.setHover(null, 'profile'); return; }
+    const s = sc.sAt(x);
+    if (s < 0 || s > sc.Lm || x < sc.f.x0 || x > sc.f.x1) { this.tip.hidden = true; this.app.setHover(null, 'profile'); return; }
     this.app.setHover(s, 'profile');
     const L = this.app.state.layout, E = this.app.state.result;
     const rt = L.routes[0];
@@ -225,7 +285,7 @@ export class ProfileView {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const sc = this.scales();
     if (!sc) return;
-    const { f, sx, sy, zmin, zmax, Lm } = sc;
+    const { f, sx, sy, zmin, zmax, Lm, s0: vs0, s1: vs1 } = sc;
     const L = this.app.state.layout, E = this.app.state.result;
     // ejes
     ctx.font = '10px Inter, sans-serif';
@@ -238,12 +298,16 @@ export class ProfileView {
       ctx.beginPath(); ctx.moveTo(f.x0, y); ctx.lineTo(f.x1, y); ctx.stroke();
       ctx.fillText(`${z.toFixed(zStep < 1 ? 1 : 0)} m`, 4, y + 3);
     }
-    const sStep = niceStep(Lm / 8);
-    for (let s = 0; s <= Lm; s += sStep) {
+    const sStep = niceStep((vs1 - vs0) / 8);
+    for (let s = Math.max(0, Math.ceil(vs0 / sStep) * sStep); s <= Math.min(Lm, vs1); s += sStep) {
       const x = sx(s);
       ctx.beginPath(); ctx.moveTo(x, f.y0); ctx.lineTo(x, f.y1); ctx.stroke();
       ctx.fillText(`${s.toFixed(0)}`, x - 8, f.H - 6);
     }
+    if (this.view) { ctx.fillStyle = 'rgba(255,224,102,0.8)'; ctx.fillText('zoom · «Encuadrar» vuelve a ver todo', f.x1 - 190, f.y0 + 10); ctx.fillStyle = '#8b95a8'; }
+    // lo que sigue se dibuja solo dentro del área del gráfico (con zoom no invade los ejes)
+    ctx.save();
+    ctx.beginPath(); ctx.rect(f.x0 - 7, f.y0 - 7, f.x1 - f.x0 + 14, f.y1 - f.y0 + 14); ctx.clip();
     // zonas planas y meta
     ctx.fillStyle = 'rgba(120,230,255,0.07)';
     for (const [a, b] of this.app.flatZonesS()) ctx.fillRect(sx(a), f.y0, sx(b) - sx(a), f.y1 - f.y0);
@@ -348,6 +412,7 @@ export class ProfileView {
           if (s > Lm) s -= Lm;
         }
         const x = sx(s), y = sy(pt.pin !== null ? pt.pin : pt.z);
+        if (x < f.x0 - 7 || x > f.x1 + 7 || y < f.y0 - 7 || y > f.y1 + 7) continue; // fuera de la vista (zoom)
         this.handles.push({ x, y, key: pt.key, idx: pt.idx });
         const ms = this.app.state.selSet;
         const isSel = (sel && sel.key === pt.key && sel.idx === pt.idx) || (ms && ms.key === pt.key && ms.idxs.has(pt.idx));
@@ -382,9 +447,10 @@ export class ProfileView {
       this.drawStroke.forEach(([sv, z], k) => { const x = sx(sv), y = sy(z); if (k) ctx.lineTo(x, y); else ctx.moveTo(x, y); });
       ctx.stroke();
     }
+    ctx.restore();
     // hover
     const hv = this.app.state.hover;
-    if (hv !== null && hv !== undefined) {
+    if (hv !== null && hv !== undefined && sx(hv) >= f.x0 && sx(hv) <= f.x1) {
       const x = sx(hv);
       ctx.strokeStyle = 'rgba(255,255,255,0.6)';
       ctx.beginPath(); ctx.moveTo(x, f.y0); ctx.lineTo(x, f.y1); ctx.stroke();

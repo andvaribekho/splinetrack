@@ -340,3 +340,4 @@ button.small svg.bi { width: 11px; height: 11px; }
 #xformBox { gap: 4px; flex-wrap: nowrap; flex-basis: 100%; }
 #xformNumLbl button { margin-left: 2px; }
 #editBox { flex-wrap: wrap; flex-basis: 100%; gap: 6px; }
+#smoothBox { flex-basis: 100%; flex-wrap: wrap; gap: 6px 10px; }

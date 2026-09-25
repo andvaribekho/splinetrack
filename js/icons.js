@@ -63,6 +63,7 @@ const P = {
   segment: 'M3 17c4-8 14-8 18 0M3 17h.01M21 17h.01M7 11.5c3-3 7-3 10 0',
   rotate: 'M20 12a8 8 0 11-2.3-5.6M20 4v5h-5',
   scale: 'M4 20V10h10v10zM14 10l6-6M15 4h5v5',
+  smooth: 'M3 16c2-6 4-6 6 0s4 6 6 0 4-6 6 0M3 20h18',
   line: 'M4 19L20 5M4 19a1.5 1.5 0 100 .01M12 12a1.5 1.5 0 100 .01M20 5a1.5 1.5 0 100 .01',
   axisX: 'M3 12h18M17 8l4 4-4 4',
   axisY: 'M12 21V3M8 7l4-4 4 4',
@@ -71,13 +72,13 @@ const P = {
 
 const BY_ID = {
   btnOpen: 'folder', btnSave: 'save', btnNew: 'fileNew', btnUndo: 'undo', btnRedo: 'undo',
-  btnFit: 'fit', btnView3dReset: 'fit', btnGame: 'gamepad', btnGameFull: 'fullscreen', btnGamePause: 'pause', btnGameRestart: 'reset', btnGameExit: 'exit',
+  btnFit: 'fit', btnProfileFit: 'fit', btnView3dReset: 'fit', btnGame: 'gamepad', btnGameFull: 'fullscreen', btnGamePause: 'pause', btnGameRestart: 'reset', btnGameExit: 'exit',
   btnTrace: 'wand', btnTestImage: 'image', btnLoadImage: 'image', btnRefLoad: 'image', btnRefRemove: 'trash',
   btnGenTerrain: 'mountain', btnGenTrees: 'tree', btnTbPuddle: 'drop', btnNewPuddle: 'drop', btnTbPad: 'bolt', btnNewPad: 'bolt', btnTbStrip: 'bolt', btnNewStrip: 'bolt',
   btnTbRadius: 'radius', btnArcApply: 'check', btnArcDone: 'deselect', btnTbFork: 'fork', btnFork: 'fork', btnTbBridge: 'bridge', btnBridge: 'bridge',
   btnCtrlMore: 'plus', btnCtrlLess: 'minus', btnCtrlReset: 'reset', btnDice: 'dice', btnTreeDice: 'dice', btnDockAll: 'anchor',
   btnSkyLoad: 'cloud', btnSkyReset: 'reset', btnPaintTool: 'brush', btnPaintClear: 'trash', btnSculptTool: 'sculpt', btnSculptClear: 'trash',
-  btnLine: 'line', btnLineChord: 'line', btnLineX: 'axisX', btnLineY: 'axisY', btnLineAngle: 'angle',
+  btnSmooth: 'smooth', btnLine: 'line', btnLineChord: 'line', btnLineX: 'axisX', btnLineY: 'axisY', btnLineAngle: 'angle',
   btnHillTool: 'mountain', btnHillClear: 'trash', btnHillDelete: 'trash', btnHillDeselect: 'deselect',
   btnRef3d: 'box', btnRef3dTop: 'box', btnRef3dCenter: 'target', btnRef3dReset: 'reset', btnRef3dSelect: 'cursor', btnRef3dRemove: 'trash',
   btnAssetLoad: 'upload', btnDecoNew: 'plus', btnExportJSON: 'code', btnExportOBJ: 'box', btnExportBlender: 'download', btnExportMax: 'download',

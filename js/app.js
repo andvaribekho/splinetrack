@@ -2,7 +2,7 @@
 import { buildLayout, DEFAULT_GEOM, deriveControlPoints, respaceControlPoints } from './build.js';
 import { computeElevation, DEFAULT_ELEV } from './elevation.js';
 import { exportBlender, exportMax, exportJSON, exportOBJ, DEFAULT_EXPORT, routeSamples, bezierKnots, bezierError, edgeSamples } from './export.js';
-import { nearestOnSamples, evalAt, resampleUniform } from './geometry.js';
+import { nearestOnSamples, evalAt, resampleUniform, taubinSmooth, catmullRom } from './geometry.js';
 import { SAMPLES, rasterizeLayout } from './samples.js';
 import { Editor2D } from './editor2d.js';
 import { ProfileView } from './profile.js';
@@ -2079,6 +2079,98 @@ function addLineGuards(R, W) {
   state.selSet = { key: R.key, idxs };
   if (state.sel && state.sel.key === R.key) state.sel = { key: R.key, idx: map.get(state.sel.idx) };
 }
+// ---------- suavizar tramo ----------
+/** Base del suavizado: la forma original de la selección (se reutiliza mientras no cambien la selección ni los puntos). */
+let smoothBase = null;
+function smoothRun() {
+  const sel = state.selSet;
+  if (!sel || sel.idxs.size < 3) return null;
+  const arr = ctrlArray(sel.key);
+  const run = arr && contiguousRun(sel.key);
+  if (!run || run.length !== sel.idxs.size) return null;
+  return { key: sel.key, arr, idxs: run };
+}
+function captureSmoothBase() {
+  const R = smoothRun();
+  if (!R) return null;
+  const cp = app.ctrlPoints().filter((q) => q.key === R.key);
+  const za = zArray(R.key) || [];
+  return {
+    key: R.key, idxs: R.idxs, sig: selSig(), n: R.arr.length,
+    pts: R.idxs.map((i) => [R.arr[i][0], R.arr[i][1]]),
+    zs: R.idxs.map((i) => { const c = cp.find((q) => q.idx === i); return c ? (c.pin !== null ? c.pin : c.z) : 0; }),
+    pinned: R.idxs.map((i) => za[i] !== null && za[i] !== undefined),
+    last: null,
+  };
+}
+function smoothBaseValid() {
+  const B = smoothBase;
+  if (!B || B.sig !== selSig()) return false;
+  const arr = ctrlArray(B.key);
+  if (!arr || arr.length !== B.n) return false;
+  const cur = B.idxs.map((i) => arr[i]);
+  const ref = B.last || B.pts;
+  return cur.every((q, k) => q && Math.abs(q[0] - ref[k][0]) < 1e-6 && Math.abs(q[1] - ref[k][1]) < 1e-6);
+}
+/** Suaviza una secuencia (los extremos quedan fijos). t en 0..1: Taubin (no encoge las curvas), con mezcla continua entre pasadas. */
+function smoothSeq(pts, t) {
+  if (pts.length < 3 || t <= 0) return pts.map((p) => p.slice());
+  const it = t * t * 60, n0 = Math.floor(it), f = it - n0;
+  let a = pts.map((p) => p.slice());
+  for (let i = 0; i < n0; i++) a = taubinSmooth(a, 1, false);
+  if (f <= 1e-6) return a;
+  const b = taubinSmooth(a, 1, false);
+  return a.map((p, k) => p.map((v, c) => v + (b[k][c] - v) * f));
+}
+/** Reparte n puntos a distancias parejas a lo largo del spline que pasa por pts (conserva el primero y el último). */
+function evenSpacing(pts) {
+  const n = pts.length;
+  if (n < 3) return pts.map((p) => p.slice());
+  const d = catmullRom(pts, false, 16);
+  const cum = [0];
+  for (let i = 1; i < d.length; i++) cum.push(cum[i - 1] + Math.hypot(d[i][0] - d[i - 1][0], d[i][1] - d[i - 1][1]));
+  const Lt = cum[cum.length - 1], out = [pts[0].slice()];
+  let j = 0;
+  for (let k = 1; k < n - 1; k++) {
+    const sv = (Lt * k) / (n - 1);
+    while (j < cum.length - 2 && cum[j + 1] < sv) j++;
+    const seg = cum[j + 1] - cum[j], u = seg > 0 ? (sv - cum[j]) / seg : 0;
+    out.push([d[j][0] + (d[j + 1][0] - d[j][0]) * u, d[j][1] + (d[j + 1][1] - d[j][1]) * u]);
+  }
+  out.push(pts[n - 1].slice());
+  return out;
+}
+/** Aplica el suavizado (0..1) a la selección desde su forma original; newGesture = empieza un paso de deshacer. */
+function smoothSelection(t, newGesture = true) {
+  if (!smoothBaseValid()) smoothBase = captureSmoothBase();
+  const B = smoothBase;
+  if (!B) { toast('Selecciona 3 o más puntos seguidos (Shift + clic o caja) para suavizar el tramo.'); return false; }
+  if (newGesture) pushUndo();
+  const arr = ctrlArray(B.key);
+  let P = smoothSeq(B.pts, t);
+  if ($('smoothEven').checked) P = evenSpacing(P); // después de suavizar: quedan parejos sobre la curva ya suave
+  B.idxs.forEach((i, k) => { arr[i] = [+P[k][0].toFixed(4), +P[k][1].toFixed(4), ...arr[i].slice(2)]; });
+  B.last = P.map((p) => [+p[0].toFixed(4), +p[1].toFixed(4)]);
+  const za = zArray(B.key);
+  if (za) {
+    const zs = $('smoothZ').checked ? smoothSeq(B.zs.map((z) => [z]), t).map((q) => q[0]) : B.zs;
+    B.idxs.forEach((i, k) => {
+      if (!B.pinned[k]) return;
+      const cur = za[i];
+      za[i] = cur && typeof cur === 'object' ? { ...cur, z: +zs[k].toFixed(3) } : +zs[k].toFixed(3);
+    });
+  }
+  scheduleBuild();
+  return true;
+}
+function refreshSmoothInfo() {
+  const el = document.getElementById('smoothInfo');
+  if (!el) return;
+  const R = smoothRun();
+  el.textContent = R ? `${R.idxs.length} puntos · extremos fijos` : 'selecciona 3 o más puntos seguidos';
+  $('smoothAmt').disabled = !R;
+  if (smoothBase && smoothBase.sig !== selSig()) { smoothBase = null; $('smoothAmt').value = 0; $('smoothAmtVal').textContent = '0 %'; }
+}
 function refreshLineInfo() {
   const el = document.getElementById('lineInfo');
   if (!el) return;
@@ -2309,6 +2401,7 @@ function refreshArcBox() {
   if (typeof app !== 'undefined' && app.refreshHelixInfo && document.getElementById('helixBox') && !document.getElementById('helixBox').hidden) setTimeout(() => app.refreshHelixInfo(), 0);
   refreshForkBox();
   if (document.getElementById('lineBox') && !document.getElementById('lineBox').hidden) setTimeout(refreshLineInfo, 0);
+  if (document.getElementById('smoothBox') && !document.getElementById('smoothBox').hidden) setTimeout(refreshSmoothInfo, 0);
   const ctl = $('arcControls');
   if (!ctl) return;
   const sel = state.selSet;
@@ -3135,6 +3228,8 @@ function refreshPanels() {
       <div class="abody">
       <label class="check small" style="margin-top:4px"><input type="checkbox" class="awOn"${a.width > 0 ? ' checked' : ''}> Ancho propio</label>
       <div class="field awBox${a.width > 0 ? '' : ' disabled'}"><label>Ancho <span class="val"><input type="number" class="aw" min="2" max="80" step="0.5" style="width:60px" value="${a.width > 0 ? a.width : (state.geom.altWidthSame === false ? state.geom.altWidth : state.geom.width)}"> m</span></label><input type="range" class="awR" min="2" max="40" step="0.5" value="${Math.min(40, a.width > 0 ? a.width : (state.geom.altWidthSame === false ? state.geom.altWidth : state.geom.width))}"></div>
+      <div class="field ajBox${a.legacyJoin ? ' disabled' : ''}" title="Largo de la curva con que el atajo sale de la pista y vuelve a ella (siempre tangente): menos = gira antes, más = curva más abierta"><label>Suavidad del empalme <span class="val ajVal">×${(a.joinSmooth ?? 1).toFixed(2)}</span></label><input type="range" class="aj" min="0.2" max="2" step="0.05" value="${a.joinSmooth ?? 1}"></div>
+      <label class="check small" title="Forma anterior: ignora los puntos del atajo cerca de la pista y arma el empalme con una curva automática (la salida y la llegada se corren)"><input type="checkbox" class="alegacy"${a.legacyJoin ? ' checked' : ''}> Empalme automático (forma antigua)</label>
       <h4 class="mini atexH">Material de la pista</h4>
       ${texRow('track', 'Como la pista')}
       <h4 class="mini adirtH">Camino de tierra</h4>
@@ -3180,6 +3275,12 @@ function refreshPanels() {
     div.querySelector('input.aw').addEventListener('change', (e) => setW(parseFloat(e.target.value), true));
     div.querySelector('input.awR').addEventListener('input', (e) => setW(parseFloat(e.target.value), false));
     div.querySelector('input.awR').addEventListener('change', (e) => setW(parseFloat(e.target.value), true));
+    // empalme con la principal: suavidad (tangente) y forma antigua
+    let ajEdit = false;
+    const aj = div.querySelector('input.aj');
+    aj.addEventListener('input', () => { if (!ajEdit) { pushUndo(); ajEdit = true; } a.joinSmooth = parseFloat(aj.value); div.querySelector('.ajVal').textContent = `×${a.joinSmooth.toFixed(2)}`; scheduleBuild(); });
+    aj.addEventListener('change', () => { ajEdit = false; });
+    div.querySelector('input.alegacy').addEventListener('change', (e) => { pushUndo(); if (e.target.checked) a.legacyJoin = true; else delete a.legacyJoin; scheduleBuild(); });
     // camino de tierra y barrera propios: al primer cambio el atajo copia los valores que tenía y deja de depender de los generales
     let aeEdit = false;
     const setE = (k, v, done) => {
@@ -3441,6 +3542,23 @@ function bindControls() {
     $(id + 'File').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) loadTexture(f, key); });
     $(id + 'Remove').addEventListener('click', () => { state[key] = null; syncSceneControls(); sceneChanged(); });
   }
+  // suavizar tramo: barra en vivo desde la forma original de la selección (cada gesto es un paso de deshacer)
+  $('btnSmooth').addEventListener('click', () => {
+    const box = $('smoothBox');
+    if (state.tool !== 'edit') setTool('edit');
+    box.hidden = !box.hidden;
+    $('btnSmooth').classList.toggle('active', !box.hidden);
+    if (!box.hidden && !smoothRun()) toast('Suavizar: selecciona 3 o más puntos seguidos (Shift + clic o caja) y mueve la barra.');
+    refreshSmoothInfo();
+  });
+  let smGesture = false;
+  $('smoothAmt').addEventListener('input', () => {
+    $('smoothAmtVal').textContent = `${$('smoothAmt').value} %`;
+    if (smoothSelection(parseFloat($('smoothAmt').value) / 100, !smGesture)) smGesture = true;
+  });
+  $('smoothAmt').addEventListener('change', () => { smGesture = false; });
+  for (const id of ['smoothZ', 'smoothEven']) $(id).addEventListener('change', () => { if (smoothRun()) smoothSelection(parseFloat($('smoothAmt').value) / 100, true); });
+  app.smoothSelection = smoothSelection;
   // recta: el botón alinea al tiro la selección entre sus extremos y muestra las opciones (eje X, eje Y, ángulo)
   $('btnLine').addEventListener('click', () => {
     const box = $('lineBox');
@@ -3491,6 +3609,7 @@ function bindControls() {
   app.loadFeatureParams = loadFeatureParams;
   // aplanar (en la barra del perfil): una sola vez, los puntos siguen editables
   $('btnFlatten').addEventListener('click', () => { app.flattenSelected(); });
+  $('btnProfileFit').addEventListener('click', () => profile.resetView());
   // rizo: el botón de la barra muestra sus parámetros; «Añadir rizo» lo crea en los puntos seleccionados
   $('btnLoop').addEventListener('click', () => {
     const box = $('loopBox');

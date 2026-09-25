@@ -246,7 +246,9 @@ export function buildLayout(project, gpIn = {}) {
 
 function buildAlt(alt, ai, main, gp, tw, scale, ds, warnings) {
   const altCtrl = Array.isArray(alt.ctrl) && alt.ctrl.length >= 2;
-  const pts = dedupe(altCtrl ? alt.ctrl : alt.pts, 1e-6, false);
+  // sin puntos de control todavía: se derivan igual que al entrar a «Editar puntos», así la forma no cambia después
+  const src = altCtrl ? alt.ctrl : alt.legacyJoin ? alt.pts : deriveControlPoints(alt.pts, false, Math.max(gp.detail, gp.lapLength / 50) / scale, gp.sketchSmooth);
+  const pts = dedupe(src, 1e-6, false);
   if (pts.length < 2) return null;
   let w = withWidth(pts, gp, scale).map((p) => [...tw.toWorld(p[0], p[1]), p[2]]);
   // ancho propio del atajo (por atajo > general de atajos > el de la pista); en los empalmes se hace una transición
@@ -254,6 +256,8 @@ function buildAlt(alt, ai, main, gp, tw, scale, ds, warnings) {
   if (own) w = w.map((p) => [p[0], p[1], own]);
   else if (!gp.useImageWidth) w = w.map((p) => [p[0], p[1], gp.width]);
   const name = alt.name || `atajo_${String(ai + 1).padStart(2, '0')}`;
+  // con puntos de control editables el atajo pasa por todos sus puntos (salvo que se pida el empalme automático antiguo)
+  if (!alt.legacyJoin && w.length >= 2) return buildAltCtrl(alt, ai, main, gp, w, own, name, ds, warnings);
   const P = (sv) => { const e = evalAt(main, main.closed ? sv : clamp(sv, 0, main.L)); return [e.x, e.y, e.w]; };
   // Tramo "propio" del atajo: puntos separados de la ruta principal más de 1,5 anchos.
   const dMain = w.map((p) => nearestOnSamples(main, p[0], p[1]).d);
@@ -352,6 +356,93 @@ function buildAlt(alt, ai, main, gp, tw, scale, ds, warnings) {
   r.forkS = forkS;
   r.mergeS = mergeS;
   r.forkU = eIn.u; // desplazamiento lateral del eje del atajo respecto del eje de la principal (+ = izquierda)
+  r.mergeU = eOut.u;
+  return r;
+}
+
+/**
+ * Atajo con puntos de control: el trazado pasa por todos sus puntos (Catmull-Rom centrípeto, como la principal). El
+ * primer y el último punto se pegan a la principal (su proyección es la salida y la llegada) y el primer y el último
+ * tramo son curvas de Hermite que salen y entran tangentes a la principal, con la tangente del spline en el punto
+ * siguiente (sin quiebre). alt.joinSmooth (0.2–2, por defecto 1) = largo de la tangente en el empalme.
+ */
+function buildAltCtrl(alt, ai, main, gp, wIn, own, name, ds, warnings) {
+  let w = wIn;
+  const n = w.length;
+  let endA = nearestOnSamples(main, w[0][0], w[0][1]);
+  let endB = nearestOnSamples(main, w[n - 1][0], w[n - 1][1]);
+  const snapTol = gp.width * 3;
+  if (endA.d > snapTol || endB.d > snapTol) {
+    warnings.push({ level: 'warn', msg: `${name}: sus extremos están lejos de la ruta principal (${Math.max(endA.d, endB.d).toFixed(0)} m). Se pegaron a la pista igual.` });
+  }
+  // sentido: el atajo sale y vuelve en el sentido de marcha de la principal
+  const i1 = Math.min(1, n - 1), i2 = Math.max(0, n - 2);
+  const tA0 = evalTangent(main, endA.s), tB0 = evalTangent(main, endB.s);
+  const scoreFwd = ((w[i1][0] - endA.x) * tA0[0] + (w[i1][1] - endA.y) * tA0[1]) + ((endB.x - w[i2][0]) * tB0[0] + (endB.y - w[i2][1]) * tB0[1]);
+  const scoreRev = ((w[i2][0] - endB.x) * tB0[0] + (w[i2][1] - endB.y) * tB0[1]) + ((endA.x - w[i1][0]) * tA0[0] + (endA.y - w[i1][1]) * tA0[1]);
+  let forward;
+  if (Math.abs(scoreFwd - scoreRev) > gp.width * 0.8) forward = scoreFwd >= scoreRev;
+  else {
+    const skipFwd = main.closed ? (((endB.s - endA.s) % main.L) + main.L) % main.L : endB.s - endA.s;
+    const skipRev = main.closed ? main.L - skipFwd : -skipFwd;
+    forward = skipFwd >= 0 && (skipRev < 0 || skipFwd <= skipRev);
+  }
+  if (alt.flip) forward = !forward;
+  if (!forward) { w = w.slice().reverse(); [endA, endB] = [endB, endA]; }
+  const forkS = endA.s, mergeS = endB.s;
+  const aw = own || (gp.useImageWidth ? w[Math.min(1, n - 1)][2] : gp.width);
+  const inherit = !!gp.altInheritWidth;
+  const edgePoint = (sv, toward) => {
+    const e = evalAt(main, sv);
+    const tx = main.tx[e.i], ty = main.ty[e.i];
+    const lx = -ty, ly = tx;
+    const side = Math.sign((toward[0] - e.x) * lx + (toward[1] - e.y) * ly) || 1;
+    const wEnd = inherit ? e.w : aw;
+    const u = gp.altFromCenter === false ? side * (e.w / 2 + wEnd / 2) : 0;
+    return { p: [e.x + lx * u, e.y + ly * u, wEnd], u };
+  };
+  const inner = w.slice(1, n - 1).map((q) => [q[0], q[1], q[2]]);
+  const eIn = edgePoint(forkS, inner.length ? inner[0] : w[n - 1]), eOut = edgePoint(mergeS, inner.length ? inner[inner.length - 1] : w[0]);
+  const pIn = eIn.p, pOut = eOut.p;
+  const tA = evalTangent(main, forkS), tB = evalTangent(main, mergeS);
+  const k = clamp(alt.joinSmooth ?? 1, 0.2, 2);
+  const hermite = (P0, T0, P1, T1, k0, k1) => {
+    const L = Math.hypot(P1[0] - P0[0], P1[1] - P0[1]);
+    const n0 = Math.hypot(T0[0], T0[1]) || 1, n1 = Math.hypot(T1[0], T1[1]) || 1;
+    const m0 = [(T0[0] / n0) * L * k0, (T0[1] / n0) * L * k0], m1 = [(T1[0] / n1) * L * k1, (T1[1] / n1) * L * k1];
+    const steps = Math.max(2, Math.ceil(L / (ds * 0.5)));
+    const out = [];
+    for (let j = 0; j <= steps; j++) {
+      const t = j / steps, t2 = t * t, t3 = t2 * t;
+      const h00 = 2 * t3 - 3 * t2 + 1, h10 = t3 - 2 * t2 + t, h01 = -2 * t3 + 3 * t2, h11 = t3 - t2;
+      out.push([h00 * P0[0] + h10 * m0[0] + h01 * P1[0] + h11 * m1[0], h00 * P0[1] + h10 * m0[1] + h01 * P1[1] + h11 * m1[1], P0[2] + (P1[2] - P0[2]) * t]);
+    }
+    return out;
+  };
+  let all;
+  if (!inner.length) all = hermite(pIn, tA, pOut, tB, k, k);
+  else if (inner.length === 1) {
+    const P1 = inner[0], T1 = [pOut[0] - pIn[0], pOut[1] - pIn[1]];
+    all = [...hermite(pIn, tA, P1, T1, k, 1), ...hermite(P1, T1, pOut, tB, 1, k).slice(1)];
+  } else {
+    // spline por todos los puntos (con los extremos pegados), sin el primer ni el último tramo
+    const SP = 12, ctl = [pIn, ...inner, pOut];
+    const dense = catmullRom(ctl, false, SP);
+    const segs = ctl.length - 1;
+    const mid = dense.slice(SP, SP * (segs - 1) + 1); // de inner[0] a inner[last]
+    const T1 = [mid[1][0] - mid[0][0], mid[1][1] - mid[0][1]];
+    const Tn = [mid[mid.length - 1][0] - mid[mid.length - 2][0], mid[mid.length - 1][1] - mid[mid.length - 2][1]];
+    all = [...hermite(pIn, tA, inner[0], T1, k, 1), ...mid.slice(1), ...hermite(inner[inner.length - 1], Tn, pOut, tB, 1, k).slice(1)];
+  }
+  const uni = resampleUniform(dedupe(all, 1e-6, false), ds, false);
+  if (uni.length < 2) return null;
+  const r = makeSampledRoute(uni, false, ds);
+  r.kind = 'alt';
+  r.altIndex = ai;
+  r.name = name;
+  r.forkS = forkS;
+  r.mergeS = mergeS;
+  r.forkU = eIn.u;
   r.mergeU = eOut.u;
   return r;
 }

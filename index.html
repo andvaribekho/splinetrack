@@ -601,6 +601,7 @@
           <button id="btnCut" title="Sección socavada: los puntos seleccionados socavan el terreno (zanja con paredes) en vez de deformarlo">Sección socavada</button>
           <button id="btnHelix" title="Helix: la pista da giros alrededor de un centro, subiendo (o bajando) en cada giro, en los puntos seleccionados">Helix</button>
           <button id="btnLoop" title="Rizo: la pista da una o más vueltas sobre sí misma en los puntos seleccionados y se cruza por arriba">Rizo</button>
+          <button id="btnSmooth" title="Suavizar tramo: selecciona 3 o más puntos seguidos y mueve la barra para quitar el temblor del trazo (los extremos no se mueven)">Suavizar</button>
           <button id="btnLine" title="Recta: alinea los puntos seleccionados (2 o más) en una línea recta en planta (X Y). Las alturas no cambian: siguen el perfil de elevación">Recta</button>
           <button data-tool="start" title="Clic sobre la pista para fijar la meta">Meta</button>
           <button data-tool="ref" title="Mover y escalar la imagen de referencia (arrastra la imagen o su esquina)">Referencia</button>
@@ -657,6 +658,13 @@
             <span class="small edit-live" id="helixEditing" hidden>editando el helix seleccionado (en vivo)</span>
             <button id="btnHelixAdd" class="primary" title="Añade el helix en los puntos seleccionados (el resto de la pista no se mueve)">Añadir helix</button>
             <span class="small muted" id="helixInfo"></span>
+          </span>
+          <span id="smoothBox" class="row" hidden>
+            <span class="small muted">Suavizar tramo:</span>
+            <label class="small" title="Cuánto se suaviza el tramo seleccionado (0 = como estaba). Se calcula siempre desde la forma original de la selección: puedes ir y volver">Suavizado <input type="range" id="smoothAmt" min="0" max="100" step="1" value="0" style="width:150px"> <span class="val" id="smoothAmtVal">0 %</span></label>
+            <label class="check small" title="Suaviza también las alturas fijadas (puntos naranjas) del tramo"><input type="checkbox" id="smoothZ"> También alturas</label>
+            <label class="check small" title="Reparte los puntos del tramo a distancias parejas a lo largo de la curva (mucho del temblor viene de puntos disparejos)"><input type="checkbox" id="smoothEven"> Repartir puntos parejo</label>
+            <span class="small muted" id="smoothInfo"></span>
           </span>
           <span id="lineBox" class="row" hidden>
             <span class="small muted">Alinear selección en recta:</span>
@@ -750,6 +758,7 @@
       <div class="view viewProfile">
         <div class="toolbar">
           <span class="label">Perfil de elevación z(s)</span>
+          <button id="btnProfileFit" title="Encuadra el perfil: vuelve a ver toda la pista y todos los puntos. En el gráfico: rueda = zoom horizontal, Shift + rueda = zoom vertical, botón medio = desplazar">Encuadrar</button>
           <button id="btnFlatten" title="Aplana los puntos seleccionados (Editar puntos) a su elevación promedio: plano estricto entre el primero y el último. Es una sola vez: después puedes volver a editarlos">Aplanar</button>
           <button data-tool="profile" id="btnProfileTool" title="Elige un tramo (arrastrando sobre la pista en el mapa, o con Shift en el gráfico de perfil) y dibuja en el gráfico de perfil cómo varía su elevación: sus puntos quedan a esa altura (se pueden seguir editando)">Perfil de tramo</button>
           <label class="check small"><input type="checkbox" id="pinLocal" checked> Editar solo este punto</label>

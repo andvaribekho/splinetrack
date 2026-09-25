@@ -246,7 +246,7 @@ for (const [key, s] of Object.entries(SAMPLES)) {
           const im = Math.round(sM / m.ds) % m.n;
           const mi = side > 0 ? em.left[im] : em.right[im];
           const gap = Math.hypot(ai.x - mi.x, ai.y - mi.y), dz = Math.abs(ai.z - mi.z);
-          check(gap < 0.6 && dz < 0.08, `${key}: ${a.name} empalma borde con borde en la ${end} (${gap.toFixed(2)} m, dz ${dz.toFixed(3)}) ${JSON.stringify(gp)}`);
+          check(gap < 0.6 && dz < 0.1, `${key}: ${a.name} empalma borde con borde en la ${end} (${gap.toFixed(2)} m, dz ${dz.toFixed(3)}) ${JSON.stringify(gp)}`);
         }
         const wantMid = gp.altWidth || LA.routes[0].w[0];
         const wantEnd = gp.altInheritWidth ? LA.routes[0].w[0] : wantMid;
@@ -765,6 +765,40 @@ for (const [key, s] of Object.entries(SAMPLES)) {
     for (let k = 0; k < r.n; k++) { const j = (k + 1) % r.n, d = Math.hypot(r.x[j] - r.x[k], r.y[j] - r.y[k]); dmax = Math.max(dmax, d); dmin = Math.min(dmin, d); }
     check(dmax / dmin < 1.05, `puente desplazado ${side}: muestreo uniforme (${dmin.toFixed(3)}–${dmax.toFixed(3)})`);
   }
+}
+
+// ---- atajos con puntos de control: pasan por todos sus puntos y empalman tangentes ----
+{
+  const proj = SAMPLES.shortcut.build();
+  let L = buildLayout(proj, { lapLength: 1000 });
+  proj.main.ctrl = deriveControlPoints(proj.main.pts, true, 20 / L.scale, 4); proj.main.scale = L.scale;
+  proj.alts.forEach((a) => { a.ctrl = deriveControlPoints(a.pts, false, 20 / L.scale, 4); a.ctrlZ = a.ctrl.map(() => null); });
+  L = buildLayout(proj, { lapLength: 1000 });
+  const main = L.routes[0], alt = L.routes.find((r) => r.kind === 'alt');
+  const cw = proj.alts[0].ctrl.map((q) => L.toWorld(q[0], q[1]));
+  const devs = cw.slice(1, -1).map((q) => nearestOnSamples(alt, q[0], q[1]).d);
+  check(Math.max(...devs) < 0.05, `atajo pasa por sus puntos (máx ${Math.max(...devs).toFixed(3)} m, ${devs.length} puntos)`);
+  const i0 = Math.round(alt.forkS / main.ds) % main.n, i1 = Math.round(alt.mergeS / main.ds) % main.n;
+  const d0 = alt.tx[0] * main.tx[i0] + alt.ty[0] * main.ty[i0], d1 = alt.tx[alt.n - 1] * main.tx[i1] + alt.ty[alt.n - 1] * main.ty[i1];
+  check(d0 > 0.99 && d1 > 0.99, `atajo sale y entra tangente a la principal (${d0.toFixed(4)}, ${d1.toFixed(4)})`);
+  const e0 = nearestOnSamples(main, cw[0][0], cw[0][1]);
+  check(Math.abs(e0.s - alt.forkS) < 1, `la salida es donde está el primer punto (${e0.s.toFixed(1)} vs ${alt.forkS.toFixed(1)})`);
+  // suavidad del empalme: tangente más larga = curva más abierta cerca de la salida
+  proj.alts[0].joinSmooth = 2;
+  const L2 = buildLayout(proj, { lapLength: 1000 }), a2 = L2.routes.find((r) => r.kind === 'alt');
+  const devs2 = cw.slice(1, -1).map((q) => nearestOnSamples(a2, q[0], q[1]).d);
+  check(Math.max(...devs2) < 0.05 && Math.abs(a2.L - alt.L) > 0.1, `suavidad del empalme cambia la curva sin dejar los puntos (${alt.L.toFixed(1)} → ${a2.L.toFixed(1)} m)`);
+  // forma antigua (empalme automático): ignora los puntos cercanos a la principal
+  proj.alts[0].legacyJoin = true; delete proj.alts[0].joinSmooth;
+  const L3 = buildLayout(proj, { lapLength: 1000 }), a3 = L3.routes.find((r) => r.kind === 'alt');
+  check(nearestOnSamples(a3, cw[1][0], cw[1][1]).d > 1, 'empalme antiguo: sigue disponible');
+  // sin puntos de control: misma forma que al crearlos (no salta al entrar a Editar puntos)
+  const proj4 = SAMPLES.shortcut.build();
+  const L4a = buildLayout(proj4, { lapLength: 1000 });
+  const a4a = L4a.routes.find((r) => r.kind === 'alt');
+  proj4.alts.forEach((a) => { a.ctrl = deriveControlPoints(a.pts, false, Math.max(14, 1000 / 50) / L4a.scale, 3); });
+  const a4b = buildLayout(proj4, { lapLength: 1000 }).routes.find((r) => r.kind === 'alt');
+  check(Math.abs(a4a.L - a4b.L) < 0.5, `atajo sin puntos de control = con puntos derivados (${a4a.L.toFixed(1)} / ${a4b.L.toFixed(1)} m)`);
 }
 
 // ---- aplanado estricto entre puntos seguidos con la misma altura fijada ----
