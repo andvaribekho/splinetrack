@@ -163,12 +163,17 @@ export function computeElevation(layout, epIn = {}, overrides = {}, pinsIn = [])
     const hreq = ov.sep > 0 ? ov.sep : Hreq;
     return { ...c, cpairs: pairs, type, order: ov.order || 'auto', hreq, sepOwn: ov.sep > 0 };
   });
-  // alturas editadas a mano cerca de un cruce: mandan sobre la separación del cruce
+  // alturas editadas a mano cerca de un cruce: conviven con la separación del cruce (que siempre se cumple). Solo
+  // ayudan a decidir qué pasada va arriba cuando el orden es automático (la que quedó más alta al editar)
   {
-    const near = (k, s0, sv, R) => { const r = routes[k]; return Math.abs(r.closed ? arcDelta(r, sv, s0) : sv - s0) < R; };
+    const dist = (k, s0, sv) => { const r = routes[k]; return Math.abs(r.closed ? arcDelta(r, sv, s0) : sv - s0); };
     for (const c of crossings) {
       const R = (c.window || 15) * 1.3 + 5;
-      c.pinned = (pinsIn || []).some((p) => isFinite(p.z) && ((p.route === c.ra && near(c.ra, c.sa, p.s, R)) || (p.route === c.rb && near(c.rb, c.sb, p.s, R))));
+      const nearest = (k, s0) => { let best = null, bd = R; for (const p of pinsIn || []) { if (p.route !== k || !isFinite(p.z)) continue; const d = dist(k, s0, p.s); if (d < bd) { bd = d; best = p; } } return best; };
+      const pa = nearest(c.ra, c.sa), pb = c.ra === c.rb && Math.abs(c.sa - c.sb) < 1e-6 ? null : nearest(c.rb, c.sb);
+      c.pinned = !!(pa || pb);
+      c.pinZa = pa ? pa.z : null;
+      c.pinZb = pb ? pb.z : null;
     }
   }
 
@@ -240,7 +245,6 @@ export function computeElevation(layout, epIn = {}, overrides = {}, pinsIn = [])
   for (let iter = 0; iter < 10; iter++) {
     let worst = 0;
     crossings.forEach((c, ci) => {
-      if (c.pinned) return;
       const d = c.hreq * 1.08 - minSep(c, zObj);
       if (d > 0.01) {
         const sh = SHARE[c.type] ?? 0.5;
@@ -330,7 +334,7 @@ export function computeElevation(layout, epIn = {}, overrides = {}, pinsIn = [])
     c.cpairs.forEach(([i, j], t) => {
       if (t % step !== 0 && t !== c.cpairs.length - 1) return;
       const iu = c.up === 'a' ? i : j, id = c.up === 'a' ? j : i;
-      if (!c.pinned) cons.push({ idx: [offs[upR] + iu, offs[dnR] + id], coef: [1, -1], l: c.hreq, u: null });
+      cons.push({ idx: [offs[upR] + iu, offs[dnR] + id], coef: [1, -1], l: c.hreq, u: null }); // siempre: también con alturas editadas cerca
     });
   });
 
@@ -522,8 +526,9 @@ function chooseOrientation(crossings, routes, grids, zN, Hreq, g) {
   const reach = (Math.PI * Hreq) / (2 * 0.8 * g) * 2 + 60;
   const demand = (c, up) => {
     const [ci, cj] = c.cpairs[Math.floor(c.cpairs.length / 2)];
-    const za = zN[c.ra][ci], zb = zN[c.rb][cj];
-    const deficit = c.pinned ? 0 : up === 'a' ? c.hreq - (za - zb) : c.hreq - (zb - za);
+    // con alturas editadas cerca, cuentan esas alturas (la pasada editada más alta tiende a ir arriba)
+    const za = c.pinZa ?? zN[c.ra][ci], zb = c.pinZb ?? zN[c.rb][cj];
+    const deficit = up === 'a' ? c.hreq - (za - zb) : c.hreq - (zb - za);
     return {
       cost: Math.max(0, deficit),
       marks: [
@@ -618,16 +623,8 @@ function validate(layout, out, crossings, ep, sol, Hreq) {
       const iu = c.up === 'a' ? i : j, id = c.up === 'a' ? j : i;
       m = Math.min(m, out[upR].z[iu] - out[dnR].z[id]);
     }
-    if (c.pinned) {
-      // con alturas editadas a mano, la pasada de arriba es la que quedó arriba (aunque no sea la elegida al principio)
-      let mr = Infinity;
-      for (const [i, j] of src.pairs) { const iu = c.up === 'a' ? i : j, id = c.up === 'a' ? j : i; mr = Math.min(mr, out[dnR].z[id] - out[upR].z[iu]); }
-      if (mr > m) { c.up = c.up === 'a' ? 'b' : 'a'; m = mr; }
-    }
     c.clearance = m;
-    if (c.pinned) {
-      if (m < 0.5) msgs.push({ level: 'warn', route: c.ra, s: c.sa, msg: `Cruce ${ci + 1}: las alturas editadas a mano dejan ${m.toFixed(1)} m de separación (definida por los puntos editados).` });
-    } else if (m < c.hreq - 0.25) {
+    if (m < c.hreq - 0.25) {
       msgs.push({ level: 'error', route: c.ra, s: c.sa, msg: `Cruce ${ci + 1}: separación ${m.toFixed(1)} m < ${c.hreq.toFixed(1)} m requeridos. Sube la pendiente máxima, baja la separación del cruce o aleja los cruces.` });
     }
   });

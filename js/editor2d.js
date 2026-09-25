@@ -1174,7 +1174,7 @@ export class Editor2D {
         const [sx, sy] = this.toScreen(lx, ly);
         const mx = sx + 16, my = sy - 16;
         this.markers.push({ id: c.id, sx: mx, sy: my });
-        const bad = !c.pinned && c.clearance < (c.hreq ?? (E.ep.clearance + E.ep.deck)) - 0.25;
+        const bad = c.clearance < (c.hreq ?? (E.ep.clearance + E.ep.deck)) - 0.25;
         const selC = this.app.state.selCross === c.id;
         ctx.fillStyle = bad ? '#ff6b6b' : c.pinned ? '#c792ea' : c.autoUp ? '#f2a93b' : '#4fb3ff';
         ctx.beginPath(); ctx.arc(mx, my, selC ? 12 : 10, 0, Math.PI * 2); ctx.fill();

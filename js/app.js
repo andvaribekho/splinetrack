@@ -2524,7 +2524,7 @@ function refreshPanels() {
       const A = L.routes[c.ra], B = L.routes[c.rb];
       const o = ov[c.id] || {};
       const req = c.hreq ?? (E.ep.clearance + E.ep.deck);
-      const ok = c.pinned || c.clearance >= req - 0.25;
+      const ok = c.clearance >= req - 0.25;
       const div = document.createElement('div');
       div.className = 'item' + (state.selCross === c.id ? ' sel' : '');
       div.dataset.cross = c.id;
@@ -2545,10 +2545,10 @@ function refreshPanels() {
             <option value="tunnel">Túnel</option>
           </select>
         </div>
-        <div class="field${c.pinned ? ' disabled' : ''}" style="margin-top:6px"><label>Separación entre pistas (altura del puente) <span class="val"><input type="number" data-k="sepN" min="1" max="60" step="0.1" style="width:60px" value="${(+sepV).toFixed(1)}"> m</span></label>
+        <div class="field" style="margin-top:6px"><label>Separación entre pistas (altura del puente) <span class="val"><input type="number" data-k="sepN" min="1" max="60" step="0.1" style="width:60px" value="${(+sepV).toFixed(1)}"> m</span></label>
           <input type="range" data-k="sepR" min="1" max="30" step="0.1" value="${Math.min(30, sepV)}"></div>
         <div class="row gap"><button class="small" data-k="flip">⇅ Invertir arriba/abajo</button>${o.sep > 0 ? '<button class="small" data-k="sepReset">Usar la separación general</button>' : ''}</div>
-        <div class="meta">${c.pinned ? 'La separación la definen los puntos del spline editados a mano cerca del cruce (tienen prioridad).' : o.sep > 0 ? `Separación propia (general: ${(E.ep.clearance + E.ep.deck).toFixed(1)} m).` : 'Usa la separación general (altura libre + tablero).'}</div>`;
+        <div class="meta">${o.sep > 0 ? `Separación propia (general: ${(E.ep.clearance + E.ep.deck).toFixed(1)} m).` : 'Usa la separación general (altura libre + tablero).'}${c.pinned ? ' Hay alturas editadas a mano cerca: se respetan lo más posible, pero la separación siempre se cumple.' : ''}</div>`;
       const so = div.querySelector('[data-k=order]'), stp = div.querySelector('[data-k=type]');
       const sN = div.querySelector('[data-k=sepN]'), sR = div.querySelector('[data-k=sepR]');
       let sepTimer = null;
