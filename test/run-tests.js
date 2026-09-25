@@ -5,10 +5,11 @@ import { computeElevation } from '../js/elevation.js';
 import { traceImage } from '../js/trace.js';
 import { exportBlender, exportMax, exportJSON, exportOBJ, routeSamples, bezierKnots, bezierError } from '../js/export.js';
 import { rasterize } from './raster.js';
-import { buildTerrain, buildTrees, buildTrackMesh, trackRows, buildHills, buildStartGate, buildGrass, makeGround } from '../js/scene.js';
+import { buildTerrain, buildTrees, buildTrackMesh, trackRows, buildDecoInstances, coveredRanges, isCovered, buildHills, buildStartGate, buildGrass, makeGround } from '../js/scene.js';
 import { edgeSamples } from '../js/export.js';
 import { computeItems, defaultGroup, itemAt } from '../js/items.js';
 import { nearestOnSamples } from '../js/geometry.js';
+import { buildEdgeMeshes } from '../js/edges.js';
 
 let fails = 0, passes = 0;
 const check = (cond, msg) => { if (cond) passes++; else { fails++; console.log('  FALLA:', msg); } };
@@ -122,6 +123,61 @@ for (const [key, s] of Object.entries(SAMPLES)) {
         const H2 = buildHills(L, E, { ...sp0, tunnelOpen: 'left', tunnelOverrides: [{ k: t0.k, s: (t0.s0 + t0.s1) / 2, open: 'none' }] }, T, hills);
         const g2 = H2.tunnelGeo.find((g) => g.id === t0.id);
         check(g2 && g2.openMode === 'none' && g2.pillars.length === 0 && H2.tunnelGeo.filter((g) => g.id !== t0.id).every((g) => g.openMode === 'left'), `${key}: un túnel cerrado con el general abierto`);
+      }
+    }
+    // lado abierto: no queda cerro en el piso entre los pilares; forma, tipo y geometría propios por túnel
+    {
+      const sp0 = { terrain: true, terrainDensity: 45, terrainMaxPolys: 80000, tunnelOpen: 'left', tunnelPillars: 8 };
+      const T = buildTerrain(L, E, sp0);
+      const H = buildHills(L, E, sp0, T, hills);
+      let bad = 0, checked = 0;
+      for (const t of H.tunnels) {
+        const r = L.routes[t.k], e = E.routes[t.k];
+        for (let sv = t.s0 + 3; sv < t.s1 - 3; sv += 2) {
+          const i = Math.round(sv / r.ds) % r.n, lx = -r.ty[i], ly = r.tx[i];
+          for (let u = r.w[i] / 2 + 1.5; u < r.w[i] / 2 + 14; u += 1) {
+            const x = r.x[i] + lx * u, y = r.y[i] + ly * u;
+            checked++;
+            if (H.sample(x, y) > T.sample(x, y) + 0.1 && H.sample(x, y) < e.z[i] + 2) bad++; // cerro visible sobre el suelo, a la altura del piso
+          }
+        }
+      }
+      check(checked > 0 && bad <= checked * 0.005, `${key}: sin cerro en el piso del lado abierto (${bad}/${checked})`); // (antes: ~5 %)
+      if (H.tunnels.length) {
+        const t0 = H.tunnels[0];
+        const ovs = [{ k: t0.k, s: (t0.s0 + t0.s1) / 2, shape: 'circle', type: 'natural', density: 90, meshMode: 'optimized', adapt: 1 }];
+        const H1 = buildHills(L, E, { ...sp0, tunnelShape: 'square', tunnelType: 'artificial', tunnelDensity: 30, tunnelOverrides: ovs }, T, hills);
+        const g1 = H1.tunnelGeo.find((g) => g.id === t0.id), g2 = H1.tunnelGeo.find((g) => g.id !== t0.id);
+        check(g1 && g1.shape === 'circle' && g1.natural && g1.meshMode === 'optimized' && g1.density === 90, `${key}: túnel con forma, tipo y geometría propios`);
+        if (g2) check(g2.shape === 'square' && !g2.natural && g2.meshMode === 'uniform', `${key}: los otros túneles siguen lo general`);
+        const H2 = buildHills(L, E, { ...sp0, tunnelOverrides: [{ ...ovs[0], maxTris: 1200 }] }, T, hills);
+        const g3 = H2.tunnelGeo.find((g) => g.id === t0.id);
+        check(g3 && (g3.walls.indices.length + g3.ceiling.indices.length + g3.walkways.indices.length) / 3 <= 1200 * 1.05, `${key}: tope de triángulos por túnel (${g3 && (g3.walls.indices.length + g3.ceiling.indices.length + g3.walkways.indices.length) / 3})`);
+      }
+    }
+    // túnel con camino de tierra y barrera: la pared queda después de la barrera y el piso del túnel empieza tras ella
+    {
+      const spE = { terrain: true, terrainDensity: 45, terrainMaxPolys: 80000, tunnelWidth: 16, dirtSide: 'both', dirtWidth: 3, barrierSide: 'both', barrierThick: 0.3 };
+      const T = buildTerrain(L, E, spE);
+      const H = buildHills(L, E, spE, T, hills);
+      const g = H.tunnelGeo[0];
+      if (g) {
+        const t = H.tunnels.find((q) => q.id === g.id), r = L.routes[t.k];
+        const i = Math.round(((t.s0 + t.s1) / 2) / r.ds) % r.n, hw = r.w[i] / 2, ext = 3 + 0.3 + 0.15;
+        const lat = (x, y) => Math.abs((x - r.x[i]) * -r.ty[i] + (y - r.y[i]) * r.tx[i]);
+        const along = (x, y) => Math.abs((x - r.x[i]) * r.tx[i] + (y - r.y[i]) * r.ty[i]);
+        let wMin = Infinity, fMin = Infinity;
+        const P = g.walls.positions, F = g.walkways.positions;
+        const z0 = E.routes[t.k].z[i];
+        for (let v = 0; v < P.length / 3; v++) if (along(P[v * 3], P[v * 3 + 1]) < 1.5 && P[v * 3 + 2] - z0 < 1.2) wMin = Math.min(wMin, lat(P[v * 3], P[v * 3 + 1])); // a la altura de la barrera
+        for (let v = 0; v < F.length / 3; v++) if (along(F[v * 3], F[v * 3 + 1]) < 1.5) fMin = Math.min(fMin, lat(F[v * 3], F[v * 3 + 1]));
+        check(wMin >= hw + ext - 0.05, `${key}: pared del túnel después de la barrera (${wMin.toFixed(2)} ≥ ${(hw + ext).toFixed(2)})`);
+        check(Math.abs(fMin - (hw + ext)) < 0.35, `${key}: piso del túnel desde la barrera (${fMin.toFixed(2)} vs ${(hw + ext).toFixed(2)})`);
+        const B = buildEdgeMeshes(L, E, spE);
+        const bm = B.barriers.find((b) => b.k === t.k);
+        let inTun = 0;
+        for (let v = 0; v < bm.positions.length / 3; v += 6) if (along(bm.positions[v * 3], bm.positions[v * 3 + 1]) < 1.5 && lat(bm.positions[v * 3], bm.positions[v * 3 + 1]) < hw + 4) inTun++;
+        check(inTun > 0, `${key}: la barrera sigue dentro del túnel`);
       }
     }
     // densidad por cerro: bajar el máximo de triángulos reduce la malla
@@ -242,6 +298,181 @@ for (const [key, s] of Object.entries(SAMPLES)) {
     const kn = bezierKnots(pts, L.routes[k].closed, 10, L.routes[k].k);
     check(bezierError(pts, kn, L.routes[k].closed) < 0.25, `${key}: error Bézier ruta ${k}`);
   }
+}
+
+// relieve esculpido: parte de la malla del terreno, eleva / hunde lejos de la pista y nunca la tapa
+{
+  const L = buildLayout(SAMPLES.oval.build(), { lapLength: 1000 });
+  const E = computeElevation(L, { hills: 0.5 });
+  const r = L.routes[0];
+  let cx = 0, cy = 0; for (let i = 0; i < r.n; i++) { cx += r.x[i]; cy += r.y[i]; } cx /= r.n; cy /= r.n;
+  const sp = { terrain: true, terrainDensity: 40 };
+  const T0 = buildTerrain(L, E, sp);
+  // un toque grande que eleva justo sobre un tramo de pista y otro que hunde en el centro
+  const i0 = Math.round(r.n * 0.25);
+  const sculpt = [{ x: cx, y: cy, r: 50, h: -10 }, { x: r.x[i0], y: r.y[i0], r: 60, h: 25 }, { x: cx + 1, y: cy, r: 40, h: 0 }];
+  const T1 = buildTerrain(L, E, sp, { density: null, sculpt });
+  check(T1.sculpted && T1.sample(cx, cy) < T0.sample(cx, cy) - 8, `relieve: hunde el centro (${T0.sample(cx, cy).toFixed(1)} -> ${T1.sample(cx, cy).toFixed(1)})`);
+  const nx = -r.ty[i0], ny = r.tx[i0], off = r.w[i0] / 2 + 30;
+  const fx = r.x[i0] + nx * off, fy = r.y[i0] + ny * off;
+  check(T1.sample(fx, fy) > T0.sample(fx, fy) + 5, `relieve: eleva junto a la pista, lejos del borde (${T0.sample(fx, fy).toFixed(1)} -> ${T1.sample(fx, fy).toFixed(1)})`);
+  let worst = -Infinity;
+  const { left, right } = edgeSamples(L, E, 0);
+  for (let i = 0; i < r.n; i++) for (const q of [{ x: r.x[i], y: r.y[i], z: E.routes[0].z[i] }, left[i], right[i]]) worst = Math.max(worst, T1.sample(q.x, q.y) - q.z);
+  check(worst <= -0.29, `relieve: el terreno esculpido no tapa la pista (${worst.toFixed(3)})`);
+  check(T1.tris > T0.tris, `relieve: lo esculpido recibe más detalle (${T0.tris} -> ${T1.tris})`);
+  const T2 = buildTerrain(L, E, { ...sp, sculptDetail: false }, { density: null, sculpt });
+  check(T2.tris === T0.tris, 'relieve: sin «más detalle» la malla conserva su densidad');
+}
+
+// tipos de terreno: playa (costa hacia el agua) y montaña (acantilado y pared de roca)
+{
+  const L = buildLayout(SAMPLES.oval.build(), { lapLength: 1000 });
+  const E = computeElevation(L, { hills: 0.5 });
+  const r = L.routes[0];
+  const i0 = Math.round(r.n * 0.3), lx = -r.ty[i0], ly = r.tx[i0], hw = r.w[i0] / 2, z0 = E.routes[0].z[i0];
+  const at = (T, u) => T.sample(r.x[i0] + lx * u, r.y[i0] + ly * u);
+  const road = (T) => { let w = -Infinity; const { left, right } = edgeSamples(L, E, 0); for (let i = 0; i < r.n; i++) for (const q of [{ x: r.x[i], y: r.y[i], z: E.routes[0].z[i] }, left[i], right[i]]) w = Math.max(w, T.sample(q.x, q.y) - q.z); return w; };
+  const beach = buildTerrain(L, E, { terrain: true, terrainDensity: 40, terrainType: 'beach', coastSide: 'right', coastLand: 20, coastBeach: 25, coastHeight: 3 });
+  check(beach.waterLevel != null && beach.colors && beach.colors.length === beach.positions.length, `terreno playa: nivel del agua (${beach.waterLevel && beach.waterLevel.toFixed(1)}) y colores`);
+  check(at(beach, -(hw + 5)) > beach.waterLevel + 1 && at(beach, -(hw + 120)) < beach.waterLevel - 1, `terreno playa: tierra junto a la pista y agua lejos a la derecha (${at(beach, -(hw + 5)).toFixed(1)} / ${at(beach, -(hw + 120)).toFixed(1)})`);
+  check(at(beach, hw + 60) > beach.waterLevel + 1, `terreno playa: bosque a la izquierda (${at(beach, hw + 60).toFixed(1)})`);
+  check(road(beach) <= -0.29, `terreno playa: no tapa la pista (${road(beach).toFixed(3)})`);
+  const both = buildTerrain(L, E, { terrain: true, terrainDensity: 40, terrainType: 'beach', coastSide: 'both', coastLand: 20, coastBeach: 25 });
+  check(at(both, hw + 120) < both.waterLevel - 1 && at(both, -(hw + 120)) < both.waterLevel - 1, 'terreno playa: costa a ambos lados');
+  const mt = buildTerrain(L, E, { terrain: true, terrainDensity: 40, terrainType: 'mountain', cliffSide: 'left', coastLand: 15, cliffHeight: 30, wallHeight: 25 });
+  check(mt.waterLevel < z0 - 20 && at(mt, hw + 80) < mt.waterLevel, `terreno montaña: acantilado a la izquierda hasta el agua (${at(mt, hw + 80).toFixed(1)}, agua ${mt.waterLevel.toFixed(1)})`);
+  check(at(mt, -(hw + 25)) > z0 + 15, `terreno montaña: pared de roca a la derecha (${at(mt, -(hw + 25)).toFixed(1)} sobre ${z0.toFixed(1)})`);
+  // corte abrupto: la caída ocurre en pocos metros
+  let drop = null;
+  for (let u = hw + 2; u < hw + 70; u += 0.5) { const a = at(mt, u), b = at(mt, u + 6); if (a - b > 15) { drop = u; break; } }
+  check(drop != null, `terreno montaña: el acantilado cae más de 15 m en 6 m (${drop != null ? (drop - hw).toFixed(1) + ' m desde el borde' : 'no'})`);
+  check(road(mt) <= -0.29, `terreno montaña: no tapa la pista (${road(mt).toFixed(3)})`);
+  // árboles: nunca en el agua ni en la pared
+  const G = makeGround(mt, null);
+  const tr = buildTrees(L, E, { terrain: true, terrainType: 'mountain', treeDensity: 20, treeSpread: 60 }, G);
+  check(tr.trees.every((t) => t.z > mt.waterLevel + 0.9), `terreno montaña: árboles fuera del agua (${tr.count})`);
+  check(tr.trees.every((t, i) => Number.isFinite(t.yaw)) && new Set(tr.trees.map((t) => t.yaw.toFixed(2))).size > tr.count * 0.8, 'árboles con giro aleatorio');
+}
+
+// decoración: sets de elementos (junto a la pista o en zonas pintadas), máximo, giro y orientación
+{
+  const L = buildLayout(SAMPLES.oval.build(), { lapLength: 1000 });
+  const E = computeElevation(L, { hills: 0.5 });
+  const T = buildTerrain(L, E, { terrain: true, terrainDensity: 35 });
+  const G = makeGround(T, null);
+  const base = { mode: 'road', side: 'both', density: 10, offset: 4, spread: 25, spacing: 2, size: 1, sizeVar: 0.3, rot: 360, tilt: 0, seed: 3 };
+  const a = buildDecoInstances(L, E, {}, G, { ...base, max: 1000 });
+  const b = buildDecoInstances(L, E, {}, G, { ...base, max: 25 });
+  check(a.length > 50 && b.length === 25, `decoración: cantidad máxima (${a.length} → ${b.length})`);
+  check(a.every((it) => it.up[2] === 1) && new Set(a.map((it) => it.yaw.toFixed(2))).size > a.length * 0.8, 'decoración: giro al azar y verticales con orientación 0 %');
+  const tilted = buildDecoInstances(L, E, {}, G, { ...base, tilt: 100 });
+  check(tilted.length === a.length, 'decoración: la orientación no cambia el reparto');
+  let minD = Infinity;
+  for (let i = 0; i < a.length; i++) for (let j = i + 1; j < a.length; j++) minD = Math.min(minD, Math.hypot(a[i].x - a[j].x, a[i].y - a[j].y));
+  check(minD >= 2 - 1e-6, `decoración: separación mínima (${minD.toFixed(2)} m)`);
+  const r = L.routes[0];
+  let cx = 0, cy = 0; for (let i = 0; i < r.n; i++) { cx += r.x[i]; cy += r.y[i]; } cx /= r.n; cy /= r.n;
+  const p = buildDecoInstances(L, E, {}, G, { ...base, mode: 'painted', density: 20, max: 5000 }, [{ x: cx, y: cy, r: 30, e: false }, { x: cx, y: cy, r: 10, e: true }]);
+  check(p.length > 10 && p.every((it) => { const d = Math.hypot(it.x - cx, it.y - cy); return d <= 30.01 && d >= 9.99; }), `decoración: solo dentro de lo pintado, sin lo borrado (${p.length})`);
+  check(p.every((it) => Math.abs(it.z - T.sample(it.x, it.y)) < 1e-6), 'decoración: apoyada en el terreno');
+  // rotación fija: 0° = de frente al auto (el -Y local apunta contra la marcha); giro propio por lado
+  const fx = buildDecoInstances(L, E, {}, G, { ...base, rotMode: 'fixed', rotLeft: 0, rotRight: 90 });
+  let okL = 0, okR = 0, nL = 0, nR = 0;
+  for (const it of fx) {
+    let bi = 0, bd = Infinity;
+    for (let i = 0; i < r.n; i++) { const d = (r.x[i] - it.x) ** 2 + (r.y[i] - it.y) ** 2; if (d < bd) { bd = d; bi = i; } }
+    const left = (it.x - r.x[bi]) * -r.ty[bi] + (it.y - r.y[bi]) * r.tx[bi] >= 0;
+    const fxv = Math.sin(it.yaw), fyv = -Math.cos(it.yaw); // hacia dónde mira el frente
+    const dot = fxv * -r.tx[bi] + fyv * -r.ty[bi];
+    if (left) { nL++; if (dot > 0.95) okL++; } else { nR++; if (Math.abs(dot) < 0.2) okR++; }
+  }
+  check(nL > 5 && okL / nL > 0.9 && nR > 5 && okR / nR > 0.9, `decoración: rotación fija por lado (izq ${okL}/${nL} de frente, der ${okR}/${nR} a 90°)`);
+}
+
+// bordes: camino de tierra y barrera, extruidos de las secciones de la pista
+{
+  const L = buildLayout(SAMPLES.shortcut.build(), { lapLength: 1000 });
+  const E = computeElevation(L, { hills: 0.5 });
+  const sp = { terrain: true, terrainDensity: 40, dirtSide: 'both', dirtWidth: 3, barrierSide: 'both', barrierHeight: 0.8, altDirtSide: 'both', altDirtWidth: 3, altBarrierSide: 'both', altBarrierHeight: 0.8, trackDensity: 35, trackMeshMode: 'optimized', trackAdapt: 1 };
+  const B = buildEdgeMeshes(L, E, sp);
+  // los atajos tienen sus propios parámetros
+  const BA = buildEdgeMeshes(L, E, { ...sp, altDirtSide: 'none', altBarrierSide: 'left', altBarrierHeight: 1.6 });
+  check(BA.dirt.every((d) => !d.alt) && BA.barriers.filter((b) => b.alt).length === 1 && BA.barriers.filter((b) => !b.alt).length === 2, 'bordes: parámetros propios de los atajos');
+  const ab = BA.barriers.find((b) => b.alt);
+  check(Math.abs((ab.positions[5] - ab.positions[2]) - 1.6) < 1e-3, `bordes: altura propia de la barrera del atajo (${(ab.positions[5] - ab.positions[2]).toFixed(2)})`);
+  check(B.dirt.length === 4 && B.barriers.length === 4, `bordes: tierra y barrera a ambos lados de cada ruta (${B.dirt.length}, ${B.barriers.length})`);
+  // hereda las secciones de la pista: mismas filas que la malla de la pista
+  const rows = trackRows(L, E, sp);
+  const bm = B.barriers.find((b) => b.k === 0 && b.side === 1);
+  check(bm.positions.length / 3 === rows[0].length * 6, `bordes: la barrera usa las secciones de la pista (${bm.positions.length / 18} / ${rows[0].length})`);
+  // UV a lo largo = s / largo de repetición en cada fila
+  const r = L.routes[0];
+  let worst = 0;
+  rows[0].forEach((q, a) => { const sv = q === r.n ? r.L : r.s[q % r.n]; worst = Math.max(worst, Math.abs(bm.uvs[a * 12] - sv / 4)); });
+  check(worst < 1e-3, `bordes: textura de la barrera sigue la distancia (${worst.toExponential(1)})`);
+  // la barrera nace donde termina el camino de tierra
+  const dm = B.dirt.find((d) => d.k === 0 && d.side === 1);
+  const a0 = 10, px = bm.positions[a0 * 18], py = bm.positions[a0 * 18 + 1];
+  const per = sp.terrain ? 3 : 2, ox = dm.positions[a0 * per * 3 + 3], oy = dm.positions[a0 * per * 3 + 4];
+  check(Math.hypot(px - ox, py - oy) < 0.1, `bordes: la barrera empieza al final del camino de tierra (${Math.hypot(px - ox, py - oy).toFixed(3)} m)`);
+  // abierta donde sale / entra el atajo: menos triángulos que una barrera continua del lado del atajo
+  const full = (rows[0].length - 1) * 6;
+  const counts = B.barriers.filter((b) => b.k === 0).map((b) => b.indices.length / 3);
+  check(Math.min(...counts) < full - 12, `bordes: barrera abierta en las salidas del atajo (${counts.join(' / ')} de ${full})`);
+  // el terreno queda bajo el camino de tierra
+  const T = buildTerrain(L, E, sp);
+  let wz = -Infinity;
+  for (const d of B.dirt) for (let v = 0; v < d.positions.length / 3; v += per) { const x = d.positions[v * 3], y = d.positions[v * 3 + 1], z = d.positions[v * 3 + 2]; wz = Math.max(wz, T.sample(x, y) - z); }
+  check(wz <= -0.25, `bordes: el terreno no tapa el camino de tierra (${wz.toFixed(3)})`);
+}
+
+// cerro sobre cerro: el de encima se apoya en el de abajo y su base no lo atraviesa
+{
+  const L = buildLayout(SAMPLES.oval.build(), { lapLength: 1000 });
+  const E = computeElevation(L, { hills: 0.5 });
+  const r = L.routes[0];
+  let cx = 0, cy = 0; for (let i = 0; i < r.n; i++) { cx += r.x[i]; cy += r.y[i]; } cx /= r.n; cy /= r.n;
+  const sp = { terrain: true, terrainDensity: 40 };
+  const T = buildTerrain(L, E, sp);
+  const A = { id: 1, height: 20, hard: false, flat: 0.6, density: 60, maxTris: 30000, strokes: [{ x: cx, y: cy, r: 60, e: false }] };
+  const B = { id: 2, height: 12, hard: true, flat: 1, density: 60, maxTris: 30000, onTop: true, strokes: [{ x: cx + 10, y: cy, r: 18, e: false }] };
+  const H1 = buildHills(L, E, sp, T, [A]);
+  const H2 = buildHills(L, E, sp, T, [A, B]);
+  const zA = H1.sample(cx + 10, cy), zAB = H2.sample(cx + 10, cy);
+  check(zAB > zA + 9, `cerro encima: se suma a la altura del de abajo (${zA.toFixed(1)} → ${zAB.toFixed(1)})`);
+  const hb = H2.hills.find((h) => h.id === 2), ha = H2.hills.find((h) => h.id === 1);
+  const sampA = (x, y) => H1.sample(x, y);
+  let below = 0, n = 0;
+  for (let t = 0; t < hb.indices.length; t += 3) {
+    let zc = 0, xc = 0, yc = 0;
+    for (let k = 0; k < 3; k++) { const v = hb.indices[t + k]; xc += hb.positions[v * 3]; yc += hb.positions[v * 3 + 1]; zc += hb.positions[v * 3 + 2]; }
+    xc /= 3; yc /= 3; zc /= 3; n++;
+    if (zc < sampA(xc, yc) - 0.6) below++;
+  }
+  check(n > 0 && below / n < 0.02, `cerro encima: su base no atraviesa el cerro de abajo (${below}/${n} triángulos bajo él)`);
+  check(ha.tris > 0, 'cerro encima: el de abajo sigue entero');
+}
+
+// tramos cubiertos (bajo cruces y en túneles): material propio, cortes exactos
+{
+  const L = buildLayout(SAMPLES.figure8.build(), { lapLength: 1000 });
+  const E = computeElevation(L, { hills: 0.5 });
+  const cov = coveredRanges(L, E, [{ k: 0, s0: 100, s1: 160 }]);
+  check(cov.length === 1 + E.crossings.length, `cubiertos: túnel + ${E.crossings.length} cruce(s)`);
+  const TM = buildTrackMesh(L, E, { coveredRanges: cov, trackDensity: 30, trackMeshMode: 'optimized', trackAdapt: 1 });
+  check(TM.groups.length === 4 && TM.groups[2].count > 0 && TM.coveredParts.length === 1 && TM.coveredParts[0].name === 'ruta_principal_cubierto', `cubiertos: grupo y objeto propios (${TM.groups.map((g) => g.count).join('/')})`);
+  const r = L.routes[0], cp = TM.coveredParts[0];
+  let inside = 0, total = 0;
+  const ez = E.routes[0].z;
+  for (let v = 0; v < cp.positions.length / 3; v++) {
+    // muestra más cercana a la misma altura (en el cruce, la otra rama pasa justo encima)
+    const x = cp.positions[v * 3], y = cp.positions[v * 3 + 1], z = cp.positions[v * 3 + 2];
+    let bi = 0, bd = Infinity;
+    for (let i = 0; i < r.n; i++) { if (Math.abs(ez[i] - z) > 3) continue; const d = (r.x[i] - x) ** 2 + (r.y[i] - y) ** 2; if (d < bd) { bd = d; bi = i; } }
+    total++; if (isCovered(L, 0, r.s[bi], cov.map((c) => ({ ...c, s0: c.s0 - 1.5, s1: c.s1 + 1.5 })))) inside++;
+  }
+  check(inside === total, `cubiertos: la malla cubierta queda dentro de sus tramos (${inside}/${total})`);
 }
 
 // densidad del trazado de la pista: uniforme / optimizado, tope de triángulos y UV continuo

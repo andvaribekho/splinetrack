@@ -2,7 +2,7 @@
 // Todo en metros, Z arriba. Devuelve arrays planos listos para three.js o para exportar.
 import { SpatialGrid, rng, clamp, smoothstep } from './geometry.js';
 import Delaunator from '../vendor/delaunator.js';
-import { hillFieldOne, detectTunnels, tunnelTop, buildTunnelGeometry, applyTunnelOverrides, portalBox, frameAt } from './tunnels.js';
+import { hillFieldOne, detectTunnels, tunnelTop, buildTunnelGeometry, applyTunnelOverrides, portalBox, frameAt, edgeExtents, tunnelInnerWidth } from './tunnels.js';
 
 export const DEFAULT_SCENE = {
   // pista
@@ -24,6 +24,17 @@ export const DEFAULT_SCENE = {
   terrainTexRepX: 20,
   terrainTexRepY: 20,
   paintFactor: 4, // multiplicador de densidad en zonas pintadas
+  terrainType: 'forest', // 'forest' (bosque) | 'beach' (playa: costa hacia el agua) | 'mountain' (acantilado y pared de roca)
+  coastSide: 'right', // playa: 'left' | 'right' | 'both'
+  coastLand: 25, // m de tierra (irregular) entre la pista y la playa o el borde del acantilado
+  coastBeach: 30, // m de la playa que baja hasta el agua
+  coastHeight: 3, // m del agua bajo el punto más bajo de la pista (playa)
+  cliffSide: 'left', // montaña: lado del acantilado ('left' | 'right'); al otro lado, pared de roca
+  cliffHeight: 30, // m de caída del acantilado hasta el agua
+  wallHeight: 25, // m de la pared de roca
+  sculptBrush: 30, // radio del pincel de relieve (m)
+  sculptStrength: 1.5, // m que sube o baja cada toque en el centro
+  sculptDetail: true, // lo esculpido recibe más detalle (como lo pintado con densidad)
   // cerros y túneles
   hillBrush: 40, // m de radio
   hillHeight: 25, // m (valores para cerros nuevos)
@@ -43,6 +54,9 @@ export const DEFAULT_SCENE = {
   tunnelOpen: 'none', // 'none' | 'left' | 'right' (valor general; cada túnel puede tener el suyo)
   tunnelOverrides: [], // [{k, s, open, pillars}] ajustes propios por túnel
   tunnelPillars: 8,
+  tunnelMeshMode: 'uniform', // 'uniform' | 'optimized' (secciones repartidas según la curvatura)
+  tunnelMaxTris: 60000, // tope de triángulos por túnel
+  tunnelAdapt: 0.5, // optimización (0 = mínimo, 1 = máximo)
   paintBrush: 25, // radio del pincel en m
   // árboles
   trees: false,
@@ -52,6 +66,8 @@ export const DEFAULT_SCENE = {
   treeOffset: 6, // m desde el borde de la pista
   treeSpread: 14, // m de dispersión extra
   treeSeed: 7,
+  treeAssets: [], // ids de modelos de la biblioteca que reemplazan a los conos (vacío = conos)
+  grassAssets: [], // ids de modelos que reemplazan a la hierba (vacío = planos cruzados)
   treeOnSlopes: false, // también en laderas de cerros
   treeOnTops: false, // también en la cima de cerros
   treeHillDensity: 4, // árboles por 1000 m² sobre cerros
@@ -71,6 +87,17 @@ export const DEFAULT_SCENE = {
   stripBorder: false,
   stripBorderHeight: 0.8, // m
   // pórtico de salida
+  // bordes de la pista (se extruyen de la malla de la pista: misma densidad y optimización)
+  dirtSide: 'none', // camino de tierra: 'none' | 'left' | 'right' | 'both'
+  dirtWidth: 3, // m
+  dirtTile: 4, // m de pista por repetición de la textura
+  barrierSide: 'none', // barrera de contención: 'none' | 'left' | 'right' | 'both'
+  barrierHeight: 0.8, // m
+  barrierThick: 0.25, // m
+  barrierTile: 4, // m por repetición de la textura (rojo + blanco)
+  // bordes de los atajos (independientes de los de la pista)
+  altDirtSide: 'none', altDirtWidth: 3, altDirtTile: 4,
+  altBarrierSide: 'none', altBarrierHeight: 0.8, altBarrierThick: 0.25, altBarrierTile: 4,
   startGate: true,
   startText: 'START',
   startGateHeight: 7, // m libres sobre la calzada
@@ -85,17 +112,55 @@ export function terrainCell(area, sp) {
   return Math.max(cell, minCell);
 }
 
-function trackSamples(layout, elev) {
+export { edgeExtents } from './tunnels.js';
+
+function trackSamples(layout, elev, sp = {}) {
   const out = [];
+  const XM = edgeExtents(sp, false), XA = edgeExtents(sp, true); // bordes de la pista y de los atajos (independientes)
   layout.routes.forEach((r, k) => {
     const e = elev.routes[k];
     for (let i = 0; i < r.n; i++) {
       const low = e.z[i] - Math.abs(Math.sin(e.roll[i])) * r.w[i] / 2;
       const bridge = !!(r.bridges && r.bridges.some((b) => { const d = r.closed ? (((r.s[i] - b.s0) % r.L) + r.L) % r.L : r.s[i] - b.s0; return d >= 0 && d <= b.s1 - b.s0; }));
-      out.push({ x: r.x[i], y: r.y[i], z: low, zc: e.z[i], sr: Math.sin(e.roll[i]), tx: r.tx[i], ty: r.ty[i], w: r.w[i], k, i, j: out.length, bridge });
+      const X = r.kind === 'alt' ? XA : XM;
+      const uL = r.w[i] / 2 + X.left, uR = r.w[i] / 2 + X.right; // calzada + camino de tierra + barrera
+      out.push({ x: r.x[i], y: r.y[i], z: low, zc: e.z[i], sr: Math.sin(e.roll[i]), tx: r.tx[i], ty: r.ty[i], w: r.w[i], uL, uR, ew: 2 * Math.max(uL, uR), k, i, s: r.s[i], j: out.length, bridge });
     }
   });
   return out;
+}
+
+/**
+ * Tramos de pista cubiertos (dentro de túneles o bajo otra pista en un cruce): [{k, s0, s1}].
+ * tunnels: [{k, s0, s1}] (de boca a boca). Bajo un cruce, el largo cubierto depende del ancho de la pista de arriba
+ * y del ángulo del cruce.
+ */
+export function coveredRanges(layout, elev, tunnels = []) {
+  const out = [];
+  for (const t of tunnels || []) if (t && Number.isFinite(t.s0)) out.push({ k: t.k, s0: t.s0, s1: t.s1 });
+  for (const c of (elev && elev.crossings) || []) {
+    const upA = c.up === 'a';
+    const kl = upA ? c.rb : c.ra, sl = upA ? c.sb : c.sa, ku = upA ? c.ra : c.rb, su = upA ? c.sa : c.sb;
+    const rl = layout.routes[kl], ru = layout.routes[ku];
+    if (!rl || !ru) continue;
+    const il = ((Math.round(sl / rl.ds) % rl.n) + rl.n) % rl.n, iu = ((Math.round(su / ru.ds) % ru.n) + ru.n) % ru.n;
+    const sin = Math.abs(rl.tx[il] * ru.ty[iu] - rl.ty[il] * ru.tx[iu]);
+    const half = (ru.w[iu] / 2) / Math.max(0.25, sin) + 1;
+    out.push({ k: kl, s0: sl - half, s1: sl + half });
+  }
+  return out;
+}
+/** ¿La posición sv de la ruta k está en un tramo cubierto? */
+export function isCovered(layout, k, sv, ranges) {
+  if (!ranges || !ranges.length) return false;
+  const r = layout.routes[k];
+  for (const c of ranges) {
+    if (c.k !== k) continue;
+    let ss = sv;
+    if (r.closed) { while (ss < c.s0) ss += r.L; while (ss > c.s1 + r.L) ss -= r.L; }
+    if (ss >= c.s0 && ss <= c.s1) return true;
+  }
+  return false;
 }
 
 /** Tramo de puente (índice en r.bridges) que contiene la posición sv, o -1. */
@@ -138,6 +203,15 @@ export function trackRows(layout, elev, spIn = {}) {
     const at = (q) => ((q % n) + n) % n;
     // filas obligatorias: extremos y bordes de los tableros de puente
     const must = new Set([0, nq]);
+    // bordes de los tramos cubiertos (túneles, bajo cruces): siempre una sección, para cortar el material justo ahí
+    if (sp.coveredRanges && sp.coveredRanges.some((c) => c.k === k)) {
+      let prev = isCovered(layout, k, r.s[0], sp.coveredRanges);
+      for (let q = 0; q < nq; q++) {
+        const cur = isCovered(layout, k, q + 1 === n ? r.L : r.s[at(q + 1)], sp.coveredRanges);
+        if (cur !== prev) { must.add(q); must.add(q + 1); }
+        prev = cur;
+      }
+    }
     if (r.bridges && r.bridges.length) {
       for (let q = 0; q < nq; q++) {
         const a = bridgeIndexAt(r, r.s[at(q)]), b = bridgeIndexAt(r, q + 1 === n ? 0 : r.s[at(q + 1)]);
@@ -228,6 +302,7 @@ export function buildTrackMesh(layout, elev, spIn = {}) {
     }
     // tablero de cada puente (tramo con el ancho del puente, sin las transiciones): índices aparte, con su propia textura
     const bIdx = (r.bridges || []).map(() => []);
+    const cIdx = []; // tramos cubiertos
     const bridgeOf = (sv) => {
       if (!r.bridges) return -1;
       for (let bi = 0; bi < r.bridges.length; bi++) {
@@ -241,38 +316,49 @@ export function buildTrackMesh(layout, elev, spIn = {}) {
       const qa = qList[q], qb = qList[q + 1];
       const sa = r.s[qa % n], sb = qb === n ? r.L : r.s[qb % n];
       const ba = bridgeOf(sa), bb = bridgeOf(sb === r.L && r.closed ? 0 : sb);
-      const tgt = ba >= 0 && ba === bb ? bIdx[ba] : idx;
+      // material del cuadro: tablero de puente > tramo cubierto (túnel o bajo un cruce) > pista (o atajo)
+      const tgt = ba >= 0 && ba === bb ? bIdx[ba] : isCovered(layout, k, (sa + sb) / 2, sp.coveredRanges) ? cIdx : idx;
       for (let c2 = 0; c2 < cols - 1; c2++) {
         const a = q * cols + c2, b = a + 1, d = a + cols, e2 = d + 1;
         tgt.push(a, d, b, b, d, e2);
       }
     }
-    return { name: r.name, positions: new Float32Array(pos), uvs: new Float32Array(uv), indices: idx, bridgeIdx: bIdx, bridgeNo: (r.bridges || []).map((b, k) => (b.idx ?? k) + 1) };
+    return { name: r.name, alt: r.kind === 'alt', positions: new Float32Array(pos), uvs: new Float32Array(uv), indices: idx, coveredIdx: cIdx, bridgeIdx: bIdx, bridgeNo: (r.bridges || []).map((b, k) => (b.idx ?? k) + 1) };
   });
-  // malla combinada (vista previa): primero todos los tramos de pista, luego los tableros de puente
+  // malla combinada (vista previa), en grupos de material: pista, atajos, tramos cubiertos, tableros de puente
   const nPos = parts.reduce((a, p) => a + p.positions.length, 0);
   const positions = new Float32Array(nPos), uvs = new Float32Array((nPos / 3) * 2);
-  const indices = [], bIndices = [];
+  const G = { main: [], alt: [], covered: [], bridge: [] };
   let vo = 0;
   for (const p of parts) {
     positions.set(p.positions, vo * 3);
     uvs.set(p.uvs, vo * 2);
-    for (const i of p.indices) indices.push(i + vo);
-    for (const bi of p.bridgeIdx) for (const i of bi) bIndices.push(i + vo);
+    for (const i of p.indices) G[p.alt ? 'alt' : 'main'].push(i + vo);
+    for (const i of p.coveredIdx) G.covered.push(i + vo);
+    for (const bi of p.bridgeIdx) for (const i of bi) G.bridge.push(i + vo);
     vo += p.positions.length / 3;
   }
-  const trackCount = indices.length;
-  for (const i of bIndices) indices.push(i);
+  const indices = [...G.main, ...G.alt, ...G.covered, ...G.bridge];
+  const groups = [
+    { start: 0, count: G.main.length, mat: 0 },
+    { start: G.main.length, count: G.alt.length, mat: 1 },
+    { start: G.main.length + G.alt.length, count: G.covered.length, mat: 2 },
+    { start: G.main.length + G.alt.length + G.covered.length, count: G.bridge.length, mat: 3 },
+  ];
+  const trackCount = G.main.length + G.alt.length + G.covered.length;
+  // tramos cubiertos como objetos propios (exportación)
+  const coveredParts = [];
+  for (const p of parts) if (p.coveredIdx.length) coveredParts.push({ name: `${p.name}_cubierto`, alt: p.alt, ...compactMesh(p.positions, p.uvs, p.coveredIdx) });
   // tableros como objetos propios (exportación), con los vértices compactados
   const bridgeParts = [];
   for (const p of parts) {
     p.bridgeIdx.forEach((bi, k) => { if (bi.length) bridgeParts.push({ name: `puente_${String(p.bridgeNo[k]).padStart(2, '0')}`, bridge: p.bridgeNo[k] - 1, ...compactMesh(p.positions, p.uvs, bi) }); });
   }
   for (const p of parts) {
-    if (p.bridgeIdx.some((b) => b.length)) Object.assign(p, compactMesh(p.positions, p.uvs, p.indices));
-    delete p.bridgeIdx; delete p.bridgeNo;
+    if (p.bridgeIdx.some((b) => b.length) || p.coveredIdx.length) Object.assign(p, compactMesh(p.positions, p.uvs, p.indices));
+    delete p.bridgeIdx; delete p.bridgeNo; delete p.coveredIdx;
   }
-  return { positions, uvs, indices, trackCount, parts, bridgeParts, rows: rowLists.map((q) => q.length) };
+  return { positions, uvs, indices, groups, trackCount, parts, coveredParts, bridgeParts, rows: rowLists.map((q) => q.length) };
 }
 
 /** Deja solo los vértices usados por los índices. */
@@ -292,19 +378,232 @@ function compactMesh(P, U, idx) {
  * En ambos casos cada vértice queda bajo toda superficie de pista a menos de un triángulo de distancia,
  * así ningún triángulo puede atravesar la pista.
  */
-export function buildTerrain(layout, elev, spIn = {}, paint = null) {
+/** Ruido suave 2D (0..1) con semilla. */
+function valueNoise2(seed) {
+  const h = (i, j) => { let v = (i * 374761393 + j * 668265263 + seed * 2654435761) | 0; v = Math.imul(v ^ (v >>> 13), 1274126177); return ((v ^ (v >>> 16)) >>> 0) / 4294967296; };
+  const sm = (t) => t * t * (3 - 2 * t);
+  return (x, y) => {
+    const i = Math.floor(x), j = Math.floor(y), fx = sm(x - i), fy = sm(y - j);
+    const a = h(i, j), b = h(i + 1, j), c = h(i, j + 1), d = h(i + 1, j + 1);
+    return (a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + d * fx) * fy;
+  };
+}
+
+/**
+ * Colores por vértice del terreno: pasto, arena (playa y fondo), roca (pendientes fuertes: acantilado y pared).
+ * Van como atributo «colors» (RGB 0..1); con textura de terreno se usan como tinte.
+ */
+function terrainColors(T, TT, waterLevel, nearestSide) {
+  const P = T.positions, I = T.indices, nv = P.length / 3;
+  const nz = new Float32Array(nv), nl = new Float32Array(nv);
+  // normales por vértice (solo la componente vertical importa)
+  for (let t = 0; t < I.length; t += 3) {
+    const a = I[t], b = I[t + 1], c = I[t + 2];
+    const ux = P[b * 3] - P[a * 3], uy = P[b * 3 + 1] - P[a * 3 + 1], uz = P[b * 3 + 2] - P[a * 3 + 2];
+    const vx = P[c * 3] - P[a * 3], vy = P[c * 3 + 1] - P[a * 3 + 1], vz = P[c * 3 + 2] - P[a * 3 + 2];
+    const cx = uy * vz - uz * vy, cy = uz * vx - ux * vz, cz = ux * vy - uy * vx;
+    const l = Math.hypot(cx, cy, cz) || 1;
+    for (const v of [a, b, c]) { nz[v] += Math.abs(cz) / l; nl[v] += 1; }
+  }
+  const C = new Float32Array(nv * 3);
+  // colores en sRGB convertidos a lineal (three.js y glTF usan colores de vértice lineales)
+  const lin = (c) => c.map((v) => Math.pow(v, 2.2));
+  const GRASS = lin([0.31, 0.49, 0.23]), SAND = lin([0.85, 0.76, 0.56]), WET = lin([0.62, 0.55, 0.4]), ROCK = lin([0.5, 0.48, 0.44]);
+  for (let v = 0; v < nv; v++) {
+    const up = nl[v] ? nz[v] / nl[v] : 1;
+    const z = P[v * 3 + 2];
+    let col = GRASS;
+    if (waterLevel != null) {
+      const kind = nearestSide ? nearestSide(P[v * 3], P[v * 3 + 1]).kind : null;
+      if (kind === 'coast' && z < waterLevel + 1.8) col = z < waterLevel - 0.3 ? WET : SAND;
+      else if (z < waterLevel - 0.3) col = WET;
+    }
+    if (up < 0.62) col = ROCK; // acantilado, pared de roca o ladera muy empinada
+    else if (up < 0.8 && col === GRASS) { const t = (0.8 - up) / 0.18; col = [GRASS[0] + (ROCK[0] - GRASS[0]) * t, GRASS[1] + (ROCK[1] - GRASS[1]) * t, GRASS[2] + (ROCK[2] - GRASS[2]) * t]; }
+    C[v * 3] = col[0]; C[v * 3 + 1] = col[1]; C[v * 3 + 2] = col[2];
+  }
+  T.colors = C;
+}
+
+/**
+ * Colores del terreno listos para usar: sin textura, los colores tal cual; con textura, un tinte (el pasto queda
+ * blanco para no oscurecer la textura; arena y roca la tiñen). En bosque con textura: sin tinte (null).
+ */
+export function terrainTint(T, hasTex) {
+  if (!T || !T.colors) return null;
+  if (!hasTex) return T.colors;
+  if (T.terrainType === 'forest') return null;
+  const C = T.colors, out = new Float32Array(C.length);
+  for (let i = 0; i < C.length; i += 3) {
+    const grass = Math.abs(C[i] - Math.pow(0.31, 2.2)) < 0.01 && Math.abs(C[i + 1] - Math.pow(0.49, 2.2)) < 0.01;
+    for (let k = 0; k < 3; k++) out[i + k] = grass ? 1 : Math.min(1, Math.pow(C[i + k], 1 / 2.2) * 1.2);
+  }
+  return out;
+}
+
+/**
+ * Relieve esculpido a mano sobre el terreno: suma de toques [{x, y, r, h}] (m; h > 0 eleva, h < 0 hunde) con caída suave
+ * (1 - (d/r)²)². Se rasteriza en una grilla fina y se muestrea con interpolación bilineal. null si no hay toques.
+ */
+export function sculptField(dabs) {
+  if (!dabs || !dabs.length) return null;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, rmin = Infinity;
+  for (const d of dabs) { x0 = Math.min(x0, d.x - d.r); x1 = Math.max(x1, d.x + d.r); y0 = Math.min(y0, d.y - d.r); y1 = Math.max(y1, d.y + d.r); rmin = Math.min(rmin, d.r); }
+  let c = clamp(rmin / 5, 0.4, 3);
+  while (((x1 - x0) / c) * ((y1 - y0) / c) > 4e6) c *= 1.25; // tope de memoria
+  const nx = Math.ceil((x1 - x0) / c) + 2, ny = Math.ceil((y1 - y0) / c) + 2;
+  const F = new Float32Array(nx * ny);
+  for (const d of dabs) {
+    const i0 = Math.max(0, Math.floor((d.x - d.r - x0) / c)), i1 = Math.min(nx - 1, Math.ceil((d.x + d.r - x0) / c));
+    const j0 = Math.max(0, Math.floor((d.y - d.r - y0) / c)), j1 = Math.min(ny - 1, Math.ceil((d.y + d.r - y0) / c));
+    const r2 = d.r * d.r;
+    for (let j = j0; j <= j1; j++) {
+      const dy = y0 + j * c - d.y;
+      for (let i = i0; i <= i1; i++) {
+        const dx = x0 + i * c - d.x, q = (dx * dx + dy * dy) / r2;
+        if (q < 1) { const f = 1 - q; F[j * nx + i] += d.h * f * f; }
+      }
+    }
+  }
+  const sample = (x, y) => {
+    const fx = (x - x0) / c, fy = (y - y0) / c;
+    if (fx < 0 || fy < 0 || fx >= nx - 1 || fy >= ny - 1) return 0;
+    const i = Math.floor(fx), j = Math.floor(fy), tx = fx - i, ty = fy - j, k = j * nx + i;
+    return (F[k] * (1 - tx) + F[k + 1] * tx) * (1 - ty) + (F[k + nx] * (1 - tx) + F[k + nx + 1] * tx) * ty;
+  };
+  return { sample, bounds: { x0, y0, x1, y1 }, cell: c };
+}
+
+/**
+ * paint: zonas de densidad [{x,y,r,e}] (formato anterior) o { density, sculpt } con el relieve esculpido
+ * [{x,y,r,h}]; todo en metros. El relieve es parte de la misma malla del terreno.
+ */
+export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
   const sp = { ...DEFAULT_SCENE, ...spIn };
-  const S = trackSamples(layout, elev);
+  const PI = Array.isArray(paintIn) || !paintIn ? { density: paintIn || null, sculpt: null } : paintIn;
+  const sculptDabs = PI.sculpt && PI.sculpt.length ? PI.sculpt : null;
+  const SF = sculptField(sculptDabs);
+  // lo esculpido recibe más detalle (como una zona pintada de densidad)
+  let paint = PI.density && PI.density.length ? PI.density : null;
+  if (sculptDabs && sp.sculptDetail !== false) paint = [...(paint || []), ...sculptDabs.map((d) => ({ x: d.x, y: d.y, r: d.r, e: false }))];
+  const S = trackSamples(layout, elev, sp);
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, maxW = 0;
-  for (const p of S) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); maxW = Math.max(maxW, p.w); }
-  const M = sp.terrainMargin;
+  for (const p of S) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); maxW = Math.max(maxW, p.ew); }
+  // tipo de terreno: bosque (normal), playa (costa hacia el agua) o montaña (acantilado a un lado, pared de roca al otro)
+  const TT = sp.terrainType === 'beach' || sp.terrainType === 'mountain' ? sp.terrainType : 'forest';
+  const special = TT !== 'forest';
+  let zRoadMin = Infinity;
+  for (const p of S) if (!p.bridge) zRoadMin = Math.min(zRoadMin, p.zc);
+  if (!isFinite(zRoadMin)) zRoadMin = 0;
+  const waterLevel = TT === 'beach' ? zRoadMin - Math.max(0.5, sp.coastHeight) : TT === 'mountain' ? zRoadMin - Math.max(2, sp.cliffHeight) : null;
+  const landMax = Math.max(0, sp.coastLand) * 1.45;
+  let M = sp.terrainMargin;
+  if (special) M = Math.max(M, landMax + (TT === 'beach' ? Math.max(1, sp.coastBeach) * 1.4 : 6) + 50); // hay que ver el agua
   minX -= M; minY -= M; maxX += M; maxY += M;
+  if (SF) { minX = Math.min(minX, SF.bounds.x0); minY = Math.min(minY, SF.bounds.y0); maxX = Math.max(maxX, SF.bounds.x1); maxY = Math.max(maxY, SF.bounds.y1); } // el terreno llega hasta lo esculpido
   const W = maxX - minX, H = maxY - minY;
   const gap = sp.terrainGap;
   const fine = new SpatialGrid(Math.max(maxW, 8));
   for (const p of S) fine.insert(p.x, p.y, p);
   const sub = S.filter((p, j) => j % 4 === 0 && !p.bridge); // bajo un puente el terreno no sube hasta la calzada
   const falloff = Math.max(5, sp.terrainFalloff);
+  // costado de cada punto respecto de la pista (para playa / montaña): muestra más cercana y distancia lateral con signo
+  const noise = valueNoise2((sp.treeSeed | 0) + 101);
+  const sideKind = (sd) => {
+    const has = (v, side) => v === 'both' || v === side;
+    if (TT === 'beach') return has(sp.coastSide, sd > 0 ? 'left' : 'right') ? 'coast' : 'forest';
+    if (TT === 'mountain') return (sp.cliffSide === 'right' ? -1 : 1) === sd ? 'cliff' : 'wall';
+    return 'forest';
+  };
+  let nearestSide = null, nearSegments = null, extraPaint = [];
+  if (special && sub.length) {
+    const sideG = new SpatialGrid(25);
+    for (const p of sub) sideG.insert(p.x, p.y, p);
+    const Rq = landMax + (TT === 'beach' ? sp.coastBeach * 1.4 : 10) + 30;
+    // respaldo lejos de la pista: muestra más cercana precalculada en una grilla gruesa
+    const rg = 64, rx = W / rg, ry = H / rg, near = new Int32Array((rg + 1) * (rg + 1));
+    for (let j = 0; j <= rg; j++) for (let i = 0; i <= rg; i++) {
+      const x = minX + i * rx, y = minY + j * ry;
+      let b = 0, bd = Infinity;
+      for (let k = 0; k < sub.length; k++) { const d = (sub[k].x - x) ** 2 + (sub[k].y - y) ** 2; if (d < bd) { bd = d; b = k; } }
+      near[j * (rg + 1) + i] = b;
+    }
+    const describe = (p, x, y) => {
+      const u = (x - p.x) * -p.ty + (y - p.y) * p.tx;
+      const sd = u >= 0 ? 1 : -1;
+      return { p, sd, d: Math.abs(u) - (sd > 0 ? p.uL : p.uR), kind: sideKind(sd) };
+    };
+    /** Tramos de pista cercanos (hasta 3, de lugares distintos de la pista), el más cercano primero. */
+    nearSegments = (x, y) => {
+      const cand = [];
+      sideG.query(x, y, Rq, (p) => cand.push([(p.x - x) ** 2 + (p.y - y) ** 2, p]));
+      if (!cand.length) { const i = clamp(Math.round((x - minX) / rx), 0, rg), j = clamp(Math.round((y - minY) / ry), 0, rg); return [describe(sub[near[j * (rg + 1) + i]], x, y)]; }
+      cand.sort((a, b) => a[0] - b[0]);
+      const out = [];
+      for (const [, p] of cand) {
+        const r = layout.routes[p.k];
+        if (out.some((o) => o.p.k === p.k && Math.min(Math.abs(o.p.s - p.s), r.closed ? r.L - Math.abs(o.p.s - p.s) : Infinity) < 40)) continue;
+        out.push(describe(p, x, y));
+        if (out.length === 3) break;
+      }
+      return out;
+    };
+    nearestSide = (x, y) => nearSegments(x, y)[0];
+    // más detalle a lo largo del borde del acantilado y del pie de la pared de roca (corte más limpio)
+    if (TT === 'mountain') {
+      for (let k = 0; k < sub.length; k += 2) {
+        const p = sub[k];
+        for (const sd of [1, -1]) {
+          const kind = sideKind(sd), ext = sd > 0 ? p.uL : p.uR;
+          let off;
+          if (kind === 'cliff') { const xg = p.x - p.ty * sd * (ext + sp.coastLand), yg = p.y + p.tx * sd * (ext + sp.coastLand); off = ext + sp.coastLand * (0.55 + 0.9 * noise(xg / 90, yg / 90)) + 1; }
+          else off = ext + 6;
+          extraPaint.push({ x: p.x - p.ty * sd * off, y: p.y + p.tx * sd * off, r: 9, e: false });
+        }
+      }
+    }
+  }
+  /** Altura según el tipo de terreno respecto de un tramo (null = bosque, sin cambios). */
+  const profileFor = (ns, x, y) => {
+    if (ns.kind === 'forest') return null;
+    const d = ns.d, zl = ns.p.zc - gap;
+    const n1 = noise(x / 90, y / 90), n2 = noise(x / 45 + 7.3, y / 45 - 3.1), n3 = noise(x / 14 - 2, y / 14 + 5);
+    const wl = sp.coastLand * (0.55 + 0.9 * n1); // costa irregular
+    if (ns.kind === 'coast') {
+      const bl = Math.max(1, sp.coastBeach) * (0.6 + 0.8 * n2);
+      if (d < wl) return zl + 0.8 * (n3 - 0.5) * smoothstep(0, 10, d);
+      const floor = waterLevel - 2;
+      if (d < wl + bl) { const t = (d - wl) / bl; return zl + (floor - zl) * (t * t * (3 - 2 * t)); }
+      return floor - Math.min(6, (d - wl - bl) * 0.06) - 0.6 * n3;
+    }
+    if (ns.kind === 'cliff') {
+      if (d < wl) return zl + 0.6 * (n3 - 0.5) * smoothstep(0, 10, d);
+      const floor = waterLevel - 3;
+      if (d < wl + 2.5) return zl + (floor - zl) * ((d - wl) / 2.5); // corte abrupto
+      return floor - 1.5 * n3;
+    }
+    // pared de roca
+    const gapW = 3, run = 7, wh = Math.max(1, sp.wallHeight) * (0.8 + 0.4 * n1);
+    if (d < gapW) return zl;
+    if (d < gapW + run) { const t = (d - gapW) / run; return zl + wh * t * t * (3 - 2 * t) + 1.5 * (n3 - 0.5) * t; }
+    return zl + wh + Math.min(wh * 0.4, (d - gapW - run) * 0.3 * n2) + 3 * (n3 - 0.5);
+  };
+  /**
+   * Con varios tramos cerca (curvas cerradas, atajos) cada uno propone su altura y gana la más baja: así la pared de
+   * un tramo no tapa a otro y el agua de un lado no queda cortada por un escalón. forestZ = altura normal (bosque).
+   */
+  const sideProfile = (x, y, forestZ) => {
+    if (!nearSegments) return null;
+    const segs = nearSegments(x, y);
+    let z = null, any = false;
+    for (const ns of segs) {
+      const pz = profileFor(ns, x, y);
+      if (pz != null) any = true;
+      const v = pz ?? forestZ;
+      z = z == null ? v : Math.min(z, v);
+    }
+    return any ? z : null;
+  };
   const coarseG = new SpatialGrid(Math.max(falloff / 2, 10));
   for (const p of sub) coarseG.insert(p.x, p.y, p);
   // relieve general: IDW en una grilla gruesa
@@ -338,7 +637,7 @@ export function buildTerrain(layout, elev, spIn = {}, paint = null) {
       if (a > rho) return;
       const uv = dx * -p.ty + dy * p.tx;
       const h = Math.sqrt(rho * rho - a * a);
-      const u0 = Math.max(-p.w / 2, uv - h), u1 = Math.min(p.w / 2, uv + h);
+      const u0 = Math.max(-p.uR, uv - h), u1 = Math.min(p.uL, uv + h); // calzada + bordes (tierra, barrera)
       if (u0 > u1) return;
       const zmin = p.zc + Math.min(p.sr * u0, p.sr * u1);
       if (zmin < zone) zone = zmin;
@@ -352,19 +651,29 @@ export function buildTerrain(layout, elev, spIn = {}, paint = null) {
     let bd = Infinity, bz = 0, bw = 0;
     coarseG.query(x, y, falloff + maxW, (p) => {
       const d = Math.hypot(p.x - x, p.y - y);
-      if (d < bd) { bd = d; bz = p.z; bw = p.w; }
+      if (d < bd) { bd = d; bz = p.z; bw = p.ew; }
     });
     const b = baseAt(x, y);
-    if (bd === Infinity) return b;
-    const t = smoothstep(0, falloff, bd - bw / 2 - rho);
-    return (bz - gap) * (1 - t) + b * t;
+    // relieve esculpido: se desvanece en los primeros metros junto a la pista (la pista nunca queda enterrada)
+    const sc = SF ? SF.sample(x, y) : 0;
+    const t = bd === Infinity ? 1 : smoothstep(0, falloff, bd - bw / 2 - rho);
+    const forestZ = bd === Infinity ? b : (bz - gap) * (1 - t) + b * t;
+    const sideZ = sideProfile(x, y, forestZ); // playa / acantilado / pared de roca
+    if (bd === Infinity) return (sideZ ?? b) + sc;
+    const fade = SF ? smoothstep(0, 4, bd - bw / 2 - rho) : 0;
+    return (sideZ ?? forestZ) + sc * fade;
   };
+  if (extraPaint.length) paint = [...(paint || []), ...extraPaint];
   const painted = paint && paint.length && sp.paintFactor > 1;
   const out = painted
     ? adaptiveMesh(minX, minY, W, H, sp, paint, heightAt)
     : gridMesh(minX, minY, W, H, sp, heightAt);
   out.bounds = { minX, minY, maxX, maxY };
   out.tunnels = [];
+  out.sculpted = !!SF;
+  out.terrainType = TT;
+  out.waterLevel = waterLevel;
+  terrainColors(out, TT, waterLevel, nearestSide);
   Object.defineProperty(out, 'ctx', { value: { S, fine, maxW, gap, zoneAt, heightAt, sp }, enumerable: false });
   return out;
 }
@@ -382,12 +691,13 @@ export function buildHills(layout, elev, spIn, T, hills) {
   const fields = [];
   for (const h of hills) { const f = hillFieldOne(h); if (f) fields.push({ h, f }); }
   if (!fields.length) return res;
-  const combined = { sample: (x, y) => { let m = 0; for (const { f } of fields) { if (x < f.minX || y < f.minY || x > f.maxX || y > f.maxY) continue; const v = f.sample(x, y); if (v > m) m = v; } return m; } };
+  // altura total de los cerros sobre el terreno: se unen tomando el máximo, salvo los cerros «encima» (onTop), que se
+  // apoyan sobre los anteriores y suman su altura
+  const combined = { sample: (x, y) => { let m = 0; for (const { f, h } of fields) { if (x < f.minX || y < f.minY || x > f.maxX || y > f.maxY) continue; const v = f.sample(x, y); if (v <= 0) continue; m = Math.max(m, (h.onTop ? m : 0) + v); } return m; } };
   const tun = detectTunnels(layout, elev, combined, sp);
   applyTunnelOverrides(layout, tun.runs, sp);
   res.tunnels = tun.runs;
   const runById = new Map(tun.runs.map((t) => [t.id, t]));
-  const natural = sp.tunnelType === 'natural';
   const box = portalBox(sp, layout.routes[0].w[0]);
   const cover = Math.max(sp.tunnelRoof, box.thick + 0.3);
   const tunId = new Int32Array(S.length).fill(-1);
@@ -402,9 +712,10 @@ export function buildHills(layout, elev, spIn, T, hills) {
       const t = runById.get(id);
       let ss = r.s[p.i];
       if (r.closed) { while (ss < t.e0) ss += r.L; while (ss > t.e1) ss -= r.L; }
-      const top = tunnelTop(sp, t, ss);
-      const vault = natural ? top / sp.tunnelHeight : 1;
-      const half = Math.max(sp.tunnelWidth, p.w + 1) / 2 * vault + (natural ? 0.6 + 3 * sp.caveSize : 0) + 1;
+      const tsp = t.sp || sp, nat = tsp.tunnelType === 'natural'; // tipo propio del túnel
+      const top = tunnelTop(tsp, t, ss);
+      const vault = nat ? top / sp.tunnelHeight : 1;
+      const half = tunnelInnerWidth(sp, p.w, layout.routes[p.k].kind === 'alt') / 2 * vault + (nat ? 0.6 + 3 * sp.caveSize : 0) + 1;
       const q = { ...p, tun: id, top, half, open: t.openSide || 0 };
       tunReach = Math.max(tunReach, half + box.thick + 2 + (t.openSide ? 2 * sp.tunnelWidth : 0));
       tunGrid.insert(p.x, p.y, q);
@@ -448,18 +759,21 @@ export function buildHills(layout, elev, spIn, T, hills) {
     for (let j = 0; j <= ny; j++) for (let i = 0; i <= nx; i++) {
       const v = j * (nx + 1) + i;
       const x = x0 + i * cx, y = y0 + j * cy;
-      const tz = T.sample(x, y);
+      // base: el terreno o, si el cerro va encima de otros, la superficie de los cerros anteriores
+      let tz = T.sample(x, y);
+      if (h.onTop) for (const S2 of samplers) { const zs = S2.sample(x, y); if (zs > tz) tz = zs; }
       const hh = f.sample(x, y);
       let z = tz + hh - sink;
       const zone = zoneAt(x, y, rho, tunId);
       if (zone < Infinity) z = Math.min(z, zone - gap); // la pista corta el cerro (trinchera)
-      if (tunReach > 0 && hh > 0.5) {
+      if (tunReach > 0 && hh > 0.01) {
         const nt = nearTunnel(x, y, tunReach);
         if (nt) {
           const { p, u } = nt;
           const onOpen = p.open && Math.sign(u) === p.open && Math.abs(u) > p.w / 2;
-          if (onOpen) {
-            if (Math.abs(u) < p.half + 2 * sp.tunnelWidth) z = Math.min(z, p.z - gap - 0.5); // lado abierto: se despeja
+          if (!onOpen && hh <= 0.5) { /* borde del cerro: sin cambios */ } else if (onOpen) {
+            // lado abierto: el cerro se despeja por completo (bajo el terreno, así no queda nada en el piso entre los pilares)
+            if (Math.abs(u) < p.half + 2 * sp.tunnelWidth) z = Math.min(z, p.z - gap - 0.5, tz - 0.3);
           } else if (Math.abs(u) < p.half + 1 + box.thick) {
             z = Math.max(z, p.zc + p.top + cover); // el cerro cubre el techo del túnel
           }
@@ -708,6 +1022,7 @@ export function makeGround(T, HS) {
   if (!T) return null;
   return {
     sample: (x, y) => Math.max(T.sample(x, y), HS ? HS.sample(x, y) : -Infinity),
+    waterLevel: T.waterLevel ?? null,
     classify: HS && HS.classify ? HS.classify : () => null,
     bboxes: HS && HS.bboxes ? HS.bboxes : [],
   };
@@ -729,9 +1044,9 @@ function groundNormal(ground, x, y, d = 1) {
  */
 function scatter(layout, elev, sp, ground, o) {
   const rand = rng(o.seed >>> 0);
-  const S = trackSamples(layout, elev);
+  const S = trackSamples(layout, elev, sp);
   let maxW = 0;
-  for (const p of S) maxW = Math.max(maxW, p.w);
+  for (const p of S) maxW = Math.max(maxW, p.ew);
   const g = new SpatialGrid(Math.max(maxW, 8));
   for (const p of S) g.insert(p.x, p.y, p);
   const placed = new SpatialGrid(Math.max(2, o.minSpace * 3));
@@ -739,7 +1054,7 @@ function scatter(layout, elev, sp, ground, o) {
   const tilt = clamp(o.tilt ?? 0, 0, 100) / 100;
   const tryPlace = (x, y, zFallback) => {
     let ok = true;
-    g.query(x, y, maxW / 2 + o.clear, (p) => { if (ok && Math.hypot(p.x - x, p.y - y) < p.w / 2 + o.clear) ok = false; });
+    g.query(x, y, maxW / 2 + o.clear, (p) => { if (ok && Math.hypot(p.x - x, p.y - y) < p.ew / 2 + o.clear) ok = false; });
     if (!ok) return;
     placed.query(x, y, o.minSpace, (t) => { if (ok && Math.hypot(t.x - x, t.y - y) < o.minSpace) ok = false; });
     if (!ok) return;
@@ -751,6 +1066,8 @@ function scatter(layout, elev, sp, ground, o) {
     if (where === 'slope' && !o.onSlopes) return;
     if (where === 'top' && !o.onTops) return;
     const z = ground ? ground.sample(x, y) : zFallback;
+    if (ground && ground.waterLevel != null && z < ground.waterLevel + 1) return; // ni en el agua ni en la arena
+    if (ground && ground.waterLevel != null && where === 'terrain' && groundNormal(ground, x, y)[2] < 0.7) return; // ni en el acantilado ni en la pared de roca
     let up = [0, 0, 1], cosA = 1;
     if (ground) {
       const n = groundNormal(ground, x, y);
@@ -763,6 +1080,11 @@ function scatter(layout, elev, sp, ground, o) {
     out.push(t);
     placed.insert(x, y, t);
   };
+  // candidatos propios (zonas pintadas): se prueban en vez de los costados de la pista
+  if (o.candidates) {
+    for (const [x, y] of o.candidates) tryPlace(x, y, o.zAt ? o.zAt(x, y) : 0);
+    return capList(out, o.max, rand);
+  }
   const sides = o.side === 'left' ? [1] : o.side === 'right' ? [-1] : [1, -1];
   const step = 100 / Math.max(0.1, o.density);
   layout.routes.forEach((r, k) => {
@@ -792,7 +1114,79 @@ function scatter(layout, elev, sp, ground, o) {
       }
     }
   }
-  return out;
+  return capList(out, o.max, rand);
+}
+
+/** Recorta la lista a «max» elementos elegidos al azar (con la misma semilla, siempre los mismos). */
+function capList(list, max, rand) {
+  if (!(max >= 0) || list.length <= max) return list;
+  const idx = list.map((_, i) => i);
+  for (let i = idx.length - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [idx[i], idx[j]] = [idx[j], idx[i]]; }
+  return idx.slice(0, max).sort((a, b) => a - b).map((i) => list[i]);
+}
+
+/**
+ * Set de elementos decorativos: dónde va cada instancia.
+ * set: {mode:'road'|'painted', side, density (por 100 m y lado; en zonas pintadas, por 1000 m²), offset, spread, spacing,
+ *       max, size, sizeVar (0..1), rot (grados de giro al azar), tilt (0..100, respecto de la normal), onSlopes, onTops, seed, paint}
+ * paintW: zonas pintadas en metros [{x,y,r,e}]. Devuelve [{x, y, z, up, yaw, s}] (s = escala / tamaño).
+ */
+export function buildDecoInstances(layout, elev, spIn, ground, set, paintW = null) {
+  const sp = { ...DEFAULT_SCENE, ...spIn };
+  const seed = ((set.seed | 0) * 7919 + 17) >>> 0;
+  let candidates = null;
+  if (set.mode === 'painted') {
+    candidates = [];
+    const strokes = paintW || [];
+    if (strokes.length) {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const q of strokes) { x0 = Math.min(x0, q.x - q.r); x1 = Math.max(x1, q.x + q.r); y0 = Math.min(y0, q.y - q.r); y1 = Math.max(y1, q.y + q.r); }
+      const step = Math.sqrt(1000 / Math.max(0.01, set.density || 10));
+      const rnd = rng(seed ^ 0x5bd1e995);
+      const nx = Math.ceil((x1 - x0) / step), ny = Math.ceil((y1 - y0) / step);
+      if (nx * ny <= 600000) {
+        for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+          const x = x0 + (i + rnd()) * step, y = y0 + (j + rnd()) * step;
+          let inside = false; // el último toque que cubre el punto decide (pintar o borrar)
+          for (const q of strokes) if ((x - q.x) ** 2 + (y - q.y) ** 2 <= q.r * q.r) inside = !q.e;
+          if (inside) candidates.push([x, y]);
+        }
+      }
+    }
+  }
+  const size = Math.max(0.05, set.size || 1);
+  const pts = scatter(layout, elev, sp, ground, {
+    seed, density: set.density ?? 10, side: set.side || 'both', offset: set.offset ?? 4, spread: set.spread ?? 20,
+    minSpace: Math.max(0.1, set.spacing ?? size * 1.5), clear: 0.5 + size * 0.5,
+    onSlopes: !!set.onSlopes, onTops: !!set.onTops, hillDensity: set.onSlopes || set.onTops ? (set.hillDensity ?? 5) : 0, tilt: set.tilt ?? 0,
+    candidates, max: Number.isFinite(set.max) ? Math.max(0, set.max) : undefined,
+    zAt: (x, y) => (ground ? ground.sample(x, y) : 0),
+  });
+  const rand = rng(seed ^ 0x27d4eb2d);
+  const rot = Math.max(0, Math.min(360, set.rot ?? 360)) * (Math.PI / 180);
+  const sv = Math.max(0, Math.min(1, set.sizeVar ?? 0.3));
+  // rotación fija respecto de la pista: 0° = de frente al auto que viene (el frente del elemento es su -Y local),
+  // con un giro propio para cada lado de la pista
+  let fixedYaw = null;
+  if (set.rotMode === 'fixed') {
+    const g = new SpatialGrid(20);
+    layout.routes.forEach((r) => { for (let i = 0; i < r.n; i += 2) g.insert(r.x[i], r.y[i], { r, i }); });
+    const all = [];
+    layout.routes.forEach((r) => { for (let i = 0; i < r.n; i += 4) all.push({ r, i }); });
+    const dL = ((set.rotLeft ?? 0) * Math.PI) / 180, dR = ((set.rotRight ?? 0) * Math.PI) / 180;
+    fixedYaw = (x, y) => {
+      let best = null, bd = Infinity;
+      g.query(x, y, 120, (q) => { const d = (q.r.x[q.i] - x) ** 2 + (q.r.y[q.i] - y) ** 2; if (d < bd) { bd = d; best = q; } });
+      if (!best) for (const q of all) { const d = (q.r.x[q.i] - x) ** 2 + (q.r.y[q.i] - y) ** 2; if (d < bd) { bd = d; best = q; } }
+      const { r, i } = best, tx = r.tx[i], ty = r.ty[i];
+      const left = (x - r.x[i]) * -ty + (y - r.y[i]) * tx >= 0;
+      return Math.atan2(-tx, ty) + (left ? dL : dR);
+    };
+  }
+  return pts.map((p) => {
+    const rr = rand();
+    return { x: p.x, y: p.y, z: p.z, up: p.up, yaw: fixedYaw ? fixedYaw(p.x, p.y) : (rr - 0.5) * rot, s: 1 + (rand() * 2 - 1) * sv, pick: rand() };
+  });
 }
 
 /** Base ortonormal (A, B) perpendicular a U. */
@@ -819,7 +1213,9 @@ export function buildTrees(layout, elev, spIn = {}, ground = null) {
     // se hunde lo necesario para que el borde de la base no flote en pendiente
     const sink = 0.3 + Math.min(0.6 * h, rad * p.slope);
     const base = [p.x - p.up[0] * sink, p.y - p.up[1] * sink, p.z - p.up[2] * sink];
-    return { x: p.x, y: p.y, z: p.z, base: base[2], basePos: base, up: p.up, h, r: rad, where: p.where };
+    // rotación aleatoria sobre su eje y sección levemente ovalada: cada árbol se ve distinto
+    const yaw = rand() * Math.PI * 2, ex = 0.86 + 0.28 * rand(), ey = 0.86 + 0.28 * rand();
+    return { x: p.x, y: p.y, z: p.z, base: base[2], basePos: base, up: p.up, h, r: rad, yaw, ex, ey, where: p.where };
   });
   // malla combinada de conos (8 lados + base)
   const seg = 8;
@@ -831,7 +1227,10 @@ export function buildTrees(layout, elev, spIn = {}, ground = null) {
     const [A, B] = basis(t.up);
     const [bx, by, bz] = t.basePos;
     for (let k2 = 0; k2 < seg; k2++) {
-      const a = (k2 / seg) * Math.PI * 2, c = Math.cos(a) * t.r, sn = Math.sin(a) * t.r;
+      const a = (k2 / seg) * Math.PI * 2;
+      const lx = Math.cos(a) * t.r * t.ex, ly = Math.sin(a) * t.r * t.ey; // local, antes del giro
+      const cy = Math.cos(t.yaw), sy = Math.sin(t.yaw);
+      const c = lx * cy - ly * sy, sn = lx * sy + ly * cy;
       pos[v * 3] = bx + A[0] * c + B[0] * sn; pos[v * 3 + 1] = by + A[1] * c + B[1] * sn; pos[v * 3 + 2] = bz + A[2] * c + B[2] * sn; v++;
     }
     pos[v * 3] = bx + t.up[0] * t.h; pos[v * 3 + 1] = by + t.up[1] * t.h; pos[v * 3 + 2] = bz + t.up[2] * t.h; const apex = v++;
@@ -859,6 +1258,7 @@ export function buildGrass(layout, elev, spIn = {}, ground = null) {
   const n = pts.length;
   const pos = new Float32Array(n * 8 * 3), nor = new Float32Array(n * 8 * 3), uv = new Float32Array(n * 8 * 2);
   const idx = new Uint32Array(n * 12);
+  const insts = [];
   let v = 0, q = 0;
   for (const p of pts) {
     const w = 1.3 * sp.grassScale * (0.75 + 0.5 * rand());
@@ -870,6 +1270,7 @@ export function buildGrass(layout, elev, spIn = {}, ground = null) {
     const B = [-A0[0] * sn + B0[0] * c, -A0[1] * sn + B0[1] * c, -A0[2] * sn + B0[2] * c];
     const sink = 0.05 + Math.min(0.4 * h, (w / 2) * p.slope);
     const bx = p.x - p.up[0] * sink, by = p.y - p.up[1] * sink, bz = p.z - p.up[2] * sink;
+    insts.push({ x: p.x, y: p.y, z: p.z - 0.03, up: p.up, yaw, w, h }); // para reemplazar por modelos
     for (const D of [A, B]) {
       const base = v;
       const corners = [[-0.5, 0, 0, 0], [0.5, 0, 1, 0], [0.5, 1, 1, 1], [-0.5, 1, 0, 1]];
@@ -885,7 +1286,7 @@ export function buildGrass(layout, elev, spIn = {}, ground = null) {
       idx[q++] = base; idx[q++] = base + 2; idx[q++] = base + 3;
     }
   }
-  return { positions: pos, normals: nor, uvs: uv, indices: idx, count: n, tris: n * 4 };
+  return { positions: pos, normals: nor, uvs: uv, indices: idx, count: n, tris: n * 4, insts };
 }
 
 /**

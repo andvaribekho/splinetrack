@@ -2,8 +2,11 @@
 // glTF usa Y arriba: se rota la raíz para que Blender / 3ds Max la importen con Z arriba y en metros.
 import * as THREE from 'three';
 import { GLTFExporter } from '../vendor/exporters/GLTFExporter.js';
-import { buildTrackMesh, buildTerrain, buildTrees, buildHills, buildStartGate, buildGrass, makeGround, bridgePillars } from './scene.js';
+import { buildTrackMesh, coveredRanges, terrainTint, buildTerrain, buildTrees, buildHills, buildStartGate, buildGrass, makeGround, bridgePillars } from './scene.js';
 import { pillarGeometry } from './tunnels.js';
+import { buildEdgeMeshes } from './edges.js';
+import { assetObject, builtinAsset } from './assets.js';
+import { decoSetItems, treeModelItems, grassModelItems } from './deco.js';
 import { makeBannerCanvas, makeCheckerCanvas, makeGrassCanvas, makePadCanvas, makeGlowCanvas } from './gatetex.js';
 
 function tex(canvas) {
@@ -46,21 +49,28 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
   root.name = 'TrackSplineGenerator';
   if (yUp) root.rotation.x = -Math.PI / 2; // Z arriba -> Y arriba
   scene.add(root);
-  // pista: un mesh independiente por ruta
-  const tm = buildTrackMesh(layout, elev, { ...sp, skirts: sp.terrain && sp.skirts });
-  const trackTex = tex(textures.track);
-  const trackMat = new THREE.MeshStandardMaterial({ name: 'pista', color: trackTex ? 0xffffff : 0x55585e, map: trackTex, roughness: 0.9, metalness: 0, side: THREE.DoubleSide });
+  // pista: un mesh independiente por ruta (se llena después de conocer los túneles, por los tramos cubiertos)
   const trackGroup = new THREE.Group();
   trackGroup.name = 'pista';
   root.add(trackGroup);
-  for (const p of tm.parts) trackGroup.add(mesh(p.name, p.positions, p.indices, p.uvs, trackMat));
+  let tm = null, covAll = [];
   let terrain = null, HS = null;
   const tt = tex(textures.terrain);
   if (sp.terrain || (hills && hills.length)) {
     terrain = buildTerrain(layout, elev, sp, paint);
     if (sp.terrain) {
-      root.add(mesh('terreno', terrain.positions, terrain.indices, terrain.uvs,
-        new THREE.MeshStandardMaterial({ name: 'terreno', color: tt ? 0xffffff : 0x4f7d3a, map: tt, roughness: 1, metalness: 0 })));
+      const cols = terrainTint(terrain, !!tt);
+      const tm = mesh('terreno', terrain.positions, terrain.indices, terrain.uvs,
+        new THREE.MeshStandardMaterial({ name: 'terreno', color: tt || cols ? 0xffffff : 0x4f7d3a, map: tt, roughness: 1, metalness: 0, vertexColors: !!cols }));
+      if (cols) tm.geometry.setAttribute('color', new THREE.BufferAttribute(cols, 3)); // pasto, arena y roca
+      root.add(tm);
+      // agua (playa / montaña): plano al nivel del mar
+      if (terrain.waterLevel != null) {
+        const b = terrain.bounds, mg = 400;
+        const x0 = b.minX - mg, x1 = b.maxX + mg, y0 = b.minY - mg, y1 = b.maxY + mg, z = terrain.waterLevel;
+        root.add(mesh('agua', new Float32Array([x0, y0, z, x1, y0, z, x1, y1, z, x0, y1, z]), [0, 1, 2, 0, 2, 3], new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]),
+          new THREE.MeshStandardMaterial({ name: 'agua', color: 0x2c7fc0, roughness: 0.15, metalness: 0.1, transparent: true, opacity: 0.85 })));
+      }
     }
     HS = buildHills(layout, elev, sp, terrain, hills);
     // cerros: un objeto por cerro
@@ -73,12 +83,15 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
     }
     // túneles: paredes, techo, veredas, bocas, estalactitas, rocas y cada pilar como objetos propios
     if (HS.tunnelGeo.length) {
-      const natural = sp.tunnelType === 'natural';
       const M = (name, color, extra = {}) => new THREE.MeshStandardMaterial({ name, color, roughness: 0.95, metalness: 0, side: THREE.DoubleSide, ...extra });
-      const wallMat = M('tunel_paredes', natural ? 0x6f6259 : 0x9a9da3, { flatShading: natural });
-      const ceilMat = M('tunel_techo', natural ? 0x5d5249 : 0x7e8288, { flatShading: natural });
+      // materiales por tipo (cada túnel puede ser artificial o natural)
+      const byType = {};
+      const matsFor = (natural) => byType[natural] || (byType[natural] = {
+        wall: M(natural ? 'tunel_paredes_natural' : 'tunel_paredes', natural ? 0x6f6259 : 0x9a9da3, { flatShading: natural }),
+        ceil: M(natural ? 'tunel_techo_natural' : 'tunel_techo', natural ? 0x5d5249 : 0x7e8288, { flatShading: natural }),
+        portal: M(natural ? 'tunel_boca_natural' : 'tunel_boca', natural ? 0x857566 : 0xb9bcc2, { flatShading: natural }),
+      });
       const walkMat = M('tunel_veredas', 0x8a8a84);
-      const portalMat = M('tunel_boca', natural ? 0x857566 : 0xb9bcc2, { flatShading: natural });
       const rockMat = M('roca', 0x5c5049, { flatShading: true });
       const pillarMat = new THREE.MeshStandardMaterial({ name: 'pilar', color: 0x8d9097, roughness: 0.85 });
       const tg = new THREE.Group();
@@ -89,10 +102,11 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
         grp.name = t.name;
         tg.add(grp);
         const put = (suffix, geo, mat) => { if (geo.indices.length) grp.add(mesh(`${t.name}_${suffix}`, geo.positions, geo.indices, geo.uvs || null, mat)); };
-        put('paredes', t.walls, wallMat);
-        put('techo', t.ceiling, ceilMat);
+        const tm = matsFor(!!t.natural);
+        put('paredes', t.walls, tm.wall);
+        put('techo', t.ceiling, tm.ceil);
         put('veredas', t.walkways, walkMat);
-        for (const pt of t.portals) put(pt.suffix, pt.geo, portalMat);
+        for (const pt of t.portals) put(pt.suffix, pt.geo, tm.portal);
         put('estalactitas', t.stalactites, rockMat);
         put('rocas', t.rocks, rockMat);
         t.pillars.forEach((pl, i) => {
@@ -103,6 +117,18 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
         });
       }
     }
+  }
+  // pista: rutas (pista / atajos) y tramos cubiertos (túneles y bajo cruces) con materiales propios
+  {
+    const cov = coveredRanges(layout, elev, HS ? HS.tunnels.map((t) => ({ k: t.k, s0: t.s0, s1: t.s1 })) : []);
+    covAll = cov;
+    tm = buildTrackMesh(layout, elev, { ...sp, skirts: sp.terrain && sp.skirts, coveredRanges: cov });
+    const M = (name, t, fallback) => new THREE.MeshStandardMaterial({ name, color: t ? 0xffffff : fallback, map: t, roughness: 0.9, metalness: 0, side: THREE.DoubleSide });
+    const trackMat = M('pista', tex(textures.track), 0x55585e);
+    const altMat = M('pista_atajo', tex(textures.alt || textures.track), 0x55585e);
+    const covMat = M('pista_cubierta', tex(textures.covered || textures.track), 0x44464b);
+    for (const p of tm.parts) if (p.indices.length) trackGroup.add(mesh(p.name, p.positions, p.indices, p.uvs, p.alt ? altMat : trackMat));
+    for (const p of tm.coveredParts) trackGroup.add(mesh(p.name, p.positions, p.indices, p.uvs, covMat));
   }
   // puentes creados a mano: tablero (textura propia, café por defecto) y un objeto por pilar, pivote en la base
   {
@@ -130,6 +156,21 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
       }
     }
   }
+  // bordes de la pista: camino de tierra y barreras (extruidos de las secciones de la pista, también en los túneles)
+  {
+    const B = buildEdgeMeshes(layout, elev, { ...sp, coveredRanges: covAll }); // también dentro de los túneles (mismas secciones que la pista)
+    if (B.dirt.length || B.barriers.length) {
+      const grp = new THREE.Group();
+      grp.name = 'bordes';
+      root.add(grp);
+      const DM = (name, t) => new THREE.MeshStandardMaterial({ name, color: t ? 0xffffff : 0xc9a877, map: t, roughness: 1, metalness: 0 });
+      const BM = (name, t) => new THREE.MeshStandardMaterial({ name, color: t ? 0xffffff : 0xd42a2a, map: t, roughness: 0.6, metalness: 0.1 });
+      const dirtMat = DM('camino_tierra', tex(textures.dirt)), barMat = BM('barrera', tex(textures.barrier));
+      const dirtAlt = DM('camino_tierra_atajo', tex(textures.altDirt || textures.dirt)), barAlt = BM('barrera_atajo', tex(textures.altBarrier || textures.barrier));
+      for (const m of B.dirt) grp.add(mesh(m.name, m.positions, m.indices, m.uvs, m.alt ? dirtAlt : dirtMat));
+      for (const m of B.barriers) grp.add(mesh(m.name, m.positions, m.indices, m.uvs, m.alt ? barAlt : barMat));
+    }
+  }
   // pórtico de salida: pivote en la base, al centro de la calzada
   let gateTris = 0;
   if (sp.startGate) {
@@ -148,10 +189,21 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
   // árboles: un objeto por árbol, con el pivote en el centro de la base
   let treeCount = 0;
   const ground = makeGround(terrain, HS);
+  // decoración (textures.deco = {assetById, sets, paintFor}): modelos de la biblioteca para árboles, hierba y sets
+  const DC = textures.deco || null;
+  const byId = (id) => (DC && DC.assetById ? DC.assetById(id) : null);
+  const hasAsset = (id) => !!byId(id);
+  const putItems = (grp, items, prefix) => items.forEach((it, i) => { const A = byId(it.asset); if (A) grp.add(assetObject(A, it, `${prefix}_${String(i + 1).padStart(4, '0')}`)); });
   if (sp.trees) {
     const tr = buildTrees(layout, elev, sp, ground);
     treeCount = tr.count;
-    if (tr.count) {
+    const tItems = treeModelItems(tr.trees, sp.treeAssets, hasAsset);
+    if (tItems) { // árboles con modelos: un objeto por árbol, pivote del modelo
+      const grp = new THREE.Group();
+      grp.name = 'arboles';
+      root.add(grp);
+      putItems(grp, tItems, 'arbol');
+    } else if (tr.count) {
       const grp = new THREE.Group();
       grp.name = 'arboles';
       root.add(grp);
@@ -160,13 +212,13 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
       tr.trees.forEach((t, i) => {
         // geometría propia con escala 1: el origen del objeto es el centro de la base del cono
         const g = geo.clone();
-        g.scale(t.r, t.r, t.h);
+        g.scale(t.r * (t.ex || 1), t.r * (t.ey || 1), t.h);
         g.computeVertexNormals();
         const m = new THREE.Mesh(g, mat);
         m.name = `arbol_${String(i + 1).padStart(4, '0')}`;
         m.position.set(...t.basePos);
-        // inclinación según el suelo: rotación del objeto (la geometría queda recta en su espacio local)
-        m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3(...t.up));
+        // inclinación según el suelo y giro aleatorio sobre su eje: rotación del objeto (geometría recta en su espacio local)
+        m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3(...t.up)).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), t.yaw || 0));
         grp.add(m);
       });
     }
@@ -214,7 +266,13 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
   if (sp.grass) {
     const gr = buildGrass(layout, elev, sp, ground);
     grassCount = gr.count;
-    if (gr.count) {
+    const gItems = grassModelItems(gr.insts, sp.grassAssets, hasAsset);
+    if (gItems) {
+      const grp = new THREE.Group();
+      grp.name = 'hierba';
+      root.add(grp);
+      putItems(grp, gItems, 'hierba');
+    } else if (gr.count) {
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.BufferAttribute(gr.positions, 3));
       g.setAttribute('normal', new THREE.BufferAttribute(gr.normals, 3));
@@ -226,7 +284,26 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
       root.add(m);
     }
   }
-  return { scene, root, info: { trackTris: tm.indices.length / 3, terrainTris: terrain && sp.terrain ? terrain.tris : 0, hills: HS ? HS.hills.length : 0, hillTris: HS ? HS.tris : 0, tunnels: HS ? HS.tunnelGeo.length : 0, gateTris, trees: treeCount, treeTris: treeCount * 16, grass: grassCount, items: itemCount } };
+  // sets de decoración: decoracion/<set>/<set>_0001… (cubos de color o modelos), pivote en la base
+  let decoCount = 0;
+  if (DC && DC.sets && DC.sets.length) {
+    const res = decoSetItems(layout, elev, sp, ground, DC.sets, DC.paintFor, hasAsset);
+    const dg = new THREE.Group();
+    dg.name = 'decoracion';
+    for (const { set, items } of res) {
+      if (!items.length) continue;
+      const sg = new THREE.Group();
+      sg.name = set.name;
+      dg.add(sg);
+      items.forEach((it, i) => {
+        const A = builtinAsset(it.asset) || byId(it.asset);
+        if (A) sg.add(assetObject(A, it, `${set.name}_${String(i + 1).padStart(4, '0')}`));
+      });
+      decoCount += items.length;
+    }
+    if (dg.children.length) root.add(dg);
+  }
+  return { scene, root, info: { decoCount, trackTris: tm.indices.length / 3, terrainTris: terrain && sp.terrain ? terrain.tris : 0, hills: HS ? HS.hills.length : 0, hillTris: HS ? HS.tris : 0, tunnels: HS ? HS.tunnelGeo.length : 0, gateTris, trees: treeCount, treeTris: treeCount * 16, grass: grassCount, items: itemCount } };
 }
 
 export async function exportGLB(...args) {

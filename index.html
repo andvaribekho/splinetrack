@@ -17,6 +17,7 @@
       <button id="btnNew" title="Empezar de cero">Nuevo</button>
       <button id="btnOpen" title="Abrir proyecto .tsg.json">Abrir</button>
       <button id="btnSave" title="Guardar proyecto .tsg.json">Guardar</button>
+      <button id="btnRef3dTop" title="Importar un FBX o GLB de referencia para comparar (se mueve, no se edita)">Ref. 3D…</button>
       <input id="fileProject" type="file" accept=".json,application/json" multiple hidden>
       <span class="sep"></span>
       <button id="btnUndo" title="Deshacer (Ctrl+Z)">Deshacer</button>
@@ -76,6 +77,26 @@
           <label class="check"><input type="checkbox" id="refAbove"> Encima de la pista</label>
         </div>
         <p class="hint">Herramienta «Referencia»: arrastra la imagen para moverla y su esquina lila para escalarla. No se traza.</p>
+      </section>
+
+      <section class="panel" data-panel="ref3d">
+        <h2>Modelo de referencia 3D</h2>
+        <div class="row gap"><button id="btnRef3d">Importar FBX / GLB…</button><button id="btnRef3dRemove" disabled>Quitar</button></div>
+        <input id="fileRef3d" type="file" accept=".fbx,.glb,.gltf" hidden>
+        <p class="hint" id="ref3dInfo"></p>
+        <div id="ref3dBox" hidden>
+          <div class="row gap wrap"><label class="check"><input type="checkbox" id="ref3dVisible"> Visible</label><label class="check"><input type="checkbox" id="ref3dShow2d"> Silueta en el mapa</label><label class="check"><input type="checkbox" id="ref3dLocked"> Bloquear</label></div>
+          <div class="row gap wrap"><button id="btnRef3dSelect">Seleccionar y mover</button><button id="btnRef3dCenter">Centrar en la pista</button><button id="btnRef3dReset">Posición del archivo</button></div>
+          <div class="field"><label>Gizmo en la vista 3D</label><select id="ref3dGizmo"><option value="translate">Mover (X, Y, Z)</option><option value="rotate">Girar (eje Z)</option></select></div>
+          <div class="field"><label>Posición (m)</label><div class="row gap"><label class="small">X <input type="number" id="ref3dX" step="0.5" style="width:74px"></label><label class="small">Y <input type="number" id="ref3dY" step="0.5" style="width:74px"></label><label class="small">Z <input type="number" id="ref3dZ" step="0.1" style="width:64px"></label></div></div>
+          <div class="field"><label>Giro <span class="val"><input type="number" id="ref3dRotNum" step="1" style="width:60px"> °</span></label><input type="range" id="ref3dRot" min="-180" max="180" step="0.5"></div>
+          <div class="field"><label>Escala <span class="val"><input type="number" id="ref3dScale" step="0.01" min="0.0001" style="width:74px"></span></label></div>
+          <div class="field"><label>Unidades del archivo</label><select id="ref3dUnit"><option value="auto">Automático</option><option value="1">Metros</option><option value="0.01">Centímetros</option><option value="0.001">Milímetros</option><option value="0.0254">Pulgadas</option><option value="0.3048">Pies</option></select></div>
+          <div class="field"><label>Eje arriba del archivo</label><select id="ref3dUp"><option value="auto">Automático</option><option value="y">Y arriba</option><option value="z">Z arriba</option></select></div>
+          <div class="field"><label>Aspecto</label><div class="row gap"><select id="ref3dLook"><option value="flat">Color plano</option><option value="original">Materiales originales</option><option value="wire">Wireframe</option></select><input type="color" id="ref3dColor"></div></div>
+          <div class="field"><label>Opacidad <span class="val" id="ref3dOpacityVal"></span></label><input type="range" id="ref3dOpacity" min="0.05" max="1" step="0.01"></div>
+          <p class="hint">Se importa como un solo objeto aunque el archivo tenga varias partes y jerarquía. Se puede mover y girar (gizmo en 3D, arrastrando la silueta en el mapa con «Navegar» o con los números), pero no editar. No se exporta.</p>
+        </div>
       </section>
 
       <section class="panel" data-panel="trace">
@@ -208,6 +229,21 @@
         <div class="field"><label>Repeticiones a lo largo <span class="val"><input type="number" id="trackTexRepsNum" min="1" step="1" style="width:72px"></span></label><input type="range" id="trackTexReps" min="1" max="1000" step="1"></div>
         <div class="field"><label>Opacidad de la textura (vistas 2D y 3D) <span class="val" id="trackTexOpacityVal"></span></label><input type="range" id="trackTexOpacity" min="0" max="1" step="0.01"></div>
         <p class="hint" id="trackTexInfo"></p>
+        <h3 id="altTexHead">Textura de los atajos</h3>
+        <div class="row gap">
+          <button id="btnAltTex">Cargar textura…</button>
+          <button id="btnAltTexRemove" disabled>Como la pista</button>
+          <img id="altTexThumb" class="thumb" hidden alt="">
+        </div>
+        <input id="fileAltTex" type="file" accept="image/*" hidden>
+        <h3 id="coveredTexHead">Textura de tramos cubiertos (túneles y bajo cruces)</h3>
+        <div class="row gap">
+          <button id="btnCoveredTex">Cargar textura…</button>
+          <button id="btnCoveredTexRemove" disabled>Por defecto</button>
+          <img id="coveredTexThumb" class="thumb" hidden alt="">
+        </div>
+        <input id="fileCoveredTex" type="file" accept="image/*" hidden>
+        <p class="hint">Por defecto, la textura de la pista un 20 % más oscura. Se exportan como <code>&lt;ruta&gt;_cubierto</code> con el material <code>pista_cubierta</code>; los atajos usan <code>pista_atajo</code>.</p>
         <h3 id="bridgeTexHead">Textura de los puentes</h3>
         <div class="row gap">
           <button id="btnBridgeTex">Cargar textura…</button>
@@ -231,9 +267,73 @@
         <p class="hint" id="trackMeshInfo"></p>
       </section>
 
+      <section class="panel" data-panel="edges">
+        <h2>Bordes de la pista</h2>
+        <p class="hint">El camino de tierra y la barrera se extruyen de la malla de la pista: heredan su densidad y su optimización, y la textura sigue la distancia recorrida. Se abren solos donde entra o sale un atajo; dentro de los túneles siguen, y la pared del túnel queda después de la barrera.</p>
+        <h3 class="subhead" id="dirtHead">Camino de tierra</h3>
+        <div class="field"><label>Lado</label><select id="dirtSide"><option value="none">Sin camino de tierra</option><option value="left">Izquierda</option><option value="right">Derecha</option><option value="both">Ambos lados</option></select></div>
+        <div id="dirtBox">
+          <div class="field"><label>Ancho <span class="val"><input type="number" id="dirtWidthNum" min="0.2" step="0.1" style="width:60px"> m</span></label><input type="range" id="dirtWidth" min="0.5" max="15" step="0.1"></div>
+          <div class="field"><label>Repetición de la textura (a lo largo) <span class="val"><input type="number" id="dirtTileNum" min="0.5" step="0.5" style="width:56px"> m</span></label><input type="range" id="dirtTile" min="0.5" max="30" step="0.5"></div>
+          <div class="row gap"><button id="btnDirtTex">Cargar textura…</button><button id="btnDirtTexRemove" disabled>Por defecto</button><img id="dirtTexThumb" class="thumb" hidden alt=""></div>
+          <input id="fileDirtTex" type="file" accept="image/*" hidden>
+        </div>
+        <h3 class="subhead" id="barrierHead">Barrera de contención</h3>
+        <div class="field"><label>Lado</label><select id="barrierSide"><option value="none">Sin barrera</option><option value="left">Izquierda</option><option value="right">Derecha</option><option value="both">Ambos lados</option></select></div>
+        <div id="barrierBox">
+          <div class="field"><label>Altura <span class="val"><input type="number" id="barrierHeightNum" min="0.1" step="0.05" style="width:60px"> m</span></label><input type="range" id="barrierHeight" min="0.2" max="3" step="0.05"></div>
+          <div class="field"><label>Grosor <span class="val"><input type="number" id="barrierThickNum" min="0.05" step="0.05" style="width:60px"> m</span></label><input type="range" id="barrierThick" min="0.05" max="1.5" step="0.05"></div>
+          <div class="field"><label>Tiling: largo de cada repetición <span class="val"><input type="number" id="barrierTileNum" min="0.5" step="0.5" style="width:56px"> m</span></label><input type="range" id="barrierTile" min="0.5" max="20" step="0.5"></div>
+          <div class="row gap"><button id="btnBarrierTex">Cargar textura…</button><button id="btnBarrierTexRemove" disabled>Por defecto</button><img id="barrierTexThumb" class="thumb" hidden alt=""></div>
+          <input id="fileBarrierTex" type="file" accept="image/*" hidden>
+        </div>
+        <div class="collapsible" id="altEdgesBlock">
+        <div class="coll-head" title="Clic para mostrar u ocultar"><span class="coll-arrow">▾</span><h3 class="subhead">Atajos (parámetros propios)</h3></div>
+        <div class="coll-body">
+        <h3 class="subhead" id="altDirtHead">Camino de tierra de los atajos</h3>
+        <div class="field"><label>Lado</label><select id="altDirtSide"><option value="none">Sin camino de tierra</option><option value="left">Izquierda</option><option value="right">Derecha</option><option value="both">Ambos lados</option></select></div>
+        <div id="altDirtBox">
+          <div class="field"><label>Ancho <span class="val"><input type="number" id="altDirtWidthNum" min="0.2" step="0.1" style="width:60px"> m</span></label><input type="range" id="altDirtWidth" min="0.5" max="15" step="0.1"></div>
+          <div class="field"><label>Repetición de la textura (a lo largo) <span class="val"><input type="number" id="altDirtTileNum" min="0.5" step="0.5" style="width:56px"> m</span></label><input type="range" id="altDirtTile" min="0.5" max="30" step="0.5"></div>
+          <div class="row gap"><button id="btnAltDirtTex">Cargar textura…</button><button id="btnAltDirtTexRemove" disabled>Por defecto</button><img id="altDirtTexThumb" class="thumb" hidden alt=""></div>
+          <input id="fileAltDirtTex" type="file" accept="image/*" hidden>
+        </div>
+        <h3 class="subhead" id="altBarrierHead">Barrera de los atajos</h3>
+        <div class="field"><label>Lado</label><select id="altBarrierSide"><option value="none">Sin barrera</option><option value="left">Izquierda</option><option value="right">Derecha</option><option value="both">Ambos lados</option></select></div>
+        <div id="altBarrierBox">
+          <div class="field"><label>Altura <span class="val"><input type="number" id="altBarrierHeightNum" min="0.1" step="0.05" style="width:60px"> m</span></label><input type="range" id="altBarrierHeight" min="0.2" max="3" step="0.05"></div>
+          <div class="field"><label>Grosor <span class="val"><input type="number" id="altBarrierThickNum" min="0.05" step="0.05" style="width:60px"> m</span></label><input type="range" id="altBarrierThick" min="0.05" max="1.5" step="0.05"></div>
+          <div class="field"><label>Tiling: largo de cada repetición <span class="val"><input type="number" id="altBarrierTileNum" min="0.5" step="0.5" style="width:56px"> m</span></label><input type="range" id="altBarrierTile" min="0.5" max="20" step="0.5"></div>
+          <div class="row gap"><button id="btnAltBarrierTex">Cargar textura…</button><button id="btnAltBarrierTexRemove" disabled>Por defecto</button><img id="altBarrierTexThumb" class="thumb" hidden alt=""></div>
+          <input id="fileAltBarrierTex" type="file" accept="image/*" hidden>
+        </div>
+        </div></div>
+        <p class="hint" id="edgesInfo"></p>
+      </section>
+
       <section class="panel" data-panel="terrain">
         <h2>Terreno</h2>
         <label class="check"><input type="checkbox" id="terrain"> Agregar terreno bajo la pista</label>
+        <div class="field"><label>Tipo de terreno</label>
+          <div class="seg" id="terrainType" role="group" aria-label="Tipo de terreno">
+            <button data-type="forest" title="Terreno normal alrededor de la pista">Bosque</button>
+            <button data-type="beach" title="Costa irregular que baja como playa hasta el agua">Playa</button>
+            <button data-type="mountain" title="Acantilado a un costado y pared de roca al otro">Montaña</button>
+          </div></div>
+        <div id="beachBox" hidden>
+          <div class="field"><label>Costa</label><select id="coastSide"><option value="right">A la derecha</option><option value="left">A la izquierda</option><option value="both">A ambos lados</option></select></div>
+        </div>
+        <div id="mountainBox" hidden>
+          <div class="field"><label>Acantilado</label><select id="cliffSide"><option value="left">A la izquierda (pared de roca a la derecha)</option><option value="right">A la derecha (pared de roca a la izquierda)</option></select></div>
+          <div class="field"><label>Altura del acantilado <span class="val"><input type="number" id="cliffHeightNum" min="2" step="1" style="width:56px"> m</span></label><input type="range" id="cliffHeight" min="4" max="120" step="1"></div>
+          <div class="field"><label>Altura de la pared de roca <span class="val"><input type="number" id="wallHeightNum" min="1" step="1" style="width:56px"> m</span></label><input type="range" id="wallHeight" min="3" max="100" step="1"></div>
+        </div>
+        <div id="coastCommonBox" hidden>
+          <div class="field"><label>Tierra antes de la costa <span class="val"><input type="number" id="coastLandNum" min="0" step="1" style="width:56px"> m</span></label><input type="range" id="coastLand" min="0" max="120" step="1"></div>
+          <div class="field" id="coastBeachBox"><label>Largo de la playa <span class="val"><input type="number" id="coastBeachNum" min="1" step="1" style="width:56px"> m</span></label><input type="range" id="coastBeach" min="3" max="150" step="1"></div>
+          <div class="field" id="coastHeightBox"><label>Altura de la pista sobre el agua <span class="val"><input type="number" id="coastHeightNum" min="0.5" step="0.5" style="width:56px"> m</span></label><input type="range" id="coastHeight" min="0.5" max="30" step="0.5"></div>
+          <p class="hint" id="terrainTypeInfo"></p>
+        </div>
         <div class="field"><label>Densidad del mesh <span class="val" id="terrainDensityVal"></span></label><input type="range" id="terrainDensity" min="1" max="100" step="1"></div>
         <div class="field"><label>Máximo de polígonos</label><input type="number" id="terrainMaxPolys" min="500" step="1000"></div>
         <div class="field"><label>Margen alrededor de la pista <span class="val" id="terrainMarginVal"></span></label><input type="range" id="terrainMargin" min="20" max="400" step="5"></div>
@@ -242,6 +342,12 @@
         <div class="field"><label>Multiplicador en zonas pintadas <span class="val" id="paintFactorVal"></span></label><input type="range" id="paintFactor" min="1" max="25" step="0.5"></div>
         <div class="row gap"><button id="btnPaintTool" title="Activa la herramienta «Pintar densidad» en el mapa">Pintar densidad…</button><button id="btnPaintClear" title="Borra todas las zonas pintadas">Borrar pintura</button></div>
         <label class="check"><input type="checkbox" id="skirts"> Faldones laterales en la pista</label>
+        <h3 class="subhead" id="sculptHead">Relieve esculpido</h3>
+        <div class="row gap"><button id="btnSculptTool" title="Activa «Esculpir relieve» (en el mapa o en la vista 3D): clic derecho eleva, clic izquierdo hunde">Esculpir relieve…</button><button id="btnSculptClear" title="Quita todo el relieve esculpido">Borrar relieve</button></div>
+        <div class="field"><label>Tamaño del pincel <span class="val" id="sculptBrushPVal"></span></label><input type="range" id="sculptBrushP" min="2" max="200" step="1"></div>
+        <div class="field"><label>Fuerza por toque <span class="val" id="sculptStrengthPVal"></span></label><input type="range" id="sculptStrengthP" min="0.1" max="10" step="0.1"></div>
+        <label class="check"><input type="checkbox" id="sculptDetail"> Más detalle en lo esculpido</label>
+        <p class="hint" id="sculptInfo"></p>
         <h3 class="subhead" id="terrainTexHead">Textura del terreno</h3>
         <div class="row gap">
           <button id="btnTerrainTex">Cargar textura…</button>
@@ -277,7 +383,7 @@
         </div>
         <h3 class="subhead">Túneles</h3>
         <div class="field">
-          <label>Forma del túnel</label>
+          <label>Forma del túnel (general)</label>
           <select id="tunnelShape">
             <option value="rounded">Cuadrado con esquinas redondeadas</option>
             <option value="square">Cuadrado</option>
@@ -287,9 +393,17 @@
         </div>
         <div class="field"><label>Ancho del túnel <span class="val"><input type="number" id="tunnelWidthNum" min="4" step="0.5" style="width:66px"> m</span></label><input type="range" id="tunnelWidth" min="6" max="40" step="0.5"></div>
         <div class="field"><label>Altura libre <span class="val" id="tunnelHeightVal"></span></label><input type="range" id="tunnelHeight" min="4" max="20" step="0.5"></div>
+        <div class="seg" id="tunnelMeshMode" role="group" aria-label="Reparto de la geometría de los túneles">
+          <button data-mode="uniform" title="Secciones a distancia pareja">Uniforme</button>
+          <button data-mode="optimized" title="Más secciones en curvas, cambios de pendiente y peralte; menos en las rectas">Optimizado</button>
+        </div>
         <div class="field"><label>Densidad de polígonos <span class="val" id="tunnelDensityVal"></span></label><input type="range" id="tunnelDensity" min="1" max="100" step="1"></div>
+        <div class="field"><label>Máximo de triángulos por túnel <span class="val"><input type="number" id="tunnelMaxTrisNum" min="100" step="500" style="width:80px"></span></label><input type="range" id="tunnelMaxTris" min="500" max="150000" step="500"></div>
+        <div class="field" id="tunnelAdaptBox"><label>Optimización <span class="val" id="tunnelAdaptVal"></span></label><input type="range" id="tunnelAdapt" min="0" max="1" step="0.01">
+          <div class="range-ends"><span>mínimo: curvas con algo más</span><span>máximo: rectas con mucho menos</span></div></div>
+        <p class="hint">Forma, tipo, costado abierto, pilares y geometría son los valores generales: selecciona un túnel (clic en 3D o en su nombre) para darle los suyos.</p>
         <div class="field">
-          <label>Tipo</label>
+          <label>Tipo (general)</label>
           <select id="tunnelType">
             <option value="artificial">Artificial (sección regular)</option>
             <option value="natural">Natural (caverna)</option>
@@ -354,6 +468,9 @@
 
       <section class="panel" data-panel="trees">
         <h2>Árboles y hierba</h2>
+        <div class="collapsible" id="treesBlock">
+        <div class="coll-head" title="Clic para mostrar u ocultar"><span class="coll-arrow">▾</span><h3 class="subhead">Árboles</h3></div>
+        <div class="coll-body">
         <label class="check"><input type="checkbox" id="trees"> Agregar árboles (conos)</label>
         <div class="field">
           <label>Lado</label>
@@ -373,8 +490,12 @@
         </div>
         <div class="field" id="treeHillBox"><label>Densidad en cerros (por 1000 m²) <span class="val" id="treeHillDensityVal"></span></label><input type="range" id="treeHillDensity" min="0" max="40" step="0.5"></div>
         <div class="field"><label>Inclinación según el suelo <span class="val" id="treeTiltVal"></span></label><input type="range" id="treeTilt" min="0" max="100" step="1"></div>
+        <div class="field"><label>Modelos para los árboles <span class="val small muted">(de la biblioteca de Decoración; sin elegir = conos)</span></label><div id="treeAssetList" class="asset-chips"></div></div>
         <p class="hint" id="treesInfo"></p>
-        <h3 class="subhead">Hierba</h3>
+        </div></div>
+        <div class="collapsible" id="grassBlock">
+        <div class="coll-head" title="Clic para mostrar u ocultar"><span class="coll-arrow">▾</span><h3 class="subhead">Hierba</h3></div>
+        <div class="coll-body">
         <label class="check"><input type="checkbox" id="grass"> Agregar hierba (dos planos cruzados)</label>
         <div class="field">
           <label>Lado</label>
@@ -398,11 +519,27 @@
           <label>Textura de la hierba (PNG con transparencia)</label>
           <div class="row gap"><img id="grassTexThumb" class="thumb checker" alt=""><button id="btnGrassTex">Cargar…</button><button id="btnGrassTexRemove">Por defecto</button><input type="file" id="fileGrassTex" accept="image/png,image/webp,image/*" hidden></div>
         </div>
+        <div class="field"><label>Modelos para la hierba <span class="val small muted">(sin elegir = planos cruzados)</span></label><div id="grassAssetList" class="asset-chips"></div></div>
         <p class="hint" id="grassInfo"></p>
+        </div></div>
         <div class="field">
           <label>Semilla (árboles y hierba)</label>
           <div class="row"><input type="number" id="treeSeed" min="0" step="1"><button id="btnTreeDice">Aleatoria</button></div>
         </div>
+      </section>
+
+      <section class="panel" data-panel="deco">
+        <h2>Decoración</h2>
+        <h3 class="subhead">Biblioteca de assets</h3>
+        <p class="hint">Modelos .fbx / .glb (árboles, vegetación, rocas, lo que quieras), con su pivote en la base. Se usan para reemplazar los árboles, la hierba o los cubos de un set.</p>
+        <div class="row gap"><button id="btnAssetLoad">Cargar modelos (FBX / GLB)…</button></div>
+        <input id="fileAssets" type="file" accept=".fbx,.glb,.gltf" multiple hidden>
+        <div id="assetList" class="list"></div>
+        <h3 class="subhead">Sets de elementos decorativos</h3>
+        <p class="hint">Cada set pone cubos de su color; elige modelos de la biblioteca para reemplazarlos (si eliges varios, se reparten al azar). Clic en un elemento (vista 3D) trae su set.</p>
+        <div class="row gap"><button id="btnDecoNew">+ Nuevo set</button></div>
+        <div id="decoList" class="list"></div>
+        <p class="hint" id="decoInfo"></p>
       </section>
 
       <section class="panel" data-panel="sky">
@@ -440,6 +577,7 @@
           <button data-tool="ref" title="Mover y escalar la imagen de referencia (arrastra la imagen o su esquina)">Referencia</button>
           <button data-tool="hill" title="Pinta cerros (suaves o paredes rocosas); si cubren la pista se crea un túnel. Alt o clic derecho borra">Pintar cerros</button>
           <button data-tool="paint" title="Pinta zonas del terreno que tendrán más polígonos (Alt o clic derecho borra)">Pintar densidad</button>
+          <button data-tool="sculpt" title="Esculpe el terreno: clic derecho eleva, clic izquierdo hunde (en el mapa o en la vista 3D). [ y ] cambian el pincel">Esculpir relieve</button>
           <button data-tool="flat" title="Arrastra sobre la pista para marcar un tramo plano">Zona plana</button>
           <span class="sep"></span>
           <button id="btnGenTerrain" class="gen">Generar terreno</button>
@@ -453,12 +591,17 @@
           <label class="check small"><input type="checkbox" id="showRaw"> Trazo crudo</label>
           <span id="paintBox" class="row" hidden>
             <label class="small">Pincel <input type="range" id="paintBrush" min="3" max="200" step="1" style="width:90px"> <span class="val" id="paintBrushVal"></span></label>
-            <label class="check small"><input type="checkbox" id="paintErase"> Borrar</label>
+            <label class="check small" id="paintEraseLbl"><input type="checkbox" id="paintErase"> Borrar</label>
+          </span>
+          <span id="sculptBox" class="row" hidden>
+            <label class="small">Fuerza <input type="range" id="sculptStrength" min="0.1" max="10" step="0.1" style="width:80px"> <span class="val" id="sculptStrengthVal"></span></label>
+            <span class="small muted">clic der. eleva · clic izq. hunde</span>
           </span>
           <span id="hillBox" class="row" hidden>
             <label class="small">Altura <input type="range" id="hillHeight" min="2" max="150" step="1" style="width:90px"> <span class="val" id="hillHeightVal"></span></label>
             <select id="hillHard" style="font-size:12px"><option value="soft">Colina suave</option><option value="hard">Pared rocosa</option></select>
             <label class="small">Cima plana <input type="range" id="hillFlatBar" min="0" max="1" step="0.05" style="width:70px"></label>
+            <label class="check small" title="Un trazo que empieza sobre un cerro crea un cerro nuevo encima (también con Ctrl + arrastrar)"><input type="checkbox" id="hillStack"> Nuevo cerro encima</label>
           </span>
           <span id="editBox" class="row" hidden>
             <button id="btnTbRadius">Radio</button>

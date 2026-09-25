@@ -137,3 +137,38 @@ export function makeBridgeCanvas() {
   g.fillRect(0, 0, 10, 256); g.fillRect(246, 0, 10, 256);
   return cv;
 }
+
+/** Textura por defecto de la barrera de contención: bloques rojo y blanco a lo largo (U), con borde superior. */
+export function makeBarrierCanvas() {
+  const cv = document.createElement('canvas');
+  cv.width = 256; cv.height = 64;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#d42a2a'; g.fillRect(0, 0, 128, 64);
+  g.fillStyle = '#f2f2f2'; g.fillRect(128, 0, 128, 64);
+  // leve sombreado y franjas de borde
+  const gr = g.createLinearGradient(0, 0, 0, 64);
+  gr.addColorStop(0, 'rgba(255,255,255,0.18)'); gr.addColorStop(0.5, 'rgba(0,0,0,0)'); gr.addColorStop(1, 'rgba(0,0,0,0.22)');
+  g.fillStyle = gr; g.fillRect(0, 0, 256, 64);
+  g.fillStyle = 'rgba(0,0,0,0.25)'; g.fillRect(0, 0, 256, 3); g.fillRect(0, 61, 256, 3);
+  return cv;
+}
+
+/** Textura por defecto del camino de tierra: arena café clara con grano. */
+export function makeSandCanvas() {
+  const cv = document.createElement('canvas');
+  cv.width = 256; cv.height = 256;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#c9a877'; g.fillRect(0, 0, 256, 256);
+  let s = 23;
+  const rnd = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+  for (let k = 0; k < 9000; k++) {
+    const v = rnd();
+    g.fillStyle = v < 0.5 ? `rgba(150,118,76,${0.2 + rnd() * 0.3})` : `rgba(226,204,160,${0.2 + rnd() * 0.35})`;
+    g.fillRect(rnd() * 256, rnd() * 256, 1 + rnd() * 2, 1 + rnd() * 2);
+  }
+  for (let k = 0; k < 60; k++) { // piedritas
+    g.fillStyle = `rgba(120,96,66,${0.35 + rnd() * 0.3})`;
+    g.beginPath(); g.arc(rnd() * 256, rnd() * 256, 1 + rnd() * 2.2, 0, Math.PI * 2); g.fill();
+  }
+  return cv;
+}

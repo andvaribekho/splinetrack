@@ -145,7 +145,7 @@ export async function sceneToFBX(root) {
     if (matIds.has(mat)) return matIds.get(mat);
     const id = nid();
     const name = mat.name || `material_${matIds.size + 1}`;
-    const col = mat.map ? [1, 1, 1] : (mat.color ? (mat.color.getRGB(srgb, THREE.SRGBColorSpace), [srgb.r, srgb.g, srgb.b]) : [0.8, 0.8, 0.8]);
+    const col = mat.map ? [1, 1, 1] : mat.vertexColors ? [0.31, 0.49, 0.23] /* el color va por vértice; difuso = pasto */ : (mat.color ? (mat.color.getRGB(srgb, THREE.SRGBColorSpace), [srgb.r, srgb.g, srgb.b]) : [0.8, 0.8, 0.8]);
     const em = mat.emissive ? (mat.emissive.getRGB(srgb, THREE.SRGBColorSpace), [srgb.r, srgb.g, srgb.b]) : [0, 0, 0];
     const props = [
       P('DiffuseColor', 'Color', '', 'A', D(col[0]), D(col[1]), D(col[2])),
@@ -210,6 +210,15 @@ export async function sceneToFBX(root) {
       for (let k = 0; k < T * 3; k++) uvIdx[k] = idx[k];
       kids.push(N('LayerElementUV', [I(0)], [N('Version', [I(101)]), N('Name', [S('UVMap')]), N('MappingInformationType', [S('ByPolygonVertex')]), N('ReferenceInformationType', [S('IndexToDirect')]), N('UV', [Ad(uv.array)]), N('UVIndex', [Ai(uvIdx)])]));
       layers.push(N('LayerElement', [], [N('Type', [S('LayerElementUV')]), N('TypedIndex', [I(0)])]));
+    }
+    const col = g.getAttribute('color');
+    if (col) { // colores por vértice (terreno: pasto, arena, roca)
+      const rgba = new Float64Array(col.count * 4), cIdx = new Int32Array(T * 3);
+      const g2 = (c) => Math.pow(Math.max(0, c), 1 / 2.2); // FBX: colores de vértice en sRGB
+      for (let v = 0; v < col.count; v++) { rgba[v * 4] = g2(col.getX(v)); rgba[v * 4 + 1] = g2(col.getY(v)); rgba[v * 4 + 2] = g2(col.getZ(v)); rgba[v * 4 + 3] = 1; }
+      for (let k = 0; k < T * 3; k++) cIdx[k] = idx[k];
+      kids.push(N('LayerElementColor', [I(0)], [N('Version', [I(101)]), N('Name', [S('Col')]), N('MappingInformationType', [S('ByPolygonVertex')]), N('ReferenceInformationType', [S('IndexToDirect')]), N('Colors', [Ad(rgba)]), N('ColorIndex', [Ai(cIdx)])]));
+      layers.push(N('LayerElement', [], [N('Type', [S('LayerElementColor')]), N('TypedIndex', [I(0)])]));
     }
     kids.push(N('LayerElementMaterial', [I(0)], [N('Version', [I(101)]), N('Name', [S('')]), N('MappingInformationType', [S('AllSame')]), N('ReferenceInformationType', [S('IndexToDirect')]), N('Materials', [Ai([0])])]));
     kids.push(N('Layer', [I(0)], [N('Version', [I(100)]), ...layers]));

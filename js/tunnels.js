@@ -166,9 +166,32 @@ export function profileSplit(prof) {
   return { a, b };
 }
 
+/** Parámetros de bordes (camino de tierra y barrera) de la pista principal o de los atajos (independientes). */
+export function edgeParams(sp = {}, alt = false) {
+  const g = (k) => (alt ? sp['alt' + k[0].toUpperCase() + k.slice(1)] : sp[k]);
+  return {
+    dirtSide: g('dirtSide') || 'none', dirtWidth: g('dirtWidth') ?? 3, dirtTile: g('dirtTile') ?? 4,
+    barrierSide: g('barrierSide') || 'none', barrierHeight: g('barrierHeight') ?? 0.8, barrierThick: g('barrierThick') ?? 0.25, barrierTile: g('barrierTile') ?? 4,
+  };
+}
+
+/** Ancho extra a cada lado de la calzada por el camino de tierra y la barrera (m): {left, right}. */
+export function edgeExtents(sp = {}, alt = false) {
+  const P = edgeParams(sp, alt);
+  const has = (v, side) => v === 'both' || v === side;
+  const ext = (side) => (has(P.dirtSide, side) ? Math.max(0, P.dirtWidth || 0) : 0) + (has(P.barrierSide, side) ? Math.max(0.05, P.barrierThick || 0.25) + 0.15 : 0);
+  return { left: ext('left'), right: ext('right') };
+}
+
+/** Ancho interior del túnel: el pedido, o más si hace falta para la calzada, el camino de tierra y la barrera. */
+export function tunnelInnerWidth(sp, roadW, alt = false) {
+  const X = edgeExtents(sp, alt);
+  return Math.max(sp.tunnelWidth, roadW + 2 * Math.max(X.left, X.right) + 1);
+}
+
 /** Caja que ocupa la boca (marco incluido) en coordenadas locales (u lateral, v sobre la calzada). */
-export function portalBox(sp, roadW) {
-  const W = Math.max(sp.tunnelWidth, roadW + 1);
+export function portalBox(sp, roadW, alt = false) {
+  const W = tunnelInnerWidth(sp, roadW, alt);
   const natural = sp.tunnelType === 'natural';
   const amp = natural ? 0.4 + 2.6 * sp.caveSize : 0;
   const ext = natural ? 1.35 * amp : 0;
@@ -310,28 +333,81 @@ export function applyTunnelOverrides(layout, runs, sp) {
     t.openMode = o && o.open ? o.open : sp.tunnelOpen || 'none';
     t.openSide = side(t.openMode);
     t.pillarCount = o && Number.isFinite(o.pillars) ? Math.max(0, Math.round(o.pillars)) : sp.tunnelPillars;
+    // forma, tipo y densidad de geometría propios (si no, los generales)
+    t.shape = (o && o.shape) || sp.tunnelShape;
+    t.type = (o && o.type) || sp.tunnelType;
+    t.density = o && Number.isFinite(o.density) ? clamp(o.density, 1, 100) : sp.tunnelDensity;
+    t.meshMode = (o && o.meshMode) || sp.tunnelMeshMode || 'uniform';
+    t.maxTris = o && Number.isFinite(o.maxTris) ? Math.max(100, o.maxTris) : sp.tunnelMaxTris ?? 60000;
+    t.adapt = o && Number.isFinite(o.adapt) ? clamp(o.adapt, 0, 1) : sp.tunnelAdapt ?? 0.5;
+    t.sp = { ...sp, tunnelShape: t.shape, tunnelType: t.type, tunnelDensity: t.density };
   }
   return runs;
 }
 
-export function buildTunnelGeometry(layout, elev, spIn, runs, opts = {}) {
-  const sp = spIn;
+/**
+ * Posiciones s de las secciones de un túnel. Uniforme: paso parejo según la densidad. Optimizado: el mismo número
+ * de secciones repartido según la curvatura (en planta y vertical) y el peralte, como la geometría de la pista.
+ * El tope de triángulos reduce las secciones (y, si hace falta, los puntos del perfil).
+ */
+export function tunnelSections(r, e, t, N) {
+  const sp = t.sp || {};
+  const { step } = tunnelResolution(sp);
+  const len = t.e1 - t.e0;
+  let ns = Math.max(2, Math.ceil(len / step));
+  const perSec = 2 * (N - 1) + 4; // paredes + techo + veredas por sección
+  const cap = Math.max(100, t.maxTris ?? Infinity);
+  if (ns * perSec > cap) ns = Math.max(2, Math.floor(cap / perSec));
+  if (t.meshMode !== 'optimized') return Array.from({ length: ns + 1 }, (_, a) => t.e0 + (len * a) / ns);
+  // peso por tramo fino (0.5 m): 1 en recta, «ratio» en curva
+  const ratio = Math.exp(Math.log(1.6) + (Math.log(25) - Math.log(1.6)) * clamp(t.adapt ?? 0.5, 0, 1));
+  const h = 0.5, m = Math.max(4, Math.ceil(len / h));
+  const cum = new Float64Array(m + 1);
+  const at = (s) => { let ss = r.closed ? ((s % r.L) + r.L) % r.L : clamp(s, 0, r.L); return Math.min(r.n - 1, Math.round(ss / r.ds)); };
+  for (let q = 0; q < m; q++) {
+    const s = t.e0 + (q + 0.5) * (len / m);
+    const i = at(s), ip = at(s - 2), inx = at(s + 2);
+    const kPlan = Math.abs(r.k[i]) * 40;
+    const zpp = Math.abs(e.z[inx] - 2 * e.z[i] + e.z[ip]) / 4 * 50;
+    const roll = Math.abs(e.roll[inx] - e.roll[ip]) / 4 * 60;
+    const c = Math.min(1, Math.max(kPlan, zpp, roll));
+    cum[q + 1] = cum[q] + 1 + (ratio - 1) * c;
+  }
   const out = [];
-  const { N: Nreq, step } = tunnelResolution(sp);
+  let q = 0;
+  for (let a = 0; a <= ns; a++) {
+    const target = (cum[m] * a) / ns;
+    while (q < m - 1 && cum[q + 1] < target) q++;
+    const f = cum[q + 1] > cum[q] ? (target - cum[q]) / (cum[q + 1] - cum[q]) : 0;
+    out.push(a === ns ? t.e1 : t.e0 + ((q + clamp(f, 0, 1)) * len) / m);
+  }
+  return out;
+}
+
+export function buildTunnelGeometry(layout, elev, spIn, runs, opts = {}) {
+  const out = [];
   const collarIn = opts.collarIn ?? 3;
   for (const t of runs) {
+    const sp = t.sp || spIn; // forma, tipo y densidad propios del túnel
+    let { N: Nreq } = tunnelResolution(sp);
+    const capN = Math.floor(((t.maxTris ?? Infinity) / 3 - 4) / 2) + 1; // con al menos 2 secciones
+    if (Number.isFinite(capN)) Nreq = Math.max(6, Math.min(Nreq, capN));
     const r = layout.routes[t.k], e = elev.routes[t.k];
     const rand = rng(1000 + t.id * 7919 + (sp.treeSeed | 0));
     const noise = valueNoise(17 + t.id);
     const natural = sp.tunnelType === 'natural';
     const roadW = r.w[0];
-    const W = Math.max(sp.tunnelWidth, roadW + 1);
+    const isAlt = r.kind === 'alt';
+    const W = tunnelInnerWidth(sp, roadW, isAlt); // la pared queda después de la barrera (y del camino de tierra)
+    const X = edgeExtents(sp, isAlt);
+    const extSide = (side) => (side > 0 ? X.left : X.right);
     const Hb = sp.tunnelHeight;
     const prof = tunnelProfile(sp.tunnelShape, W, Hb, Nreq);
     const N = prof.length;
     const { a: ca, b: cb } = profileSplit(prof);
     const open = t.openSide ?? (sp.tunnelOpen === 'left' ? 1 : sp.tunnelOpen === 'right' ? -1 : 0); // lado abierto: +1 izquierda (propio de cada túnel)
-    const ns = Math.max(2, Math.ceil((t.e1 - t.e0) / step));
+    const sList = tunnelSections(r, e, t, N);
+    const ns = sList.length - 1;
     const amp = natural ? 0.4 + 2.6 * sp.caveSize : 0;
     const keep = prof.map(([u, v]) => !(open && Math.sign(u) === open && v < Hb * 0.72 && Math.abs(u) > W * 0.2));
     const perim = [0];
@@ -341,7 +417,7 @@ export function buildTunnelGeometry(layout, elev, spIn, runs, opts = {}) {
     const ring = [];
     const openEdge = [];
     for (let a = 0; a <= ns; a++) {
-      const s = t.e0 + ((t.e1 - t.e0) * a) / ns;
+      const s = sList[a];
       const F = frameAt(r, e, s);
       const uIn = clamp((s - t.s0) / Math.max(1, t.s1 - t.s0), 0, 1);
       const vault = natural ? 1 + 1.8 * sp.caveSize * Math.pow(Math.sin(Math.PI * uIn), 2) * (0.75 + 0.5 * noise(t.id * 3.1, s / 40)) : 1;
@@ -397,7 +473,7 @@ export function buildTunnelGeometry(layout, elev, spIn, runs, opts = {}) {
       for (let a = 0; a <= ns; a++) {
         const { F, pts, s } = ring[a];
         const foot = pts[side > 0 ? N - 1 : 0];
-        const edge = F.at(side * F.w / 2, 0);
+        const edge = F.at(side * (F.w / 2 + extSide(side)), 0); // el piso del túnel empieza después de la barrera
         wpos.push(edge[0], edge[1], edge[2] + 0.02, foot[0], foot[1], foot[2] + 0.02);
         wuv.push(0, (s - t.e0) / 6, 1, (s - t.e0) / 6);
       }
@@ -411,7 +487,7 @@ export function buildTunnelGeometry(layout, elev, spIn, runs, opts = {}) {
     const walkways = meshOut(wpos, wuv, widx);
     // bocas: marco con contorno exterior rectangular que sobresale del cerro (depth) y se mete en él (collarIn)
     // caja de la boca medida en los contornos reales de ambos extremos (+ grosor del marco)
-    const box = portalBox(sp, roadW);
+    const box = portalBox(sp, roadW, isAlt);
     {
       let mu = 0, mv = 0;
       for (const R of [ring[0], ring[ns]]) for (let q = 0; q < N; q++) if (keep[q]) { mu = Math.max(mu, Math.abs(R.loc[q][0])); mv = Math.max(mv, R.loc[q][1]); }
@@ -498,7 +574,7 @@ export function buildTunnelGeometry(layout, elev, spIn, runs, opts = {}) {
         const { F, pts } = ring[a];
         const foot = pts[side > 0 ? N - 1 : 0];
         const wallU = Math.abs((foot[0] - F.x) * F.L[0] + (foot[1] - F.y) * F.L[1]);
-        const minU = F.w / 2 + 1.2;
+        const minU = F.w / 2 + extSide(side) + 1.2;
         if (wallU < minU + 0.8) continue;
         const u = side * (minU + rand() * (wallU - minU - 0.5));
         const rad = 0.4 + rand() * Math.min(2.2, (wallU - minU) * 0.5) * (0.5 + sp.caveSize);
@@ -522,9 +598,10 @@ export function buildTunnelGeometry(layout, elev, spIn, runs, opts = {}) {
         const f = (k2 + 0.5) / n;
         const s = t.s0 + (t.s1 - t.s0) * f;
         const F = frameAt(r, e, s);
-        const a = Math.round(((s - t.e0) / (t.e1 - t.e0)) * ns);
+        let a = 0; // sección más cercana
+        for (let q = 1; q <= ns; q++) if (Math.abs(sList[q] - s) < Math.abs(sList[a] - s)) a = q;
         const edge = openEdge[Math.min(openEdge.length - 1, Math.max(0, a))];
-        const u = open * Math.max(F.w / 2 + 0.8, Math.abs(edge.u) - 0.3);
+        const u = open * Math.max(F.w / 2 + extSide(open) + 0.8, Math.abs(edge.u) - 0.3);
         const baseP = F.at(u, 0);
         const topZ = edge.v[2];
         const h = Math.max(1, topZ - baseP[2]);
@@ -537,6 +614,7 @@ export function buildTunnelGeometry(layout, elev, spIn, runs, opts = {}) {
     out.push({
       id: t.id, name: `tunel_${String(t.id + 1).padStart(2, '0')}`, len: t.s1 - t.s0, k: t.k, sMid: (t.s0 + t.s1) / 2,
       openMode: t.openMode ?? sp.tunnelOpen, pillarCount: nPil, custom: !!t.custom, key: t.key ?? -1,
+      shape: sp.tunnelShape, type: sp.tunnelType, natural, density: sp.tunnelDensity, meshMode: t.meshMode || 'uniform', maxTris: t.maxTris, adapt: t.adapt, sections: ns + 1, profilePts: N,
       walls, ceiling, walkways, portals, stalactites, rocks, pillars, tris, box,
     });
   }

@@ -94,8 +94,8 @@ export class Editor2D {
       const [sx, sy] = this.eventPos(e);
       cv.setPointerCapture(e.pointerId);
       const tool = this.app.state.tool;
-      if ((tool === 'paint' || tool === 'hill' || tool === 'itemPaint') && (e.button === 0 || e.button === 2)) {
-        this.painting = { kind: tool, erase: e.button === 2 || e.altKey || this.app.state.paintErase, last: null };
+      if ((tool === 'paint' || tool === 'hill' || tool === 'itemPaint' || tool === 'sculpt') && (e.button === 0 || e.button === 2)) {
+        this.painting = { kind: tool, erase: e.button === 2 || e.altKey || (tool !== 'sculpt' && this.app.state.paintErase), ctrl: e.ctrlKey || e.metaKey, last: null };
         const p0 = this.toLayout(sx, sy);
         this.app.beginPaint(tool, this.painting, p0);
         this.addPaint(p0);
@@ -164,6 +164,8 @@ export class Editor2D {
           const pl = this.toLayout(sx, sy);
           const ref = this.app.itemAtLayout(pl, 6 / this.view.zoom);
           if (ref) { this.app.beginItemDrag(ref); this.itemDrag = { start: pl }; return; }
+          // modelo de referencia seleccionado: arrastrar lo mueve en planta
+          if (tool === 'pan' && this.app.state.ref3d && this.app.state.ref3d.sel && !this.app.state.ref3d.locked && this.hitRef3d(pl)) { this.ref3dDrag = { last: pl }; return; }
           // puente: clic lo selecciona; arrastrar lo desplaza hacia la izquierda o la derecha
           const bi = tool === 'pan' ? this.app.bridgeAtLayout(pl, 3 / this.view.zoom) : null;
           if (bi != null) { this.app.beginBridgeDrag(bi); this.bridgeDrag = { last: pl }; return; }
@@ -192,6 +194,7 @@ export class Editor2D {
       if (this.painting) { this.addPaint(p); return; }
       if (this.itemDrag) { this.app.dragItemToLayout(this.itemDrag.start, p); return; }
       if (this.bridgeDrag) { this.app.dragBridgeLayout(this.bridgeDrag.last, p); this.bridgeDrag.last = p; return; }
+      if (this.ref3dDrag) { this.app.moveRef3dLayout(this.ref3dDrag.last, p); this.ref3dDrag.last = p; return; }
       if (this.box) { this.box.x1 = sx; this.box.y1 = sy; this.draw(); return; }
       if (this.groupDrag) {
         const ax = this.groupDrag.axis;
@@ -228,8 +231,9 @@ export class Editor2D {
       // hover sobre la ruta principal
       const s = this.app.nearestMainS(p, 25 / this.view.zoom);
  const tl = this.app.state.tool;
-      if (tl === 'paint' || tl === 'hill' || tl === 'itemPaint') { this.paintCursor = p; cv.style.cursor = 'none'; this.draw(); return; }
+      if (tl === 'paint' || tl === 'hill' || tl === 'itemPaint' || tl === 'sculpt') { this.paintCursor = p; cv.style.cursor = 'none'; this.draw(); return; }
       if (tl === 'pan' && this.app.itemAtLayout(p, 6 / this.view.zoom)) { cv.style.cursor = 'move'; return; }
+      if (tl === 'pan' && this.app.state.ref3d && this.app.state.ref3d.sel && !this.app.state.ref3d.locked && this.hitRef3d(p)) { cv.style.cursor = 'move'; return; }
       if (tl === 'pan' && this.app.bridgeAtLayout(p, 3 / this.view.zoom) != null) { cv.style.cursor = 'ew-resize'; if (s !== this.hoverS) { this.hoverS = s; this.app.setHover(s, 'map'); } return; }
       if (tl === 'ref' && this.app.state.ref) {
         const r = this.app.state.ref;
@@ -246,6 +250,7 @@ export class Editor2D {
       if (this.painting) { const ses = this.painting; this.painting = null; this.app.endPaint(ses.kind, ses); this.draw(); return; }
       if (this.itemDrag) { this.itemDrag = null; this.app.endItemDrag(); return; }
       if (this.bridgeDrag) { this.bridgeDrag = null; this.app.endBridgeDrag(); return; }
+      if (this.ref3dDrag) { this.ref3dDrag = null; this.app.endRef3dMove(); return; }
       if (this.box) {
         const b = this.box;
         this.box = null;
@@ -498,19 +503,139 @@ export class Editor2D {
       ctx.restore();
     }
     this.drawStrokeLayer(st.densityPaint, '#e040fb', tool === 'paint' ? 0.35 : 0.16);
+    if (st.terrainSculpt && st.terrainSculpt.length && (tool === 'sculpt' || st.scene.terrain)) this.drawStrokeLayer(st.terrainSculpt, null, tool === 'sculpt' ? 0.4 : 0.14, (q) => (q.h > 0 ? 'rgb(255,160,70)' : 'rgb(80,160,255)'));
     if (tool === 'itemPaint') this.drawStrokeLayer(this.app.itemPaintStrokes(), this.app.itemPaintColor(), 0.4);
     // cursor del pincel
-    if ((tool === 'paint' || tool === 'hill' || tool === 'itemPaint') && this.paintCursor && st.layout) {
+    if ((tool === 'paint' || tool === 'hill' || tool === 'itemPaint' || tool === 'sculpt') && this.paintCursor && st.layout) {
       const [x, y] = this.toScreen(this.paintCursor[0], this.paintCursor[1]);
       const erase = (this.painting && this.painting.erase) || st.paintErase;
       ctx_stroke: {
         const ctx = this.ctx;
-        ctx.strokeStyle = erase ? '#ff8a80' : tool === 'hill' ? '#e0a050' : tool === 'itemPaint' ? this.app.itemPaintColor() : '#e040fb';
+        ctx.strokeStyle = tool === 'sculpt' ? (this.painting ? (this.painting.erase ? '#ffa046' : '#50a0ff') : '#7ec8ff') : erase ? '#ff8a80' : tool === 'hill' ? '#e0a050' : tool === 'itemPaint' ? this.app.itemPaintColor() : '#e040fb';
         ctx.lineWidth = 1.5;
-        const rm = tool === 'hill' ? st.scene.hillBrush : st.scene.paintBrush;
+        const rm = tool === 'hill' ? st.scene.hillBrush : tool === 'sculpt' ? st.scene.sculptBrush : st.scene.paintBrush;
         ctx.beginPath(); ctx.arc(x, y, (rm / st.layout.scale) * this.view.zoom, 0, Math.PI * 2); ctx.stroke();
       }
     }
+  }
+
+  /** Camino de tierra en planta (color arena). */
+  drawDirt2D(L, list) {
+    const { ctx } = this;
+    const S = (P, v) => { const [lx, ly] = L.toLayout(P[v * 3], P[v * 3 + 1]); return this.toScreen(lx, ly); };
+    ctx.save();
+    ctx.fillStyle = 'rgba(201,168,119,0.9)';
+    ctx.strokeStyle = 'rgba(201,168,119,0.9)'; ctx.lineWidth = 1;
+    for (const m of list) {
+      const P = m.positions, per = m.per || 2;
+      ctx.beginPath();
+      for (const a of m.segs) {
+        const A = S(P, a * per), B = S(P, a * per + 1), C = S(P, (a + 1) * per + 1), D = S(P, (a + 1) * per);
+        ctx.moveTo(A[0], A[1]); ctx.lineTo(B[0], B[1]); ctx.lineTo(C[0], C[1]); ctx.lineTo(D[0], D[1]); ctx.closePath();
+      }
+      ctx.fill(); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /** Barreras en planta: línea roja y blanca según el largo de repetición. */
+  drawBarriers2D(L, list, pxPerM) {
+    const { ctx } = this;
+    const sc = this.app.state.scene;
+    const halfOf = (m) => Math.max(0.25, ((m.alt ? sc.altBarrierTile : sc.barrierTile) || 4) / 2);
+    const S = (P, v) => { const x = (P[v * 3] + P[v * 3 + 9]) / 2, y = (P[v * 3 + 1] + P[v * 3 + 10]) / 2; const [lx, ly] = L.toLayout(x, y); return this.toScreen(lx, ly); };
+    ctx.save();
+    ctx.lineCap = 'butt';
+    for (const m of list) {
+      const P = m.positions, half = halfOf(m);
+      ctx.lineWidth = Math.max(2, ((m.alt ? sc.altBarrierThick : sc.barrierThick) || 0.25) * pxPerM * 1.4);
+      for (const col of [0, 1]) {
+        ctx.strokeStyle = col ? '#f2f2f2' : '#d42a2a';
+        ctx.beginPath();
+        for (const a of m.segs) {
+          // el tramo se parte en los cambios de color (así coincide con la textura aunque las secciones sean largas)
+          const s0 = m.s[a], s1 = m.s[a + 1];
+          if (!(s1 > s0)) continue;
+          const A = S(P, a * 6), B = S(P, (a + 1) * 6);
+          let t0 = 0;
+          while (t0 < 1) {
+            const sv = s0 + (s1 - s0) * t0;
+            const cell = Math.floor(sv / half + 1e-9);
+            const t1 = Math.min(1, ((cell + 1) * half - s0) / (s1 - s0));
+            if ((cell & 1) === col) { ctx.moveTo(A[0] + (B[0] - A[0]) * t0, A[1] + (B[1] - A[1]) * t0); ctx.lineTo(A[0] + (B[0] - A[0]) * t1, A[1] + (B[1] - A[1]) * t1); }
+            if (t1 <= t0) break;
+            t0 = t1;
+          }
+        }
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  /** Transformación local del modelo de referencia (u, v en m) -> pantalla. */
+  ref3dToScreen(L, R) {
+    const th = ((R.rotZ || 0) * Math.PI) / 180, c = Math.cos(th), sn = Math.sin(th), k = R.scale || 1;
+    return (u, v) => {
+      const x = R.pos[0] + k * (u * c - v * sn), y = R.pos[1] + k * (u * sn + v * c);
+      const [lx, ly] = L.toLayout(x, y);
+      return this.toScreen(lx, ly);
+    };
+  }
+
+  /** Silueta en planta del modelo de referencia 3D (debajo de la pista nueva). */
+  drawRef3d(L, R) {
+    const fp = R.fp;
+    if (!R.fpTint || R.fpTint.color !== R.color) {
+      const t = document.createElement('canvas');
+      t.width = fp.canvas.width; t.height = fp.canvas.height;
+      const g = t.getContext('2d');
+      g.drawImage(fp.canvas, 0, 0);
+      g.globalCompositeOperation = 'source-in';
+      g.fillStyle = R.color || '#4fc3f7';
+      g.fillRect(0, 0, t.width, t.height);
+      R.fpTint = { color: R.color, canvas: t };
+    }
+    const T = this.ref3dToScreen(L, R);
+    const O = T(fp.u0, fp.v1), U = T(fp.u0 + fp.res, fp.v1), V = T(fp.u0, fp.v1 - fp.res);
+    const { ctx } = this, d = this.dpr;
+    ctx.save();
+    ctx.globalAlpha = Math.max(0.12, Math.min(1, (R.opacity ?? 0.6) * 0.8));
+    ctx.imageSmoothingEnabled = true;
+    ctx.setTransform(d * (U[0] - O[0]), d * (U[1] - O[1]), d * (V[0] - O[0]), d * (V[1] - O[1]), d * O[0], d * O[1]);
+    ctx.drawImage(R.fpTint.canvas, 0, 0);
+    ctx.restore();
+    if (R.sel) {
+      const P = [T(fp.u0, fp.v0), T(fp.u1, fp.v0), T(fp.u1, fp.v1), T(fp.u0, fp.v1)];
+      ctx.save();
+      ctx.strokeStyle = '#ffe066'; ctx.lineWidth = 1.5; ctx.setLineDash([6, 4]);
+      ctx.beginPath(); P.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.closePath(); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#ffe066'; ctx.font = '12px system-ui, sans-serif';
+      ctx.fillText(`${R.name} · arrastra para mover`, P[3][0] + 4, P[3][1] - 6);
+      ctx.restore();
+    }
+  }
+
+  /** ¿El punto del lienzo cae sobre la silueta del modelo de referencia? */
+  hitRef3d(p) {
+    const st = this.app.state, R = st.ref3d, L = st.layout;
+    if (!R || !R.fp || !L || R.visible === false) return false;
+    const [x, y] = L.toWorld(p[0], p[1]);
+    const th = ((R.rotZ || 0) * Math.PI) / 180, c = Math.cos(th), sn = Math.sin(th), k = R.scale || 1;
+    const dx = (x - R.pos[0]) / k, dy = (y - R.pos[1]) / k;
+    const u = dx * c + dy * sn, v = -dx * sn + dy * c;
+    const fp = R.fp;
+    if (u < fp.u0 || u > fp.u1 || v < fp.v0 || v > fp.v1) return false;
+    if (!fp.data) fp.data = fp.canvas.getContext('2d').getImageData(0, 0, fp.canvas.width, fp.canvas.height).data;
+    const i = Math.floor((u - fp.u0) / fp.res), j = Math.floor((fp.v1 - v) / fp.res);
+    // un poco de tolerancia: cualquier píxel lleno en 5×5
+    for (let b = -2; b <= 2; b++) for (let a = -2; a <= 2; a++) {
+      const ii = i + a, jj = j + b;
+      if (ii < 0 || jj < 0 || ii >= fp.canvas.width || jj >= fp.canvas.height) continue;
+      if (fp.data[(jj * fp.canvas.width + ii) * 4 + 3] > 20) return true;
+    }
+    return false;
   }
 
   drawRef(r) {
@@ -670,7 +795,8 @@ export class Editor2D {
     const L = st.layout, E = st.result;
     // trazo crudo
     if (st.showRaw || !L) this.drawRaw();
-    if (st.scene && (st.tool === 'paint' || st.tool === 'hill' || st.tool === 'itemPaint' || st.scene.terrain || (st.hills && st.hills.length))) this.drawPaint();
+    if (st.scene && (st.tool === 'paint' || st.tool === 'hill' || st.tool === 'itemPaint' || st.tool === 'sculpt' || st.scene.terrain || (st.hills && st.hills.length))) this.drawPaint();
+    if (L && st.ref3d && st.ref3d.fp && st.ref3d.visible !== false && st.ref3d.show2d !== false) this.drawRef3d(L, st.ref3d);
     if (L) this.drawLayout(L, E);
     if (L && E) this.drawItems(L);
     if (L && st.selAlt != null) this.drawSelectedAlt(L);
@@ -786,7 +912,11 @@ export class Editor2D {
     if (!src) return;
     const bsrc = this.app.bridgeTexCanvas ? this.app.bridgeTexCanvas() : src;
     const dir = sc.trackTexDir || 'vertical';
-    const TT = this.texStrip(src, dir), TB = r.bridges && r.bridges.length ? this.texStrip(bsrc, dir) : TT;
+    const isAltR = r.kind === 'alt';
+    const TT = this.texStrip(isAltR && this.app.altTexCanvas ? this.app.altTexCanvas() : src, dir), TB = r.bridges && r.bridges.length ? this.texStrip(bsrc, dir) : TT;
+    const cov = st.coveredRanges || [], k = L.routes.indexOf(r);
+    const TC = cov.some((c) => c.k === k) && this.app.coveredTexCanvas ? this.texStrip(this.app.coveredTexCanvas(), dir) : TT;
+    const coveredAt = (sv) => { for (const c of cov) { if (c.k !== k) continue; let ss = sv; if (r.closed) { while (ss < c.s0) ss += r.L; while (ss > c.s1 + r.L) ss -= r.L; } if (ss >= c.s0 && ss <= c.s1) return true; } return false; };
     const inBridge = (sv) => {
       if (!r.bridges) return false;
       for (const b of r.bridges) { const d = r.closed ? (((sv - b.s0) % r.L) + r.L) % r.L : sv - b.s0; if (d >= -1e-6 && d <= b.s1 - b.s0 + 1e-6) return true; }
@@ -811,14 +941,18 @@ export class Editor2D {
     };
     // agrupa segmentos consecutivos del mismo tipo (pista / puente), hasta maxStep por cuadro
     const groups = [];
+    // tipo de cada segmento: 'b' tablero de puente, 'c' cubierto (túnel / bajo cruce), 'n' normal
+    const kindOf = (sg) => {
+      const sa = r.s[sg[0]], sb = sg[1] === 0 && r.closed ? r.L : r.s[sg[1]];
+      if (inBridge(sa) && inBridge(sb === r.L ? 0 : sb)) return 'b';
+      return coveredAt((sa + sb) / 2) ? 'c' : 'n';
+    };
     for (let q = 0; q < segs.length;) {
       const a = segs[q][0];
-      const br = inBridge(r.s[a]) && inBridge(r.s[segs[q][1]] || (r.closed ? 0 : r.L));
+      const br = kindOf(segs[q]);
       let e = q;
       while (e + 1 < segs.length && e + 1 - q < maxStep && segs[e + 1][0] === segs[e][1]) {
-        const nb = segs[e + 1][1];
-        const b2 = inBridge(r.s[segs[e + 1][0]]) && inBridge(nb === 0 && r.closed ? 0 : r.s[nb]);
-        if (b2 !== br) break;
+        if (kindOf(segs[e + 1]) !== br) break;
         e++;
       }
       groups.push([a, segs[e][1], br]);
@@ -826,7 +960,7 @@ export class Editor2D {
     }
     const GROW_ALONG = 1.2, GROW_SIDE = 0.5; // px: solape entre cuadros y cobertura del borde de la base
     for (const [a, b, br] of groups) {
-      const T = br ? TB : TT;
+      const T = br === 'b' ? TB : br === 'c' ? TC : TT;
       const { cv: tex, W, H } = T;
       const sa = r.s[a], sb = b === 0 && r.closed ? r.L : r.s[b];
       if (sb <= sa) continue;
@@ -922,6 +1056,9 @@ export class Editor2D {
       }
       this.drawRouteTex(L, r, segs, pxPerM);
     };
+    // camino de tierra (debajo de las calzadas)
+    const EM = this.app.state.edgeMeshes;
+    if (EM && EM.dirt.length) this.drawDirt2D(L, EM.dirt);
     // rutas completas
     L.routes.forEach((r, k) => drawRoute(k, 0, r.closed ? r.n : r.n - 1, false));
     // tramos superiores de cada cruce, encima y con borde
@@ -936,6 +1073,7 @@ export class Editor2D {
         drawRoute(upR, ic - half, ic + half, true);
       });
     }
+    if (EM && EM.barriers.length) this.drawBarriers2D(L, EM.barriers, pxPerM);
     // línea central
     ctx.lineWidth = 1;
     ctx.strokeStyle = 'rgba(0,0,0,0.35)';
