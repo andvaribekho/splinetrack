@@ -1749,7 +1749,10 @@ export class Preview3D {
 
   setHover(s) {
     const L = this.app.state.layout, E = this.app.state.result;
-    if (s === null || s === undefined || !L || !E) { this.marker.visible = false; this.needsFrame = true; return; }
+    // cámara de juego: la guía (esfera blanca sobre la pista) solo con «Mostrar guía», y nunca mientras se arrastra el auto
+    const g = this.game, st = this.app.state;
+    const hideInGame = g && g.active && (g.dragging || !(st.game && st.game.showGuide));
+    if (s === null || s === undefined || !L || !E || hideInGame) { this.marker.visible = false; this.needsFrame = true; return; }
     const r = L.routes[0];
     const i = Math.min(r.n - 1, Math.round(s / r.ds));
     this.marker.position.set(r.x[i], r.y[i], E.routes[0].z[i] * this.zExag + 2);

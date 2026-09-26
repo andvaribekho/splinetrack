@@ -81,7 +81,7 @@ const state = {
   selItem: null, // {type, gid, idx}
   itemPaintTarget: null, // {type, gid} al pintar zonas de un grupo
   paintErase: false,
-  game: { speed: 120, mode: 'third', camDist: 8.5, camHeight: 2.9, camTilt: 0, fov: 62 }, // cámara: distancia y altura (tercera persona), inclinación (°) y FOV
+  game: { showGuide: false, speed: 120, mode: 'third', camDist: 8.5, camHeight: 2.9, camTilt: 0, fov: 62 }, // cámara: distancia y altura (tercera persona), inclinación (°) y FOV
   skyTex: null, skyCustom: false,
   trackTex: null, // canvas de la textura de la pista
   barrierTex: null, // canvas de la textura de la barrera (null = rojo y blanco por defecto)
@@ -1626,7 +1626,7 @@ const app = {
   altAtWorld(x, y) { const L = state.layout; if (!L) return null; const [lx, ly] = L.toLayout(x, y); return altAt([lx, ly], 0.5 / L.scale); },
   onGameMove(s) { if (preview.game && preview.game.dragging) return; editor.gameS = s; profile.gameS = s; editor.draw(); profile.draw(); },
   // arrastrar el auto de la cámara de juego en el mapa
-  beginCarDrag() { if (preview.game) preview.game.dragging = true; },
+  beginCarDrag() { if (preview.game) preview.game.dragging = true; preview.setHover(null); }, // la guía no tapa al auto mientras se arrastra
   moveCarTo(sv) {
     const g = preview.game;
     if (!g || !g.active) return;
@@ -1635,7 +1635,7 @@ const app = {
     editor.gameS = sv; profile.gameS = sv; editor.draw(); profile.draw();
     app.setHover(sv, 'map');
   },
-  endCarDrag() { if (preview.game) preview.game.dragging = false; },
+  endCarDrag() { if (preview.game) preview.game.dragging = false; preview.setHover(state.hover); },
   selectHill(id) { selectHill(id); },
   selectTunnel(id) { selectTunnel(id); },
   selectCave(c, refresh = true) { selectCave(c, refresh); },
@@ -5517,6 +5517,7 @@ function bindSceneControls() {
     if (!game.start()) { toast('Primero crea o carga una pista.'); return; }
     $('gameBar').hidden = false;
     $('btnGame').classList.add('active');
+    preview.setHover(state.hover); // sin «Mostrar guía», la esfera blanca no aparece en el juego
     $('btnGamePause').textContent = 'Pausa';
     setCam(state.game.mode);
   });
@@ -5546,6 +5547,9 @@ function bindSceneControls() {
   $('btnGameRestart').addEventListener('click', () => { game.s = 0; game.lapTime = 0; game.snapCamera = true; });
   $('btnGameFull').addEventListener('click', () => { const el = document.querySelector('.view3d'); if (document.fullscreenElement) document.exitFullscreen(); else el.requestFullscreen?.().catch(() => toast('El navegador no permitió la pantalla completa.')); });
   $('btnGameExit').addEventListener('click', exitGame);
+  // «Mostrar guía»: la esfera blanca que marca en 3D el punto de la pista bajo el cursor (apagada por defecto)
+  $('gameGuide').checked = !!state.game.showGuide;
+  $('gameGuide').addEventListener('change', (e) => { state.game.showGuide = e.target.checked; preview.setHover(state.hover); });
   document.addEventListener('keydown', (e) => {
     if (!game.active) return;
     const t = e.target || {};
