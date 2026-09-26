@@ -420,8 +420,9 @@ export class ProfileView {
         const cut = pt.k === 0 && this.app.ctrlInCut && this.app.ctrlInCut(pt.key, pt.idx); // sección socavada: café
         const susp = !cut && pt.k === 0 && this.app.ctrlInSusp && this.app.ctrlInSusp(pt.key, pt.idx); // tramo suspendido: celeste
         if (pt.pin !== null) {
-          ctx.fillStyle = isSel ? '#ffe066' : cut ? '#8d5a2b' : susp ? '#5ad8ff' : '#f2a93b';
-          ctx.strokeStyle = cut || susp ? '#f2a93b' : '#3a2400';
+          // generada (modo directo): rombo con borde naranjo y relleno oscuro; editada a mano: rombo naranjo lleno
+          ctx.fillStyle = isSel ? '#ffe066' : cut ? '#8d5a2b' : susp ? '#5ad8ff' : pt.gen ? '#4a3414' : '#f2a93b';
+          ctx.strokeStyle = cut || susp || pt.gen ? '#f2a93b' : '#3a2400';
           ctx.beginPath(); ctx.moveTo(x, y - 6); ctx.lineTo(x + 6, y); ctx.lineTo(x, y + 6); ctx.lineTo(x - 6, y); ctx.closePath();
           ctx.fill(); ctx.stroke();
         } else {

@@ -51,7 +51,7 @@ export function shadowCasters(sp, trees, decoRes, assetOf) {
     for (const it of items) {
       const A = assetOf ? assetOf(it.asset) : null;
       const sz = A && A.size ? A.size : [1, 1, 1], sc = it.scale || 1;
-      out.push({ x: it.x, y: it.y, r: Math.max(0.1, (Math.max(sz[0], sz[1]) / 2) * sc), h: Math.max(0.1, sz[2] * sc) });
+      out.push({ x: it.x, y: it.y, r: Math.max(0.1, (Math.max(sz[0] * (it.sx ?? 1), sz[1] * (it.sy ?? 1)) / 2) * sc), h: Math.max(0.1, sz[2] * (it.sz ?? 1) * sc) });
     }
   }
   return out;

@@ -171,8 +171,12 @@
         </div>
         <p class="hint" id="elevModeHint"></p>
         <div class="row gap" id="directTools">
-          <button id="btnElevAuto" title="Corre el optimizador automático una vez (con las colinas y la semilla de abajo) y deja sus alturas como fotogramas clave en todos los puntos">Generar alturas automáticas</button>
-          <button id="btnFixCross" title="Sube el paso de arriba de cada cruce sin separación suficiente (agrega puntos si hace falta)">Corregir cruces</button>
+          <button id="btnElevAuto" title="Corre el optimizador automático (con las colinas y la semilla de abajo) y deja sus alturas como fotogramas clave generados, en toda la pista o solo en la selección">Generar alturas automáticas</button>
+          <button id="btnFixCross" title="Corrige los cruces sin separación suficiente: el paso de arriba sube y el de abajo baja, con rampas">Corregir cruces</button>
+        </div>
+        <div class="row gap wrap" id="genOpts">
+          <label class="check small" title="Genera alturas solo en los puntos (o segmentos) seleccionados; sus extremos no cambian y empalman con lo de afuera. Sin selección, en toda la pista"><input type="checkbox" id="genSel" checked> Solo en la selección</label>
+          <label class="check small" title="Las alturas que editaste a mano (rombos naranjos llenos) quedan igual: la forma generada se acomoda para pasar por ellas. Solo se regeneran las generadas (rombos con borde) y los puntos blancos"><input type="checkbox" id="genKeep" checked> No tocar mis alturas</label>
         </div>
         <div id="autoElevBox">
         <div class="field big"><label>Colinas <span class="val" id="hillsVal"></span></label><input type="range" id="hills" min="0" max="1" step="0.01"></div>
@@ -748,6 +752,10 @@
               <button data-xf="rotate" data-icon="rotate" title="Rotar (E): arrastra el aro del gizmo o la selección; gira alrededor del centro de la selección. Shift = de a 5°">Rotar</button>
               <button data-xf="scale" data-icon="scale" title="Escalar (R): arrastra el triángulo del gizmo o la selección (uniforme) o sus ejes X / Y; desde el centro de la selección">Escalar</button>
               <label class="small" id="xformNumLbl" style="visibility:hidden" title="Valor exacto para la selección (Enter o Aplicar)"><span id="xformNumTxt">Rotar</span> <input type="number" id="xformNum" value="15" style="width:56px"> <span id="xformNumUnit">°</span> <button id="btnXformApply" data-icon="check">Aplicar</button></label>
+            </span>
+            <span id="zScaleBox" class="row" hidden title="Modo de elevación Directo: escala las alturas de los puntos o segmentos seleccionados">
+              <label class="small">Escalar <select id="scaleAxis"><option value="xy">en planta (XY)</option><option value="z">la altura (Z)</option></select></label>
+              <label class="small" id="zPivotLbl">desde <select id="zPivot" title="Altura de referencia que no cambia al escalar en Z"><option value="line">la línea entre los extremos</option><option value="mean">el promedio</option><option value="min">el punto más bajo</option></select></label>
             </span>
             <button id="btnTbRadius">Radio</button>
             <button id="btnTbFork">Bifurcar</button>

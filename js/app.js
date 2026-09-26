@@ -53,6 +53,8 @@ const state = {
   selSet: null, // selección múltiple {key, idxs:Set}
   subObj: 'vertex', // nivel de edición del spline (como en 3ds Max): 'vertex' | 'segment'
   xform: 'move', // transformación activa al editar: 'move' | 'rotate' | 'scale'
+  scaleAxis: 'xy', // Escalar: en planta ('xy') o la altura ('z', modo de elevación Directo)
+  zPivot: 'line', // referencia de la escala en Z: 'line' (entre extremos), 'mean', 'min'
   segSel: null, // segmentos seleccionados {key, segs:Set, sig} (el segmento i va del vértice i al siguiente)
   arc: null, // sesión de curva de radio fijo
   arcPreview: null,
@@ -1157,11 +1159,49 @@ const app = {
     scheduleBuild();
   },
   endXform() { state.xformDrag = null; state.xformInfo = ''; refreshPanels(); editor.draw(); },
+  zScaleOn() { return zScaleOn(); },
+  /**
+   * Escala en Z (modo Directo) de los puntos seleccionados: cada altura se aleja o acerca a una referencia (la línea
+   * entre el primer y el último punto, el promedio o el más bajo). Devuelve false si no hay 2 o más puntos.
+   */
+  beginZScale() {
+    const T = app.xformTargets();
+    if (!T || T.idxs.length < 2) { toast('Selecciona 2 o más puntos (o un segmento) para escalar su altura.'); return false; }
+    if (state.elev.mode !== 'direct') { toast('Escalar la altura funciona en el modo de elevación Directo.'); return false; }
+    const L = state.layout, k = T.key === 'main' ? 0 : L.routes.findIndex((r) => r.altIndex === T.key);
+    const r = L.routes[k], S = state.ctrlS && state.ctrlS[k];
+    if (!S) return false;
+    const pts = app.ctrlPoints().filter((q) => q.key === T.key);
+    const zOf = (idx) => { const q = pts.find((p) => p.idx === idx); return q ? (q.pin !== null ? q.pin : q.z) : 0; };
+    // orden a lo largo de la ruta (corrida seguida si la hay)
+    const run = contiguousRun(T.key);
+    const order = run && run.length === T.idxs.length ? run : [...T.idxs].sort((a, b) => S[a] - S[b]);
+    const pos = [0];
+    for (let j = 1; j < order.length; j++) { let d = S[order[j]] - S[order[j - 1]]; if (r.closed) d = ((d % r.L) + r.L) % r.L; pos.push(pos[j - 1] + Math.abs(d)); }
+    const z0 = order.map(zOf), P = pos[pos.length - 1] || 1;
+    const mean = z0.reduce((a, b) => a + b, 0) / z0.length, min = Math.min(...z0);
+    const piv = order.map((_, j) => (state.zPivot === 'mean' ? mean : state.zPivot === 'min' ? min : z0[0] + (z0[z0.length - 1] - z0[0]) * (pos[j] / P)));
+    pushUndo();
+    state.zScaleDrag = { key: T.key, items: order.map((idx, j) => ({ idx, z0: z0[j], p: piv[j] })) };
+    return true;
+  },
+  applyZScale(f) {
+    const g = state.zScaleDrag;
+    if (!g) return;
+    const za = zArray(g.key);
+    f = Math.max(-5, Math.min(20, f));
+    for (const it of g.items) za[it.idx] = +(it.p + (it.z0 - it.p) * f).toFixed(3); // editadas a mano (ya no generadas)
+    state.xformInfo = `Escala Z ${(f * 100).toFixed(0)} %`;
+    scheduleElev();
+    editor.draw();
+  },
+  endZScale() { state.zScaleDrag = null; state.xformInfo = ''; refreshPanels(); editor.draw(); },
   /** Aplica una rotación (grados, antihorario en planta) o una escala (%) escrita a mano sobre la selección. */
   applyXformNumeric(mode, v) {
     if (!Number.isFinite(v)) return false;
     const T = app.xformTargets();
     if (!T || T.idxs.length < 2) { toast(state.subObj === 'segment' ? 'Selecciona uno o más segmentos para transformarlos.' : 'Selecciona 2 o más puntos para rotarlos o escalarlos.'); return false; }
+    if (mode === 'scale' && zScaleOn()) { if (!app.beginZScale()) return false; app.applyZScale(v / 100); app.endZScale(); return true; }
     if (mode === 'scale' && !(v > 0)) { toast('La escala debe ser mayor que 0 %.'); return false; }
     app.beginXform();
     if (mode === 'rotate') app.applyXform({ type: 'rotate', a: (-v * Math.PI) / 180 });
@@ -1588,7 +1628,7 @@ const app = {
         const i = Math.min(r.n - 1, Math.max(0, Math.round(s / r.ds))) % r.n;
         const pinned = za[idx] !== null && za[idx] !== undefined;
         const [X, Y] = L.toWorld(p[0], p[1]);
-        out.push({ key, idx, k, s, X, Y, z: E.routes[k].z[i], pin: pinned ? pinVal(za[idx]) : null, local: pinned && pinLocal(za[idx]) });
+        out.push({ key, idx, k, s, X, Y, z: E.routes[k].z[i], pin: pinned ? pinVal(za[idx]) : null, local: pinned && pinLocal(za[idx]), gen: pinned && typeof za[idx] === 'object' && !!za[idx].gen });
       });
     });
     return out;
@@ -1624,7 +1664,19 @@ function refreshXformBar() {
     const inp = $('xformNum');
     if (inp.dataset.mode !== state.xform) { inp.dataset.mode = state.xform; inp.value = state.xform === 'rotate' ? 15 : 110; inp.step = state.xform === 'rotate' ? 1 : 5; }
   }
+  // escalar en Z: solo en el modo de elevación Directo
+  const zb = $('zScaleBox');
+  if (zb) {
+    const direct = state.elev.mode === 'direct';
+    if (!direct && state.scaleAxis === 'z') state.scaleAxis = 'xy';
+    zb.hidden = !(state.xform === 'scale' && direct);
+    $('scaleAxis').value = state.scaleAxis;
+    $('zPivot').value = state.zPivot;
+    $('zPivotLbl').hidden = state.scaleAxis !== 'z';
+  }
 }
+/** ¿La escala actual es en altura (Z)? */
+function zScaleOn() { return state.xform === 'scale' && state.scaleAxis === 'z' && state.elev.mode === 'direct'; }
 
 // ---------- curva de radio fijo (selección múltiple) ----------
 function contiguousRun(key) {
@@ -2183,7 +2235,7 @@ function smoothSelection(t, newGesture = true) {
     B.idxs.forEach((i, k) => {
       if (!B.pinned[k]) return;
       const cur = za[i];
-      za[i] = cur && typeof cur === 'object' ? { ...cur, z: +zs[k].toFixed(3) } : +zs[k].toFixed(3);
+      za[i] = cur && typeof cur === 'object' && cur.local ? { z: +zs[k].toFixed(3), local: true } : +zs[k].toFixed(3); // editada a mano (ya no es generada)
     });
   }
   scheduleBuild();
@@ -3525,10 +3577,12 @@ function syncElevMode() {
   const direct = state.elev.mode === 'direct';
   document.querySelectorAll('#elevMode button').forEach((b) => b.classList.toggle('on', b.dataset.mode === (direct ? 'direct' : 'auto')));
   $('directTools').hidden = !direct;
+  $('genOpts').hidden = !direct;
   $('autoElevBox').classList.toggle('dimmed', direct);
   $('elevModeHint').textContent = direct
     ? 'Directo: cada punto naranjo es un fotograma clave y la curva pasa exactamente por él (lo plano queda plano, sin pasarse de largo). Los puntos blancos siguen la curva. Pendiente y cruces se avisan en rojo. Colinas y semilla solo se usan al generar alturas automáticas.'
     : 'Automático: el optimizador arma la elevación (colinas, rampas en los cruces, pendiente y radios). Las alturas fijadas (puntos naranjos) son pedidos que se equilibran con esas reglas.';
+  if (typeof refreshXformBar === 'function' && $('zScaleBox')) refreshXformBar();
   for (const id of ['pinLocal', 'pinLocal3d']) { const el = $(id); const lab = el && el.closest('label'); if (lab) lab.hidden = direct; } // en Directo no aplica
 }
 /** Cambia el modo de elevación. A Directo: las alturas actuales de todos los puntos quedan como fotogramas clave. */
@@ -3541,7 +3595,8 @@ function setElevMode(mode) {
     for (const pt of app.ctrlPoints()) {
       const za = zArray(pt.key);
       if (!za) continue;
-      za[pt.idx] = +((pt.pin !== null ? pt.pin : pt.z)).toFixed(3);
+      const zz = +((pt.pin !== null ? pt.pin : pt.z)).toFixed(3);
+      za[pt.idx] = pt.pin !== null ? zz : { z: zz, gen: true }; // las alturas que puso el optimizador quedan como generadas
       n++;
     }
     state.elev.mode = 'direct';
@@ -3553,21 +3608,77 @@ function setElevMode(mode) {
   syncElevMode();
   scheduleBuild();
 }
-/** Directo: corre el optimizador automático (sin las alturas fijadas) y deja sus alturas como fotogramas clave. */
+/** ¿La altura de ese punto la puso el usuario? (las generadas llevan gen: true y se pueden regenerar). */
+function isUserPin(v) { return v !== null && v !== undefined && !(typeof v === 'object' && v.gen); }
+/**
+ * Directo: corre el optimizador automático y deja sus alturas como fotogramas clave (marcados como generados).
+ * Con «Solo en la selección», solo en los puntos seleccionados (empalmando con lo de afuera: sus extremos no cambian).
+ * Con «No tocar mis alturas», los puntos editados a mano quedan igual y la forma generada se acomoda a pasar por ellos.
+ */
 function generateAutoHeights() {
   const L = state.layout;
   if (!L) return;
   if (!hasCtrl()) { ensureCtrl(); computeCtrlS(); }
-  const E = computeElevation(L, { ...state.elev, mode: 'auto', flatZones: app.flatZonesS(), profileZones: [], pinFlats: [] }, overridesMap(L), suspAnchors());
+  const keep = $('genKeep') ? $('genKeep').checked : true;
+  const ms = state.selSet && state.selSet.idxs.size ? state.selSet : state.sel ? { key: state.sel.key, idxs: new Set([state.sel.idx]) } : null;
+  const onlySel = !!($('genSel') && $('genSel').checked && ms);
+  if ($('genSel') && $('genSel').checked && !ms) toast('Sin selección: se generan alturas en toda la pista.');
+  // el optimizador respeta las alturas propias (así los cruces y pendientes ya cuentan con ellas)
+  const userPins = keep ? collectPins().filter((p) => { const k = p.route, r = L.routes[k], key = k === 0 ? 'main' : r.altIndex; const za = zArray(key), S = state.ctrlS[k]; const idx = S ? S.findIndex((sv) => Math.abs(sv - p.s) < 1e-6) : -1; return idx >= 0 && isUserPin(za[idx]); }) : [];
+  const E = computeElevation(L, { ...state.elev, mode: 'auto', flatZones: app.flatZonesS(), profileZones: [], pinFlats: [] }, overridesMap(L), [...userPins, ...suspAnchors()]);
   pushUndo();
   let n = 0;
   L.routes.forEach((r, k) => {
     const key = k === 0 ? 'main' : r.altIndex, za = zArray(key), S = state.ctrlS && state.ctrlS[k];
     if (!za || !S) return;
-    S.forEach((sv, idx) => { const i = Math.min(r.n - 1, Math.max(0, Math.round(sv / r.ds))) % r.n; za[idx] = +E.routes[k].z[i].toFixed(3); n++; });
+    if (onlySel && ms.key !== key) return;
+    const N = S.length, closed = r.closed;
+    const autoZ = (idx) => { const i = Math.min(r.n - 1, Math.max(0, Math.round(S[idx] / r.ds))) % r.n; return E.routes[k].z[i]; };
+    const curZ = (idx) => { const v = pinVal(za[idx]); if (v !== null) return v; const i = Math.min(r.n - 1, Math.max(0, Math.round(S[idx] / r.ds))) % r.n; return state.result ? state.result.routes[k].z[i] : autoZ(idx); };
+    // tramos a generar: corridas de puntos (toda la ruta, o las corridas seguidas de la selección)
+    let runs;
+    if (!onlySel) runs = [{ idxs: [...Array(N).keys()], whole: closed }];
+    else {
+      const sel = [...ms.idxs].filter((i) => i < N).sort((a, b) => a - b);
+      runs = [];
+      let cur = [];
+      for (const i of sel) { if (cur.length && i !== cur[cur.length - 1] + 1) { runs.push({ idxs: cur }); cur = []; } cur.push(i); }
+      if (cur.length) runs.push({ idxs: cur });
+      if (closed && runs.length > 1 && runs[0].idxs[0] === 0 && runs[runs.length - 1].idxs[runs[runs.length - 1].idxs.length - 1] === N - 1) { const last = runs.pop(); runs[0].idxs = [...last.idxs, ...runs[0].idxs]; } // la selección cruza la meta
+    }
+    for (const run of runs) {
+      const I = run.idxs;
+      // anclas: extremos de la corrida (si es una selección) y puntos con altura propia; entre anclas se reparte la diferencia
+      const anchor = I.map((idx, j) => (onlySel && (j === 0 || j === I.length - 1)) || (keep && isUserPin(za[idx])));
+      if (onlySel && I.length < 3 && anchor.every(Boolean)) continue;
+      // posición a lo largo (s desenrollado dentro de la corrida)
+      const pos = [0];
+      for (let j = 1; j < I.length; j++) { let d = S[I[j]] - S[I[j - 1]]; if (closed) d = ((d % r.L) + r.L) % r.L; pos.push(pos[j - 1] + Math.abs(d)); }
+      const A = I.map((idx, j) => (anchor[j] ? { j, d: curZ(idx) - autoZ(idx) } : null)).filter(Boolean);
+      const deltaAt = (j) => {
+        if (!A.length) return 0;
+        let a = null, b = null;
+        for (const q of A) { if (q.j <= j) a = q; if (q.j >= j && !b) b = q; }
+        if (run.whole) { // vuelta completa: las anclas se envuelven
+          const Lr = pos[pos.length - 1] + (((S[I[0]] - S[I[I.length - 1]]) % r.L) + r.L) % r.L;
+          if (!a) a = { ...A[A.length - 1], p: pos[A[A.length - 1].j] - Lr };
+          if (!b) b = { ...A[0], p: pos[A[0].j] + Lr };
+        }
+        if (!a) return b.d;
+        if (!b) return a.d;
+        const pa = a.p ?? pos[a.j], pb = b.p ?? pos[b.j];
+        if (pb - pa < 1e-6) return a.d;
+        return a.d + (b.d - a.d) * ((pos[j] - pa) / (pb - pa));
+      };
+      I.forEach((idx, j) => {
+        if (anchor[j]) return; // extremos de la selección y alturas propias: quedan igual
+        za[idx] = { z: +(autoZ(idx) + deltaAt(j)).toFixed(3), gen: true };
+        n++;
+      });
+    }
   });
   scheduleElev();
-  toast(`Alturas automáticas en ${n} puntos (colinas ${Math.round(state.elev.hills * 100)} %, semilla ${state.elev.seed}). Ahora puedes editarlas libremente.`);
+  toast(`Alturas automáticas en ${n} punto${n === 1 ? '' : 's'}${onlySel ? ' de la selección (empalmando con lo de afuera)' : ''}${keep ? '; tus alturas editadas quedaron igual' : ''} (colinas ${Math.round(state.elev.hills * 100)} %, semilla ${state.elev.seed}).`);
 }
 /**
  * Directo: corrige los cruces sin separación. El paso de arriba sube y el de abajo baja (la mitad de lo que falta cada
@@ -3826,8 +3937,10 @@ function bindControls() {
   // nivel Vértice / Segmento y transformación Mover / Rotar / Escalar (como en 3ds Max: 1 / 2 y W / E / R)
   document.querySelectorAll('#xformBox [data-sub]').forEach((b) => b.addEventListener('click', () => app.setSubObj(b.dataset.sub)));
   document.querySelectorAll('#xformBox [data-xf]').forEach((b) => b.addEventListener('click', () => app.setXform(b.dataset.xf)));
-  const xfApply = () => { if (app.applyXformNumeric(state.xform, parseFloat($('xformNum').value))) toast(state.xform === 'rotate' ? `Selección rotada ${$('xformNum').value}° (antihorario).` : `Selección escalada al ${$('xformNum').value} %.`); };
+  const xfApply = () => { if (app.applyXformNumeric(state.xform, parseFloat($('xformNum').value))) toast(state.xform === 'rotate' ? `Selección rotada ${$('xformNum').value}° (antihorario).` : zScaleOn() ? `Altura de la selección escalada al ${$('xformNum').value} %.` : `Selección escalada al ${$('xformNum').value} %.`); };
   $('btnXformApply').addEventListener('click', xfApply);
+  $('scaleAxis').addEventListener('change', (e) => { state.scaleAxis = e.target.value; refreshXformBar(); editor.draw(); preview.updateHandles(); });
+  $('zPivot').addEventListener('change', (e) => { state.zPivot = e.target.value; });
   $('xformNum').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); xfApply(); } });
   refreshXformBar();
   document.addEventListener('keydown', (e) => {
@@ -4871,6 +4984,8 @@ function renderDecoPanel() {
       <div class="droad"${set.mode === 'painted' ? ' hidden' : ''}>${fld('Distancia al borde', 'offset', set.offset, 0, 80, 0.5, ' m')}${fld('Dispersión', 'spread', set.spread, 0, 150, 1, ' m')}</div>
       ${fld('Separación mínima', 'spacing', set.spacing, 0.1, 40, 0.1, ' m')}
       ${models.length ? fld('Escala de los modelos', 'modelScale', set.modelScale ?? 1, 0.01, 10, 0.01, ' ×') : fld('Tamaño (cubo o plano)', 'size', set.size, 0.05, 20, 0.05, ' m')}
+      <div class="field dxyz" title="Escala de cada elemento por eje (se multiplica por el tamaño o la escala de los modelos): X y Y en planta (ejes propios del elemento), Z en altura"><label>Escala por eje</label>
+        <div class="row gap" style="flex-wrap:nowrap">${['X', 'Y', 'Z'].map((a) => `<label class="small">${a} ${num('scale' + a, set['scale' + a] ?? 1, 0.05, 0.05)}</label>`).join('')}</div></div>
       ${fld('Variación de tamaño', 'sizeVar', Math.round((set.sizeVar ?? 0.3) * 100), 0, 100, 1, ' %')}
       <div class="field"><label>Rotación</label><select class="drm"><option value="random">Al azar</option><option value="fixed">Fija, respecto de la pista</option></select></div>
       <div class="drrand"${set.rotMode === 'fixed' ? ' hidden' : ''}>${fld('Rotación al azar (rango)', 'rot', set.rot ?? 360, 0, 360, 1, ' °')}</div>

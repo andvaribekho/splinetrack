@@ -288,7 +288,7 @@ export class Editor2D {
         const gh = this.hitGizmo(sx, sy);
         if (gh !== this.gizmoHover) { this.gizmoHover = gh; this.draw(); }
         const xf = this.app.state.xform || 'move';
-        if (gh) { cv.style.cursor = gh === 'rot' ? 'alias' : xf === 'scale' ? (gh === 'x' ? 'ew-resize' : gh === 'y' ? 'ns-resize' : 'nwse-resize') : gh === 'x' ? 'ew-resize' : gh === 'y' ? 'ns-resize' : 'move'; return; }
+        if (gh) { cv.style.cursor = gh === 'rot' ? 'alias' : xf === 'scale' ? (gh === 'x' ? 'ew-resize' : gh === 'y' || gh === 'z' ? 'ns-resize' : 'nwse-resize') : gh === 'x' ? 'ew-resize' : gh === 'y' ? 'ns-resize' : 'move'; return; }
         if (this.app.state.subObj === 'segment') {
           const sh = this.app.segmentAt(p, 10 / this.view.zoom);
           const key = sh ? `${sh.key}:${sh.seg}` : null;
@@ -326,7 +326,7 @@ export class Editor2D {
         return;
       }
       if (this.refDrag) { this.refDrag = null; this.draw(); return; }
-      if (this.xformDrag) { this.xformDrag = null; this.app.endXform(); this.draw(); return; }
+      if (this.xformDrag) { const zs = this.xformDrag.z; this.xformDrag = null; if (zs) this.app.endZScale(); else this.app.endXform(); this.draw(); return; }
       if (this.groupDrag) { this.groupDrag = null; this.app.endGroupDrag(); return; }
       if (this.dragCtrl) { this.dragCtrl = null; this.app.endCtrlDrag(); return; }
       if (this.panning) {
@@ -758,6 +758,12 @@ export class Editor2D {
 
   /** Empieza a rotar o escalar la selección (axis: 'rot' | 'x' | 'y' | 'xy' | 'drag'). */
   beginXformDrag(axis, p0) {
+    if (this.app.zScaleOn && this.app.zScaleOn()) { // escalar la altura (modo Directo): arrastrar hacia arriba = más alto
+      if (!this.app.beginZScale()) return false;
+      const T = this.app.xformTargets();
+      this.xformDrag = { mode: 'scale', z: true, axis, p0, pivot: T ? T.pivot : p0 };
+      return true;
+    }
     const T = this.app.xformTargets();
     if (!T || T.idxs.length < 2) { this.app.toast && this.app.toast('Selecciona 2 o más puntos (o un segmento) para rotar o escalar.'); return false; }
     const pivot = this.app.beginXform();
@@ -768,6 +774,12 @@ export class Editor2D {
   }
   moveXformDrag(p, e) {
     const X = this.xformDrag, pv = X.pivot, z = this.view.zoom;
+    if (X.z) {
+      let f = Math.exp((-(p[1] - X.p0[1]) * z) / 120);
+      if (e && e.shiftKey) f = Math.round(f * 20) / 20; // de a 5 %
+      this.app.applyZScale(f);
+      return;
+    }
     if (X.mode === 'rotate') {
       let a = Math.atan2(p[1] - pv[1], p[0] - pv[0]) - X.a0;
       a = Math.atan2(Math.sin(a), Math.cos(a));
@@ -849,6 +861,20 @@ export class Editor2D {
       ctx.restore();
       return;
     }
+    if (xf === 'scale' && this.app.zScaleOn && this.app.zScaleOn()) {
+      // escala en altura: una manija vertical (arrastrar hacia arriba = más alto)
+      ctx.save();
+      const on = !!hv;
+      ctx.strokeStyle = '#60a5fa'; ctx.fillStyle = '#60a5fa'; ctx.lineWidth = on ? 4 : 2.5;
+      ctx.beginPath(); ctx.moveTo(cx, cy - 10); ctx.lineTo(cx, cy - L + 6); ctx.stroke();
+      ctx.fillRect(cx - 7, cy - L - 7, 14, 14);
+      ctx.fillStyle = on ? 'rgba(96,165,250,0.6)' : 'rgba(96,165,250,0.3)'; ctx.strokeStyle = '#60a5fa'; ctx.lineWidth = 1.5;
+      ctx.fillRect(cx - 7, cy - 7, 14, 14); ctx.strokeRect(cx - 7, cy - 7, 14, 14);
+      ctx.fillStyle = '#9cc6ff'; ctx.font = 'bold 11px system-ui, sans-serif';
+      ctx.fillText('Z ↕', cx + 10, cy - L + 2);
+      ctx.restore();
+      return;
+    }
     if (xf === 'scale') {
       const axis = (dx, dy, col, label, on) => {
         ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = on ? 4 : 2.5;
@@ -892,6 +918,7 @@ export class Editor2D {
     if (!g) return null;
     const dx = sx - g.cx, dy = sy - g.cy;
     if (g.xf === 'rotate') return Math.abs(Math.hypot(dx, dy) - 46) <= 8 ? 'rot' : null;
+    if (g.xf === 'scale' && this.app.zScaleOn && this.app.zScaleOn()) return (Math.abs(dx) <= 9 && dy <= 9 && dy >= -60) ? 'z' : null;
     if (g.xf === 'scale') {
       if (dx >= 6 && dy <= -6 && dx - dy <= 36 + 2) return 'xy';
       if (dx >= 12 && dx <= 60 && Math.abs(dy) <= 8) return 'x';
@@ -944,16 +971,17 @@ export class Editor2D {
         const ms = this.app.state.selSet;
         const isSel = !segMode && ((sel && sel.key === r.key && sel.idx === i) || (ms && ms.key === r.key && ms.idxs.has(i)));
         const pinned = r.zs && r.zs[i] !== null && r.zs[i] !== undefined;
+        const gen = pinned && typeof r.zs[i] === 'object' && !!r.zs[i].gen; // altura generada (modo directo)
         ctx.beginPath();
         const sm = segMode ? 0.6 : 1; // en nivel Segmento los vértices se ven más chicos
         if (pinned) { const q = (isSel ? 6.5 : 5) * sm; ctx.rect(x - q, y - q, q * 2, q * 2); }
         else ctx.arc(x, y, (isSel ? 6.5 : 4.5) * sm, 0, Math.PI * 2);
         const cut = r.key === 'main' && this.app.ctrlInCut && this.app.ctrlInCut('main', i); // sección socavada: café
         const susp = !cut && r.key === 'main' && this.app.ctrlInSusp && this.app.ctrlInSusp('main', i); // tramo suspendido: celeste
-        ctx.fillStyle = isSel ? '#ffe066' : cut ? '#8d5a2b' : susp ? '#5ad8ff' : pinned ? '#f2a93b' : alt ? '#cfe9ff' : '#ffffff';
+        ctx.fillStyle = isSel ? '#ffe066' : cut ? '#8d5a2b' : susp ? '#5ad8ff' : gen ? '#4a3414' : pinned ? '#f2a93b' : alt ? '#cfe9ff' : '#ffffff';
         ctx.fill();
         ctx.lineWidth = 2;
-        ctx.strokeStyle = isSel ? '#8a5a00' : cut ? (pinned ? '#f2a93b' : '#3b2410') : susp ? (pinned ? '#f2a93b' : '#0f4a5c') : alt ? '#1d6fb8' : '#b8741a';
+        ctx.strokeStyle = isSel ? '#8a5a00' : cut ? (pinned ? '#f2a93b' : '#3b2410') : susp ? (pinned ? '#f2a93b' : '#0f4a5c') : gen ? '#f2a93b' : alt ? '#1d6fb8' : '#b8741a';
         ctx.stroke();
       });
     }

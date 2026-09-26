@@ -52,7 +52,7 @@ const Z = new THREE.Vector3(0, 0, 1);
 export function instanceMatrix(it, scale, zOverride = null) {
   const q = new THREE.Quaternion().setFromUnitVectors(Z, new THREE.Vector3(...(it.up || [0, 0, 1])));
   q.multiply(new THREE.Quaternion().setFromAxisAngle(Z, it.yaw || 0));
-  return new THREE.Matrix4().compose(new THREE.Vector3(it.x, it.y, zOverride ?? it.z), q, new THREE.Vector3(scale, scale, scale));
+  return new THREE.Matrix4().compose(new THREE.Vector3(it.x, it.y, zOverride ?? it.z), q, new THREE.Vector3(scale * (it.sx ?? 1), scale * (it.sy ?? 1), scale * (it.sz ?? 1)));
 }
 
 /**
@@ -81,7 +81,8 @@ export function instancedGroup(assetsById, items, zOf = null) {
 
 /** Copia de un asset como objeto propio (exportación): grupo con sus partes, pivote en el del modelo. */
 export function assetObject(A, it, name) {
-  if (A.parts.length === 1) { // una sola malla: el objeto es la malla (transformación de la instancia × la de la parte)
+  const uniform = (it.sx ?? 1) === (it.sy ?? 1) && (it.sy ?? 1) === (it.sz ?? 1);
+  if (A.parts.length === 1 && (uniform || A.parts[0].matrix.equals(new THREE.Matrix4()))) { // una sola malla: el objeto es la malla (transformación de la instancia × la de la parte)
     const part = A.parts[0];
     const m = new THREE.Mesh(part.geometry, part.material);
     m.name = name;

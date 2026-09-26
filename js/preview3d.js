@@ -1447,6 +1447,12 @@ export class Preview3D {
       this.app.beginItemDrag(st.selItem);
       return;
     }
+    // escalar con el eje Z del gizmo (modo de elevación Directo): escala la altura de los puntos
+    if (st.xform === 'scale' && st.elev.mode === 'direct' && this.tc.axis === 'Z' && st.selSet && st.selSet.idxs.size > 1 && this.app.beginZScale()) {
+      this.xformMode = 'zscale';
+      this.dragSel = { group: true };
+      return;
+    }
     if ((st.xform === 'rotate' || st.xform === 'scale') && st.selSet && st.selSet.idxs.size > 1 && this.app.beginXform()) {
       this.xformMode = st.xform;
       this.dragSel = { group: true };
@@ -1477,6 +1483,7 @@ export class Preview3D {
     const d = this.dragSel;
     if (!d) return;
     const p = this.proxy.position;
+    if (this.xformMode === 'zscale') { this.app.applyZScale(this.proxy.scale.z); return; }
     if (this.xformMode === 'rotate') { this.app.applyXform({ type: 'rotate', a: -this.proxy.rotation.z }); return; } // y del lienzo invertida
     if (this.xformMode === 'scale') {
       const c = (v) => Math.max(0.02, Math.min(50, v));
@@ -1514,7 +1521,7 @@ export class Preview3D {
       return;
     }
     this.dragSel = null;
-    if (this.xformMode) { this.xformMode = null; this.app.endXform(); this.proxy.rotation.set(0, 0, 0); this.proxy.scale.set(1, 1, 1); }
+    if (this.xformMode) { if (this.xformMode === 'zscale') this.app.endZScale(); else this.app.endXform(); this.xformMode = null; this.proxy.rotation.set(0, 0, 0); this.proxy.scale.set(1, 1, 1); }
     else if (this.groupMode) { this.groupMode = false; this.app.endGroupDrag(); } else this.app.endCtrlDrag();
     this.updateHandles();
   }

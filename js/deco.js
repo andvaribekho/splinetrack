@@ -28,9 +28,12 @@ export function decoSetItems(layout, elev, sp, ground, sets, paintFor, hasAsset)
     if (set.visible === false) { out.push({ set, items: [] }); continue; }
     const inst = buildDecoInstances(layout, elev, sp, ground, set, paintFor ? paintFor(set) : null);
     const models = (set.assets || []).filter((a) => hasAsset(a));
+    // escala por eje del set (X, Y en planta con los ejes propios del elemento; Z en altura)
+    const ax = (v) => (Number.isFinite(v) && v > 0 ? v : 1);
+    const sx = ax(set.scaleX), sy = ax(set.scaleY), sz = ax(set.scaleZ);
     const items = inst.map((it) => models.length
-      ? { ...it, asset: pickOf(models, it.pick), scale: Math.max(0.01, set.modelScale ?? 1) * it.s }
-      : { ...it, asset: (set.shape === 'plane' ? 'plane:' : 'cube:') + set.color, scale: Math.max(0.05, set.size || 1) * it.s });
+      ? { ...it, asset: pickOf(models, it.pick), scale: Math.max(0.01, set.modelScale ?? 1) * it.s, sx, sy, sz }
+      : { ...it, asset: (set.shape === 'plane' ? 'plane:' : 'cube:') + set.color, scale: Math.max(0.05, set.size || 1) * it.s, sx, sy, sz });
     out.push({ set, items });
   }
   return out;
