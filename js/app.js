@@ -737,34 +737,6 @@ const app = {
     Z.ground = s1 < s0 ? G.map(([t, zz]) => [+(1 - t).toFixed(4), zz]).reverse() : G; // guardado de a hacia b
     return true;
   },
-  /** Convierte los puntos seleccionados (ruta principal, seguidos) en un tramo suspendido (terreno elevado). */
-  addSuspFromSelection() {
-    const L = state.layout;
-    if (!L) return false;
-    const sel = state.selSet && state.selSet.idxs.size ? state.selSet : null;
-    if (!sel || sel.idxs.size < 2) { toast('Selecciona dos o más puntos seguidos de la ruta principal (Editar puntos, Shift + clic o caja).'); return false; }
-    if (sel.key !== 'main') { toast('Los tramos elevados van en la ruta principal.'); return false; }
-    const run = contiguousRun('main');
-    if (!run || run.length !== sel.idxs.size) { toast('Los puntos del tramo elevado deben ser seguidos.'); return false; }
-    const cp = app.ctrlPoints().filter((q) => q.key === 'main');
-    const sA = cp.find((c) => c.idx === run[0]).s, sB = cp.find((c) => c.idx === run[run.length - 1]).s;
-    app.addSuspZone(app.mainLayoutAt(Math.min(sA, sB)), app.mainLayoutAt(Math.max(sA, sB)));
-    return true;
-  },
-  addSuspZone(a, b) {
-    if (!state.layout) return;
-    const s0 = app.nearestMainS(a, Infinity), s1 = app.nearestMainS(b, Infinity);
-    if (s0 === null || s1 === null || Math.abs(s1 - s0) < 5) return;
-    pushUndo();
-    const lo = Math.min(s0, s1), hi = Math.max(s0, s1);
-    const cur = app.suspZonesS();
-    state.suspZones = state.suspZones.filter((Z, i) => { const c = cur.find((q) => q.idx === i); return !c || c.s1 < lo || c.s0 > hi; }); // reemplaza los que se superponen
-    const Z = { a: app.mainLayoutAt(lo), b: app.mainLayoutAt(hi), pillars: Math.max(1, Math.round((hi - lo) / 25)), dirt: false, barrier: true };
-    app.captureSuspGround(Z); // el terreno queda con este suelo aunque después subas el tramo
-    state.suspZones.push(Z);
-    scheduleElev();
-    toast(`Tramo elevado entre s=${lo.toFixed(0)} y ${hi.toFixed(0)} m: sube sus puntos del medio; el terreno queda donde estaba y los pilares lo conectan con la pista. El primero y el último punto quedan en el suelo (ahí empiezan las rampas).`);
-  },
   /** Tramo elegido para el perfil, en s: [s0, s1] o null. */
   profileSelS() {
     const P = state.profileSel;
@@ -2418,6 +2390,31 @@ function refreshBridgeBox() {
     : ends ? 'Une los dos extremos con un puente que cierra el circuito, con su propio ancho. Si queda en altura, lleva pilares.'
       : `Convierte en puente el tramo de los ${run.length} puntos seleccionados, con la misma forma y su propio ancho. Si queda en altura, lleva pilares.`;
 }
+/**
+ * Proyectos anteriores: cada tramo de «terreno elevado» pasa a ser un puente con el ancho de la pista, su camino de
+ * tierra y su barrera, y las texturas que tenían los tramos suspendidos (la de la pista, si no tenían propia).
+ */
+async function migrateSuspToBridges(zones, tex) {
+  const m = state.project && state.project.main;
+  if (!m || !m.ctrl) return;
+  let L;
+  try { L = buildLayout(state.project, state.geom); } catch { return; }
+  const r = L.routes[0];
+  const sOf = (p) => { const [X, Y] = L.toWorld(p[0], p[1]); return nearestOnSamples(r, X, Y).s; };
+  m.bridges = m.bridges || [];
+  let n = 0;
+  for (const Z of zones) {
+    if (!Z || !Z.a || !Z.b) continue;
+    const sa = sOf(Z.a), sb = sOf(Z.b), s0 = Math.min(sa, sb), s1 = Math.max(sa, sb);
+    if (s1 - s0 < 2) continue;
+    const e = evalAt(r, (s0 + s1) / 2);
+    const br = ensureBridgeUid({ a: Z.a.slice(0, 2), b: Z.b.slice(0, 2), mid: L.toLayout(e.x, e.y), w: state.geom.width, dirt: !!Z.dirt, barrier: !!Z.barrier });
+    m.bridges.push(br);
+    state.bridgeTexs[br.uid] = { deck: tex.deck || state.trackTex || defaultTrackCanvas(), dirt: tex.dirt || null, barrier: tex.barrier || null };
+    n++;
+  }
+  if (n) setTimeout(() => toast(`${n} tramo(s) de terreno elevado del proyecto pasaron a ser puentes (sección «Puentes»).`), 400);
+}
 /** Identificador estable de un puente (sus materiales propios se guardan con él). */
 function ensureBridgeUid(b) { if (b && !b.uid) b.uid = `br${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`; return b; }
 function createBridge(w) {
@@ -2505,6 +2502,7 @@ function refreshBridgeList() {
     const inf = infoArr.find((q) => q.idx === i);
     const texRow = (kind, def) => `<div class="row gap" style="flex-wrap:nowrap"><button class="btex small" data-kind="${kind}">Cargar textura…</button><button class="btexRm small" data-kind="${kind}"${app.bridgeOwnTex(i, kind) ? '' : ' disabled'}>${def}</button><img class="thumb bthumb" data-kind="${kind}" alt=""></div>`;
     const dirtOn = !!b.dirt, barOn = b.barrier !== false;
+    const sideSel = (cls, v) => `<select class="${cls}" title="Lado del tablero según el sentido de marcha">${[['both', 'Ambos lados'], ['left', 'Izquierda'], ['right', 'Derecha']].map(([k, t]) => `<option value="${k}"${(v || 'both') === k ? ' selected' : ''}>${t}</option>`).join('')}</select>`;
     d.innerHTML = `<div class="head"><span class="row" style="gap:4px;min-width:0"><button class="x btoggle" title="Mostrar u ocultar los parámetros del puente">${b.collapsed ? '▸' : '▾'}</button><strong>Puente ${i + 1}</strong></span><button class="x bdel" title="Quitar el puente (el tramo vuelve al ancho de la pista)">✕</button></div>
       <div class="meta">${inf ? `${(inf.s1 - inf.s0).toFixed(0)} m · s ${inf.s0.toFixed(0)}–${inf.s1.toFixed(0)} m` : ''}</div>
       <div class="bbody">
@@ -2513,10 +2511,10 @@ function refreshBridgeList() {
         <div class="row gap bo-btns"><button data-o="-1" title="Alinear el puente con el borde izquierdo de la pista">⇤ Izquierda</button><button data-o="0" title="Puente centrado en el eje de la pista">Centro</button><button data-o="1" title="Alinear el puente con el borde derecho de la pista">Derecha ⇥</button></div></div>
       <h4 class="mini">Material del piso</h4>
       ${texRow('deck', 'Por defecto')}
-      <label class="check small" style="margin-top:8px" title="Camino de tierra a ambos lados del tablero, con el ancho del de la pista"><input type="checkbox" class="bdirt"${dirtOn ? ' checked' : ''}> Camino de tierra</label>
-      <div class="bdirtBox"${dirtOn ? '' : ' hidden'}>${texRow('dirt', 'Como la pista')}</div>
-      <label class="check small" style="margin-top:8px" title="Barrera de contención a ambos lados del tablero; se une con la barrera de la pista en los extremos"><input type="checkbox" class="bbar"${barOn ? ' checked' : ''}> Barrera de contención</label>
-      <div class="bbarBox"${barOn ? '' : ' hidden'}>${texRow('barrier', 'Como la pista')}</div>
+      <label class="check small" style="margin-top:8px" title="Camino de tierra junto al tablero (a uno o ambos lados), con el ancho del de la pista"><input type="checkbox" class="bdirt"${dirtOn ? ' checked' : ''}> Camino de tierra</label>
+      <div class="bdirtBox"${dirtOn ? '' : ' hidden'}><div class="field"><label>Lado</label>${sideSel('bdirtSide', b.dirtSide)}</div>${texRow('dirt', 'Como la pista')}</div>
+      <label class="check small" style="margin-top:8px" title="Barrera de contención junto al tablero (a uno o ambos lados); se une con la barrera de la pista en los extremos"><input type="checkbox" class="bbar"${barOn ? ' checked' : ''}> Barrera de contención</label>
+      <div class="bbarBox"${barOn ? '' : ' hidden'}><div class="field"><label>Lado</label>${sideSel('bbarSide', b.barrierSide)}</div>${texRow('barrier', 'Como la pista')}</div>
       </div>`;
     d.querySelectorAll('img.bthumb').forEach((img) => {
       const k = img.dataset.kind;
@@ -2543,6 +2541,8 @@ function refreshBridgeList() {
     // camino de tierra y barrera propios del puente
     d.querySelector('.bdirt').addEventListener('change', (e) => { pushUndo(); b.dirt = e.target.checked; d.querySelector('.bdirtBox').hidden = !b.dirt; scheduleBuild(); });
     d.querySelector('.bbar').addEventListener('change', (e) => { pushUndo(); b.barrier = e.target.checked; d.querySelector('.bbarBox').hidden = !b.barrier; scheduleBuild(); });
+    d.querySelector('.bdirtSide').addEventListener('change', (e) => { pushUndo(); b.dirtSide = e.target.value; scheduleBuild(); });
+    d.querySelector('.bbarSide').addEventListener('change', (e) => { pushUndo(); b.barrierSide = e.target.value; scheduleBuild(); });
     d.querySelectorAll('button.btex').forEach((btn) => btn.addEventListener('click', () => pickTextureFile((cv) => app.setBridgeTexture(i, btn.dataset.kind, cv))));
     d.querySelectorAll('button.btexRm').forEach((btn) => btn.addEventListener('click', () => app.setBridgeTexture(i, btn.dataset.kind, null)));
     d.querySelector('button.btoggle').addEventListener('click', () => { b.collapsed = !b.collapsed; d.classList.toggle('collapsed', b.collapsed); d.querySelector('button.btoggle').textContent = b.collapsed ? '▸' : '▾'; });
@@ -3632,38 +3632,6 @@ function refreshPanels() {
       czl.appendChild(div);
     });
   }
-  const sl = $('suspZoneList');
-  if (sl && !draggingIn(sl)) {
-    sl.innerHTML = '';
-    const sz = app.suspZonesS();
-    state.suspZones.forEach((Z, i) => {
-      const c = sz.find((q) => q.idx === i);
-      const div = document.createElement('div');
-      div.className = 'item';
-      div.innerHTML = `<div class="head"><span><strong>suspendido_${String(i + 1).padStart(2, '0')}</strong>${c ? ` · s ${c.s0.toFixed(0)}–${c.s1.toFixed(0)} m` : ''}</span><button class="x del" title="Quitar (el terreno vuelve a adaptarse)">✕</button></div>
-        <div class="field"><label>Pilares <span class="val"><input type="number" class="spN" min="0" max="200" step="1" style="width:52px" value="${Z.pillars ?? 3}"></span></label><input type="range" class="spR" min="0" max="40" step="1" value="${Math.min(40, Z.pillars ?? 3)}"></div>
-        <label class="check small"><input type="checkbox" class="spDirt"${Z.dirt ? ' checked' : ''}> Camino de tierra</label>
-        <label class="check small"><input type="checkbox" class="spBar"${Z.barrier ? ' checked' : ''}> Barreras</label>
-        <div class="row gap"><button class="spGround" title="El suelo bajo el tramo toma la altura que tiene la pista ahora (por ejemplo: bájala a donde quieres el suelo, pulsa esto y vuelve a subirla)">Tomar el suelo de la pista actual</button></div>`;
-      let editing = false;
-      const upd = (patch, done = true) => {
-        if (!editing) { pushUndo(); editing = true; }
-        Object.assign(Z, patch);
-        if (done) editing = false;
-        state.scene.suspRanges = app.suspZonesS();
-        preview.update(false, true); // pista, bordes y pilares
-      };
-      const pil = (v, done) => { v = Math.max(0, Math.min(200, Math.round(v))); div.querySelector('.spN').value = v; div.querySelector('.spR').value = Math.min(40, v); upd({ pillars: v }, done); };
-      div.querySelector('.spR').addEventListener('input', (e) => pil(parseFloat(e.target.value), false));
-      div.querySelector('.spR').addEventListener('change', () => { editing = false; });
-      div.querySelector('.spN').addEventListener('change', (e) => pil(parseFloat(e.target.value), true));
-      div.querySelector('.spDirt').addEventListener('change', (e) => upd({ dirt: e.target.checked }));
-      div.querySelector('.spBar').addEventListener('change', (e) => upd({ barrier: e.target.checked }));
-      div.querySelector('.spGround').addEventListener('click', () => { pushUndo(); if (app.captureSuspGround(Z)) { scheduleElev(); toast('Suelo del tramo actualizado a la altura actual de la pista.'); } });
-      div.querySelector('.del').addEventListener('click', () => { pushUndo(); state.suspZones.splice(i, 1); scheduleElev(); });
-      sl.appendChild(div);
-    });
-  }
   const pl = $('profileZoneList');
   if (pl) {
     pl.innerHTML = '';
@@ -4459,11 +4427,8 @@ function saveProject() {
     coveredTex: state.coveredTex ? state.coveredTex.toDataURL('image/png') : null,
     dirtTex: state.dirtTex ? state.dirtTex.toDataURL('image/png') : null,
     riverWallTex: state.riverWallTex ? state.riverWallTex.toDataURL('image/png') : null,
-    suspTex: state.suspTex ? state.suspTex.toDataURL('image/png') : null,
     cutArtTex: state.cutArtTex ? state.cutArtTex.toDataURL('image/png') : null,
     cutNatTex: state.cutNatTex ? state.cutNatTex.toDataURL('image/png') : null,
-    suspBarrierTex: state.suspBarrierTex ? state.suspBarrierTex.toDataURL('image/png') : null,
-    suspDirtTex: state.suspDirtTex ? state.suspDirtTex.toDataURL('image/png') : null,
     fallWallTex: state.fallWallTex ? state.fallWallTex.toDataURL('image/png') : null,
     terrainTex: state.terrainTex ? state.terrainTex.toDataURL('image/png') : null,
     grassTex: state.grassTex ? state.grassTex.toDataURL('image/png') : null,
@@ -4609,7 +4574,8 @@ async function openProject(text) {
   state.overrides = d.overrides || [];
   state.flatZones = d.flatZones || [];
   state.profileZones = []; state.profileSel = null; // los perfiles dibujados ya no se guardan (solo ubican los puntos)
-  state.suspZones = d.suspZones || [];
+  state.suspZones = []; // el terreno elevado ya no existe: los tramos antiguos pasan a ser puentes (más abajo)
+  const legacySusp = Array.isArray(d.suspZones) ? d.suspZones : [];
   state.cutZones = d.cutZones || [];
   state.imageOpacity = d.imageOpacity ?? 0.35;
   state.image = null;
@@ -4666,11 +4632,9 @@ async function openProject(text) {
   }
   state.dirtTex = await toCanvas(d.dirtTex);
   state.riverWallTex = await toCanvas(d.riverWallTex);
-  state.suspTex = await toCanvas(d.suspTex);
   state.cutArtTex = await toCanvas(d.cutArtTex);
   state.cutNatTex = await toCanvas(d.cutNatTex);
-  state.suspBarrierTex = await toCanvas(d.suspBarrierTex);
-  state.suspDirtTex = await toCanvas(d.suspDirtTex);
+  if (legacySusp.length) await migrateSuspToBridges(legacySusp, { deck: await toCanvas(d.suspTex), barrier: await toCanvas(d.suspBarrierTex), dirt: await toCanvas(d.suspDirtTex) });
   state.fallWallTex = await toCanvas(d.fallWallTex);
   state.densityPaint = d.densityPaint || [];
   state.terrainSculpt = d.terrainSculpt || [];
@@ -4945,7 +4909,7 @@ function syncSceneControls() {
   };
   thumb('trackTexThumb', state.trackTex || defaultTrackCanvas(), 'btnTrackTexRemove');
   $('btnTrackTexRemove').disabled = !state.trackTex;
-  for (const [k, id] of [['cutArtTex', 'cutArtTex'], ['cutNatTex', 'cutNatTex'], ['riverWallTex', 'riverWall'], ['fallWallTex', 'fallWall'], ['suspTex', 'suspTex'], ['suspBarrierTex', 'suspBarrierTex'], ['suspDirtTex', 'suspDirtTex']]) { const img = $(id + 'Thumb'); img.hidden = !state[k]; if (state[k]) img.src = thumbURL(state[k]); $(id + 'Remove').disabled = !state[k]; }
+  for (const [k, id] of [['cutArtTex', 'cutArtTex'], ['cutNatTex', 'cutNatTex'], ['riverWallTex', 'riverWall'], ['fallWallTex', 'fallWall']]) { const img = $(id + 'Thumb'); img.hidden = !state[k]; if (state[k]) img.src = thumbURL(state[k]); $(id + 'Remove').disabled = !state[k]; }
   set('riverWallTile', sc.riverWallTile ?? 4); set('riverWallTileNum', sc.riverWallTile ?? 4);
   set('cutWallTile', sc.cutWallTile ?? 4); set('cutWallTileNum', sc.cutWallTile ?? 4);
   thumb('coveredTexThumb', app.coveredTexCanvas(), 'btnCoveredTexRemove'); $('btnCoveredTexRemove').disabled = !state.coveredTex;
@@ -5396,7 +5360,7 @@ function focusPanel(id, sub = null) {
 /** Botones (fuera de la barra lateral) con parámetros asociados: a qué sección llevan. */
 const PANEL_FOR_BUTTON = {
   'tool:edit': 'spline', 'tool:draw': 'trace', 'tool:extend': 'trace', 'tool:alt': 'alts', 'tool:start': 'gate', 'tool:ref': 'ref',
-  btnDecoNew: 'deco', 'tool:hill': 'hills', 'tool:river': 'rivers', 'tool:paint': 'terrain', 'tool:sculpt': 'terrain', 'tool:flat': 'elev', 'tool:profile': 'elev', btnSusp: 'susp', btnCut: 'cut', btnSculptTool: 'terrain', btnRef3dTop: 'ref3d',
+  btnDecoNew: 'deco', 'tool:hill': 'hills', 'tool:river': 'rivers', 'tool:paint': 'terrain', 'tool:sculpt': 'terrain', 'tool:flat': 'elev', 'tool:profile': 'elev', btnCut: 'cut', btnSculptTool: 'terrain', btnRef3dTop: 'ref3d',
   btnGame: 'sky', btnExportBlender: 'export', btnExportMax: 'export', btnExportJSON: 'export', btnExportOBJ: 'export',
   btnExportGLB2: 'export', btnExportFBX2: 'export', btnTbRadius: 'spline', btnTbFork: 'spline', btnTbBridge: 'bridges', btnGenTerrain: 'terrain', btnGenTrees: 'trees',
 };
@@ -5575,16 +5539,6 @@ function bindSceneControls() {
   $('riverDepth').addEventListener('input', (e) => { sc.riverDepth = parseFloat(e.target.value); syncSceneControls(); });
   $('riverWallSubdiv').addEventListener('input', (e) => { sc.riverWallSubdiv = Math.round(parseFloat(e.target.value)); syncSceneControls(); });
   $('btnRiverTool').addEventListener('click', () => setTool('river'));
-  // texturas propias de los tramos suspendidos (pista, barrera y camino de tierra)
-  for (const [id, key] of [['suspTex', 'suspTex'], ['suspBarrierTex', 'suspBarrierTex'], ['suspDirtTex', 'suspDirtTex']]) {
-    $(id + 'Btn').addEventListener('click', () => $(id + 'File').click());
-    $(id + 'File').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) loadTexture(f, key); });
-    $(id + 'Remove').addEventListener('click', () => { state[key] = null; syncSceneControls(); sceneChanged(); editor.draw(); });
-  }
-  // terreno elevado (tramo suspendido) desde los puntos seleccionados, igual que la sección socavada
-  const suspFromSel = () => { if (state.tool !== 'edit') { setTool('edit'); if (!state.selSet) { toast('Selecciona dos o más puntos seguidos de la ruta principal y vuelve a pulsar «Terreno elevado».'); return; } } app.addSuspFromSelection(); };
-  $('btnSusp').addEventListener('click', suspFromSel);
-  $('btnSuspTool').addEventListener('click', suspFromSel);
   $('btnBankTop').addEventListener('click', () => focusPanel('bank'));
   // material de las paredes socavadas (ríos y cascadas)
   for (const [id, key] of [['riverWall', 'riverWallTex'], ['fallWall', 'fallWallTex']]) {

@@ -287,7 +287,6 @@ export class Editor2D {
       }
       if (this.dragFlat) { this.dragFlat.b = p; this.draw(); return; }
       if (this.dragProfile) { this.dragProfile.b = p; this.draw(); return; }
-      if (this.dragSusp) { this.dragSusp.b = p; this.draw(); return; }
       // hover sobre la ruta principal
       const s = this.app.nearestMainS(p, 25 / this.view.zoom);
  const tl = this.app.state.tool;
@@ -369,12 +368,6 @@ export class Editor2D {
         const d = this.dragFlat;
         this.dragFlat = null;
         this.app.addFlatZone(d.a, d.b);
-        this.draw();
-      }
-      if (this.dragSusp) {
-        const d = this.dragSusp;
-        this.dragSusp = null;
-        this.app.addSuspZone(d.a, d.b);
         this.draw();
       }
       if (this.dragProfile) {
@@ -1115,10 +1108,6 @@ export class Editor2D {
       ctx.setLineDash([8, 6]);
       for (const Z of this.app.suspZonesS()) this.strokeRange(L, 0, Z.s0, Z.s1, 'rgba(90,220,255,0.6)', 3);
       ctx.restore();
-    }
-    if (this.dragSusp && L) {
-      const s0 = this.app.nearestMainS(this.dragSusp.a, Infinity), s1 = this.app.nearestMainS(this.dragSusp.b, Infinity);
-      if (s0 !== null && s1 !== null) this.strokeRange(L, 0, Math.min(s0, s1), Math.max(s0, s1), 'rgba(90,220,255,0.9)', 6);
     }
     // perfiles dibujados (violeta) y tramo elegido para dibujar su perfil (amarillo)
     if (L && (st.tool === 'profile' || st.tool === 'flat' || this.dragProfile)) {

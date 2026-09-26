@@ -106,8 +106,9 @@ export function buildEdgeMeshes(layout, elev, spIn = {}, opts = {}) {
       // tiene de ese lado, van a ambos lados con las medidas de la ruta)
       const routeDirt = Wt.dirt && has(P.dirtSide, sideKey), routeBar = Wt.bar && has(P.barrierSide, sideKey);
       const onFor = (z, want, routeHas, routeSide) => (z ? !!want && (routeHas || routeSide === 'none' || !routeSide) : routeHas);
-      const dOn = frames.map((F, a) => (brF[a] ? !!brF[a].dirt : onFor(suspF[a], suspF[a] && suspF[a].dirt, routeDirt, P.dirtSide)));
-      const bOn = frames.map((F, a) => (brF[a] ? brF[a].barrier !== false : onFor(suspF[a], suspF[a] && suspF[a].barrier, routeBar, P.barrierSide)));
+      // en un puente: su camino de tierra y su barrera, del lado elegido (ambos, izquierda o derecha)
+      const dOn = frames.map((F, a) => (brF[a] ? !!brF[a].dirt && has(brF[a].dirtSide || 'both', sideKey) : onFor(suspF[a], suspF[a] && suspF[a].dirt, routeDirt, P.dirtSide)));
+      const bOn = frames.map((F, a) => (brF[a] ? brF[a].barrier !== false && has(brF[a].barrierSide || 'both', sideKey) : onFor(suspF[a], suspF[a] && suspF[a].barrier, routeBar, P.barrierSide)));
       if (!dOn.some(Boolean) && !bOn.some(Boolean)) continue;
       // tramo a tramo: ¿se dibuja?
       const segOk = (a, b, wOut) => {

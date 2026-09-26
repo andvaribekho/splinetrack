@@ -5,7 +5,7 @@ import { computeElevation } from '../js/elevation.js';
 import { traceImage } from '../js/trace.js';
 import { exportBlender, exportMax, exportJSON, exportOBJ, routeSamples, bezierKnots, bezierError } from '../js/export.js';
 import { rasterize } from './raster.js';
-import { buildTerrain, buildTrees, buildTrackMesh, trackRows, buildDecoInstances, coveredRanges, isCovered, buildHills, buildStartGate, buildGrass, makeGround, suspPillars, pillarBlocked } from '../js/scene.js';
+import { bridgePillars, buildTerrain, buildTrees, buildTrackMesh, trackRows, buildDecoInstances, coveredRanges, isCovered, buildHills, buildStartGate, buildGrass, makeGround, suspPillars, pillarBlocked } from '../js/scene.js';
 import { edgeSamples } from '../js/export.js';
 import { computeItems, defaultGroup, itemAt } from '../js/items.js';
 import { nearestOnSamples } from '../js/geometry.js';
@@ -806,8 +806,31 @@ for (const [key, s] of Object.entries(SAMPLES)) {
     check(road && br && road.positions === br.positions && ends === 2 && joined === 2, `puente: la barrera se une con la de la pista (${joined}/${ends} extremos)`);
     const dirtBridge = B.dirt.find((m) => m.bridge === 0);
     check(!dirtBridge, 'puente: sin camino de tierra sobre el tablero aunque la pista lo tenga'); }
+  { const { L, E } = mk({ dirt: true, dirtSide: 'left', barrierSide: 'right' }); const B = buildEdgeMeshes(L, E, { barrierSide: 'none', dirtSide: 'none' });
+    const nm = names(B);
+    check(nm.includes('camino_tierra_puente_01_izq') && !nm.includes('camino_tierra_puente_01_der') && nm.includes('barrera_puente_01_der') && !nm.includes('barrera_puente_01_izq'), `puente: camino de tierra y barrera a un solo lado (${nm})`); }
   { const { L, E } = mk({}); const TM = buildTrackMesh(L, E, {});
     check(TM.bridgeGroups && TM.bridgeGroups.length === 1 && TM.bridgeGroups[0].bridge === 0 && TM.bridgeGroups[0].count > 0, 'puente: grupo de material propio del tablero'); }
+}
+
+// bajo un puente el terreno no se adapta: queda su relieve natural (no sube hasta el tablero) y lleva pilares
+{
+  const proj = SAMPLES.oval.build();
+  const L0 = buildLayout(proj, { lapLength: 1000 });
+  proj.main.ctrl = deriveControlPoints(proj.main.pts, true, 30 / L0.scale, 3);
+  const c = proj.main.ctrl;
+  proj.main.bridges = [{ a: c[5].slice(0, 2), b: c[9].slice(0, 2), w: 14 }];
+  const L = buildLayout(proj, { lapLength: 1000 });
+  const bB = L.routes[0].bridges[0], Lm = L.routes[0].L, span = bB.s1 - bB.s0;
+  const pins = [];
+  for (let sv = 0; sv < Lm; sv += 25) { const d = (((sv - bB.s0) % Lm) + Lm) % Lm; const z = d <= span ? 12 : d < span + 60 || d > Lm - 60 ? null : 0; if (z != null) pins.push({ route: 0, s: sv, z }); }
+  const E = computeElevation(L, { mode: 'direct', hills: 0 }, null, pins);
+  const T = buildTerrain(L, E, { terrain: true, terrainDensity: 40 });
+  const r = L.routes[0], i = Math.round((((bB.s0 + span / 2) % Lm) / r.ds)) % r.n;
+  const zDeck = E.routes[0].z[i], zT = T.sample(r.x[i], r.y[i]);
+  check(zDeck > 10 && zT < zDeck - 3, `puente: el terreno bajo el tablero queda con su relieve natural (tablero ${zDeck.toFixed(1)} m, terreno ${zT.toFixed(1)} m)`);
+  const PL = bridgePillars(L, E, T);
+  check(PL.length > 0 && PL.some((q) => q.zTop - q.zBot > 3), `puente: pilares hasta el suelo (${PL.length})`);
 }
 
 // puentes desplazados hacia un borde: el borde del puente sigue el borde de la pista

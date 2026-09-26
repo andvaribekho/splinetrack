@@ -135,7 +135,8 @@ function trackSamples(layout, elev, sp = {}) {
       const X = XR[k];
       // sección socavada: como un tramo suspendido (el terreno no se adapta), pero además la pista socava el terreno
       const cut = sp.cutRanges && sp.cutRanges.length ? cutZoneAt(layout, k, r.s[i], sp.cutRanges) : null;
-      const susp = !!cut || !!(sp.suspRanges && isCovered(layout, k, r.s[i], sp.suspRanges)); // tramo suspendido: el terreno no se adapta
+      // puente o tramo suspendido: el terreno no se adapta (queda su relieve natural; solo se baja si tocaría la calzada)
+      const susp = !!cut || bridge || !!(sp.suspRanges && isCovered(layout, k, r.s[i], sp.suspRanges));
       const uL = r.w[i] / 2 + X.left, uR = r.w[i] / 2 + X.right; // calzada + camino de tierra + barrera
       // tramo elevado con suelo guardado: el terreno bajo él queda a esa altura (no sigue a la pista al subirla)
       const gz = susp && !cut ? suspGroundAt(layout, k, r.s[i], sp.suspRanges) : null;
@@ -778,9 +779,9 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
   };
   const heightAt0 = anySusp ? (x, y, rho) => {
     const zone = zoneAt(x, y, rho, null, 1);
-    if (zone < Infinity) return zone - gap;
-    let z = heightNat(x, y, rho);
     const zs = zoneAt(x, y, rho, null, 2);
+    if (zone < Infinity) return Math.min(zone, zs) - gap; // junto al extremo de un puente: tampoco sobre su tablero
+    let z = heightNat(x, y, rho);
     if (zs < Infinity) z = Math.min(z, zs - gap);
     if (anyCut) { const ci = cutInfo(x, y); if (ci.z < z) z = ci.z; }
     return z;

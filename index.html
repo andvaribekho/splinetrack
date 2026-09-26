@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Track Spline Generator v0.1</title>
+  <title>Track Spline Generator v0.3</title>
   <link rel="stylesheet" href="styles.css">
   <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.1</span></div>
+    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.3</span></div>
     <div class="top-actions">
       <select id="sampleSelect" title="Cargar un layout de ejemplo">
         <option value="">Ejemplos…</option>
@@ -428,21 +428,6 @@
         <div class="field"><label>Repetición de la textura <span class="val"><input type="number" id="cutWallTileNum" min="0.5" step="0.5" style="width:56px"> m</span></label><input type="range" id="cutWallTile" min="0.5" max="30" step="0.5"></div>
       </section>
 
-      <section class="panel" data-panel="susp">
-        <h2>Tramos suspendidos</h2>
-        <p class="hint">Selecciona dos o más puntos seguidos de la ruta principal (Editar puntos) y pulsa <b>Terreno elevado</b> en la barra superior. Ahí el terreno no se adapta a la pista (solo se baja si llegaría a tocarla), así que puedes dejarla en el aire subiéndola con el <b>perfil de tramo</b> o las alturas de sus puntos. Cada tramo lleva pilares hasta el suelo y eliges si tiene camino de tierra y barreras. Se exportan como <code>ruta_principal_suspendido</code>, sus bordes como <code>…_suspendido_izq/der</code> y los pilares en el grupo <code>suspendidos</code>.</p>
-        <div class="row gap"><button id="btnSuspTool">Elevar los puntos seleccionados</button></div>
-        <div id="suspZoneList" class="list"></div>
-        <h3 class="subhead">Texturas de los tramos suspendidos</h3>
-        <p class="hint">Por defecto, las mismas de la pista, su barrera y su camino de tierra.</p>
-        <div class="row gap"><span class="small" style="min-width:74px">Pista</span><button id="suspTexBtn">Cargar textura…</button><button id="suspTexRemove" disabled>Como la pista</button><img id="suspTexThumb" class="thumb" hidden alt=""></div>
-        <input id="suspTexFile" type="file" accept="image/*" hidden>
-        <div class="row gap" style="margin-top:6px"><span class="small" style="min-width:74px">Barrera</span><button id="suspBarrierTexBtn">Cargar textura…</button><button id="suspBarrierTexRemove" disabled>Como la pista</button><img id="suspBarrierTexThumb" class="thumb" hidden alt=""></div>
-        <input id="suspBarrierTexFile" type="file" accept="image/*" hidden>
-        <div class="row gap" style="margin-top:6px"><span class="small" style="min-width:74px">Camino tierra</span><button id="suspDirtTexBtn">Cargar textura…</button><button id="suspDirtTexRemove" disabled>Como la pista</button><img id="suspDirtTexThumb" class="thumb" hidden alt=""></div>
-        <input id="suspDirtTexFile" type="file" accept="image/*" hidden>
-      </section>
-
       <section class="panel" data-panel="rivers">
         <h2>Ríos y cascadas <span class="badge" id="riverCount">0</span></h2>
         <p class="hint">Con <b>Ríos y cascadas</b> (barra superior) pintas ríos sobre el terreno; con un cerro seleccionado, lo que pintes sobre él es una cascada de ese cerro. Si empiezas sobre un río, lo extiendes, y si el trazo se abre, se bifurca. <b>Posado</b>: solo el agua sobre la superficie. <b>Socavado</b>: la superficie se hunde (profundidad, paredes suaves o de roca y su densidad de geometría) y el agua queda dentro del cauce. Alt o clic derecho borra.</p>
@@ -609,7 +594,6 @@
           <button data-tool="paint" title="Pinta zonas del terreno (o del cerro seleccionado) que tendrán más polígonos (Alt o clic derecho borra)">Pintar subdivisión</button>
           <button data-tool="sculpt" title="Esculpe el terreno: clic izquierdo eleva, clic derecho hunde (en el mapa o en la vista 3D). [ y ] cambian el pincel">Esculpir relieve</button>
           <button data-tool="river" title="Pinta ríos sobre el terreno; con un cerro seleccionado, lo que pintes sobre él es una cascada. Empezar sobre un río lo extiende (y se bifurca). Alt o clic derecho borra">Ríos y cascadas</button>
-          <button id="btnSusp" title="Terreno elevado: los puntos seleccionados (seguidos, ruta principal) forman un tramo suspendido; el terreno no se adapta a él y lleva pilares hasta el suelo">Terreno elevado</button>
           <button id="btnBankTop" title="Peralte: lleva a sus parámetros en la barra lateral">Peralte</button>
           <button data-tool="flat" title="Arrastra sobre la pista para marcar un tramo plano">Zona plana</button>
           <span class="sep"></span>
