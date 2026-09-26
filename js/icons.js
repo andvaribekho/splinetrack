@@ -6,6 +6,7 @@ const P = {
   upload: 'M12 16V4M7 9l5-5 5 5M4 20h16',
   download: 'M12 4v12M7 11l5 5 5-5M4 20h16',
   save: 'M5 3h11l3 3v15H5zM8 3v6h8V3M8 21v-7h8v7',
+  gear: 'M12 9a3 3 0 100 6 3 3 0 000-6zM12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1L7 17M17 7l2.1-2.1',
   folder: 'M3 6h6l2 2h10v11H3z',
   fileNew: 'M6 3h9l4 4v14H6zM14 3v5h5M12 11v6M9 14h6',
   trash: 'M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14',
@@ -71,7 +72,7 @@ const P = {
 };
 
 const BY_ID = {
-  btnOpen: 'folder', btnSave: 'save', btnNew: 'fileNew', btnUndo: 'undo', btnRedo: 'undo',
+  btnOpen: 'folder', btnSave: 'save', btnSettings: 'gear', btnNew: 'fileNew', btnUndo: 'undo', btnRedo: 'undo',
   btnFit: 'fit', btnProfileFit: 'fit', btnView3dReset: 'fit', btnGame: 'gamepad', btnGameFull: 'fullscreen', btnGamePause: 'pause', btnGameRestart: 'reset', btnGameExit: 'exit',
   btnTrace: 'wand', btnTestImage: 'image', btnLoadImage: 'image', btnRefLoad: 'image', btnRefRemove: 'trash',
   btnGenTerrain: 'mountain', btnGenTrees: 'tree', btnTbPuddle: 'drop', btnNewPuddle: 'drop', btnTbPad: 'bolt', btnNewPad: 'bolt', btnTbStrip: 'bolt', btnNewStrip: 'bolt',

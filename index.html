@@ -17,6 +17,7 @@
       <button id="btnNew" title="Empezar de cero">Nuevo</button>
       <button id="btnOpen" title="Abrir proyecto .tsg.json">Abrir</button>
       <button id="btnSave" title="Guardar proyecto .tsg.json">Guardar</button>
+      <button id="btnSettings" title="Tamaño del texto y atajos de teclado">Ajustes</button>
       <button id="btnRef3dTop" title="Importar un FBX o GLB de referencia para comparar (se mueve, no se edita)">Ref. 3D…</button>
       <input id="fileProject" type="file" accept=".json,application/json" multiple hidden>
       <span class="sep"></span>
@@ -595,22 +596,6 @@
         <button class="primary wide" id="btnExportFBX" style="margin-top:6px">Exportar escena 3D (.fbx)</button>
         <p class="hint" id="exportInfo"></p>
       </section>
-
-      <section class="panel" data-panel="settings">
-        <h2>Ajustes</h2>
-        <p class="hint">Estos ajustes son de la interfaz y se guardan en este navegador (no en el proyecto). Para cambiar un atajo, haz clic sobre su tecla y presiona la tecla o combinación (Ctrl, Alt, Shift + tecla); Esc cancela. Si la combinación ya la usaba otra acción o un botón, se le quita a ese. También puedes darle un atajo a cualquier botón con clic derecho sobre él.</p>
-        <h3 class="subhead">Tamaño del texto</h3>
-        <div class="field"><label>Tamaño del texto <span class="val" id="uiTextSizeVal"></span></label><input type="range" id="uiTextSize" min="80" max="150" step="5">
-          <div class="range-ends"><span>80 %</span><span>150 %</span></div></div>
-        <div class="row gap"><button id="btnTextSizeReset" class="small">Restablecer (100 %)</button></div>
-        <h3 class="subhead">Atajos de teclado</h3>
-        <div id="keymapList" class="keymap"></div>
-        <h4 class="mini">Atajos de botones</h4>
-        <div id="btnHotkeyList" class="keymap"></div>
-        <h4 class="mini">Fijos</h4>
-        <div id="fixedKeyList" class="keymap"></div>
-        <div class="row gap" style="margin-top:8px"><button id="btnKeymapReset">Restablecer los atajos por defecto</button></div>
-      </section>
     </aside>
 
     <main class="workspace">
@@ -796,6 +781,25 @@
       <div class="validation" id="validation"></div>
     </main>
     <aside class="sidebar sidebar-right" id="sidebarRight" aria-label="Barra de herramientas derecha"></aside>
+  </div>
+
+  <div id="settingsPop" class="instr-pop settings-pop" hidden role="dialog" aria-label="Ajustes">
+    <div class="instr-head"><span class="instr-title">Ajustes</span><button class="instr-x" id="btnSettingsClose" data-noicon title="Cerrar (Esc)">✕</button></div>
+    <div class="instr-body settings-body">
+      <p class="meta">Se guardan en este navegador (no en el proyecto).</p>
+      <h3 class="subhead">Tamaño del texto</h3>
+      <div class="field"><label>Tamaño del texto <span class="val" id="uiTextSizeVal"></span></label><input type="range" id="uiTextSize" min="80" max="150" step="5">
+        <div class="range-ends"><span>80 %</span><span>150 %</span></div></div>
+      <div class="row gap"><button id="btnTextSizeReset" class="small">Restablecer (100 %)</button></div>
+      <h3 class="subhead">Atajos de teclado</h3>
+      <p class="meta">Clic sobre la tecla de una acción y presiona la nueva tecla o combinación (Ctrl, Alt, Shift + tecla); Esc cancela. Si ya la usaba otra acción o un botón, se le quita a ese. Clic derecho sobre cualquier botón le da un atajo propio.</p>
+      <div id="keymapList" class="keymap"></div>
+      <h4 class="mini">Atajos de botones</h4>
+      <div id="btnHotkeyList" class="keymap"></div>
+      <h4 class="mini">Fijos</h4>
+      <div id="fixedKeyList" class="keymap"></div>
+      <div class="row gap" style="margin-top:8px"><button id="btnKeymapReset">Restablecer los atajos por defecto</button></div>
+    </div>
   </div>
 
   <script type="module" src="js/app.js"></script>

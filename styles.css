@@ -403,3 +403,12 @@ button.km-keys:hover { border-color: var(--accent); background: rgba(242,169,59,
 .tun-card .tun-head { cursor: pointer; }
 .tun-card:not(.sel) .tun-head:hover strong { color: var(--accent); }
 .tun-card .disabled { opacity: 0.45; pointer-events: none; }
+
+/* ventana de ajustes: flotante, se mueve, se reescala y se cierra (no se ancla) */
+.settings-pop { width: 380px; height: min(640px, calc(100vh - 70px)); max-height: none; min-width: 280px; min-height: 200px; resize: both; overflow: hidden; }
+.settings-pop[hidden] { display: none; }
+.settings-pop .instr-body { flex: 1 1 auto; min-height: 0; }
+.settings-body .subhead:first-of-type { margin-top: 4px; }
+.settings-body .meta { color: var(--muted); font-size: calc(11px * var(--fs, 1)); line-height: 1.45; margin: 4px 0; }
+.settings-body p.meta { font-size: calc(11px * var(--fs, 1)); }
+#btnSettings.on { border-color: var(--accent); color: var(--accent); }

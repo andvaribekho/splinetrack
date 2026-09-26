@@ -5,6 +5,9 @@
 let zTop = 1200;
 const BOOK = '<svg class="bi" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5C4 4.7 4.7 4 5.5 4H11v15H5.5c-.8 0-1.5.5-1.5 1.2zM20 5.5c0-.8-.7-1.5-1.5-1.5H13v15h5.5c.8 0 1.5.5 1.5 1.2zM4 20.2V5.5M20 20.2V5.5"/></svg>';
 
+/** Trae una ventanita al frente (instrucciones y ajustes comparten el orden). */
+export function bringToFront(el) { el.style.zIndex = ++zTop; }
+
 /** Texto del título de la sección (sin los botones). */
 function panelTitle(sec) {
   const h2 = sec && sec.querySelector('h2');
@@ -104,7 +107,7 @@ export function initInstructions() {
   }
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
-    const pops = [...document.querySelectorAll('.instr-pop')];
+    const pops = [...document.querySelectorAll('.instr-pop')].filter((p) => !p.hidden && p._close);
     if (!pops.length) return;
     pops.sort((a, b) => (+b.style.zIndex || 0) - (+a.style.zIndex || 0))[0]._close();
   }, true);

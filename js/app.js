@@ -8,7 +8,7 @@ import { Editor2D } from './editor2d.js';
 import { ProfileView } from './profile.js';
 import { Preview3D } from './preview3d.js';
 import { initPanels } from './panels.js';
-import { initInstructions, initPanelStripes } from './instructions.js';
+import { initInstructions, initPanelStripes, bringToFront } from './instructions.js';
 import { initSplitters } from './splitters.js';
 import { initHotkeys, comboOf } from './hotkeys.js';
 import { ACTIONS, FIXED, bindingOf, isDefault, setBinding, resetAll as resetKeymap, matchAction, comboLabel } from './keymap.js';
@@ -5977,6 +5977,45 @@ function initSettings(hk) {
     $('fixedKeyList').innerHTML = FIXED.map(([k, d]) => `<div class="km-row fixed"><span class="km-keys"><kbd>${esc(k)}</kbd></span><span class="km-label">${esc(d)}</span></div>`).join('');
   }
   hk.onChange(render);
+  // ventana de ajustes: se abre desde la barra superior; se mueve (arrastrando el título), se reescala (esquina) y se cierra
+  const pop = $('settingsPop'), head = pop.querySelector('.instr-head');
+  const fit = () => {
+    const w = pop.offsetWidth, h = pop.offsetHeight;
+    pop.style.left = `${clamp(pop.offsetLeft, 0, Math.max(0, window.innerWidth - Math.min(w, 120)))}px`;
+    pop.style.top = `${clamp(pop.offsetTop, 44, Math.max(44, window.innerHeight - 40))}px`;
+    if (h > window.innerHeight - 50) pop.style.height = `${window.innerHeight - 50}px`;
+  };
+  const saveGeom = () => { if (pop.hidden) return; ui.pop = { x: pop.offsetLeft, y: pop.offsetTop, w: pop.offsetWidth, h: pop.offsetHeight }; saveUI(ui); };
+  const openPop = () => {
+    pop.hidden = false;
+    const g = ui.pop;
+    if (g && g.w) { pop.style.width = `${g.w}px`; pop.style.height = `${g.h}px`; pop.style.left = `${g.x}px`; pop.style.top = `${g.y}px`; }
+    else { const r = $('btnSettings').getBoundingClientRect(); pop.style.left = `${Math.max(8, Math.min(window.innerWidth - pop.offsetWidth - 8, r.left))}px`; pop.style.top = `${r.bottom + 6}px`; }
+    fit();
+    bringToFront(pop);
+    $('btnSettings').classList.add('on');
+    render();
+  };
+  const closePop = () => { saveGeom(); stopCap(); pop.hidden = true; $('btnSettings').classList.remove('on'); };
+  pop._close = closePop;
+  $('btnSettings').addEventListener('click', () => (pop.hidden ? openPop() : closePop()));
+  $('btnSettingsClose').addEventListener('click', closePop);
+  pop.addEventListener('pointerdown', () => bringToFront(pop));
+  pop.addEventListener('pointerup', saveGeom); // al soltar la esquina de reescalado
+  head.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || e.target.closest('.instr-x')) return;
+    e.preventDefault();
+    head.setPointerCapture(e.pointerId);
+    const sx = e.clientX, sy = e.clientY, x0 = pop.offsetLeft, y0 = pop.offsetTop;
+    const move = (ev) => {
+      pop.style.left = `${clamp(x0 + ev.clientX - sx, 0, window.innerWidth - 60)}px`;
+      pop.style.top = `${clamp(y0 + ev.clientY - sy, 44, window.innerHeight - 30)}px`;
+    };
+    const up = () => { head.removeEventListener('pointermove', move); head.removeEventListener('pointerup', up); saveGeom(); };
+    head.addEventListener('pointermove', move);
+    head.addEventListener('pointerup', up);
+  });
+  window.addEventListener('resize', () => { if (!pop.hidden) fit(); });
   $('btnKeymapReset').addEventListener('click', () => { resetKeymap(); render(); toast('Atajos de la app restablecidos (los atajos de botones se mantienen).'); });
   render();
 }
