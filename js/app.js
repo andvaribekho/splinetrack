@@ -102,7 +102,7 @@ const state = {
 const undoStack = [];
 function snapshot() {
   const ref = state.ref ? { x: state.ref.x, y: state.ref.y, scale: state.ref.scale, opacity: state.ref.opacity } : null;
-  return JSON.stringify({ elevMode: state.elev.mode || 'auto', project: state.project, flatZones: state.flatZones, suspZones: state.suspZones, cutZones: state.cutZones, overrides: state.overrides, ref, refCanvas: !!state.ref, densityPaint: state.densityPaint, terrainSculpt: state.terrainSculpt, sculptCurves: state.sculptCurves, decoSets: state.decoSets, hills: state.hills, selHill: state.selHill, rivers: state.rivers, items: state.items });
+  return JSON.stringify({ elevMode: state.elev.mode || 'auto', project: state.project, flatZones: state.flatZones, suspZones: state.suspZones, cutZones: state.cutZones, overrides: state.overrides, ref, refCanvas: !!state.ref, densityPaint: state.densityPaint, terrainSculpt: state.terrainSculpt, sculptCurves: state.sculptCurves, decoSets: state.decoSets, hills: state.hills, selHill: state.selHill, rivers: state.rivers, items: state.items, tunnelOverrides: state.scene ? state.scene.tunnelOverrides || [] : [] });
 }
 function pushUndo() {
   undoStack.push(snapshot());
@@ -125,6 +125,7 @@ function undo() {
   if (o.rivers) { state.rivers = o.rivers; if (!state.rivers.some((rv) => rv.id === state.selRiver)) state.selRiver = null; if (typeof renderRiverPanel === 'function') renderRiverPanel(); }
   if (o.decoSets) { state.decoSets = o.decoSets; if (typeof renderDecoPanel === 'function') { renderDecoPanel(); decoChanged(); } }
   if (o.sculptCurves) state.sculptCurves = o.sculptCurves;
+  if (o.tunnelOverrides && state.scene && JSON.stringify(o.tunnelOverrides) !== JSON.stringify(state.scene.tunnelOverrides || [])) state.scene.tunnelOverrides = o.tunnelOverrides; // ajustes por túnel (rocas y estalactitas movidas…)
   if (o.terrainSculpt) { state.terrainSculpt = o.terrainSculpt; if (typeof refreshSculptInfo === 'function') refreshSculptInfo(); }
   if (o.densityPaint) { const changed = JSON.stringify(o.densityPaint) !== JSON.stringify(state.densityPaint); state.densityPaint = o.densityPaint; if (changed && typeof refreshPaintInfo === 'function') refreshPaintInfo(); }
   state.selSet = null; endArc();
@@ -236,6 +237,7 @@ function refreshTunnelInfo() {
   if (!tl.length) { el.innerHTML = '<div class="tun-empty">No hay túneles para mostrar</div>'; return; }
   el.innerHTML = '';
   for (const t of tl) el.appendChild(tunnelCard(t, t.id === state.selTunnel));
+  refreshCaveInfo();
 }
 function tunnelCard(t, open) {
   const div = document.createElement('div');
@@ -257,6 +259,8 @@ function tunnelCard(t, open) {
   const W = t.width ?? sc.tunnelWidth, H = t.height ?? sc.tunnelHeight, cs = t.caveSize ?? sc.caveSize;
   const fr = t.portalFrame ?? sc.portalFrame ?? 1, dp = t.portalDepth ?? sc.portalDepth ?? 1;
   const rOn = t.rocks !== false, sOn = t.stal !== false, rD = t.rockDensity ?? 50, sD = t.stalDensity ?? 50;
+  const ovCur = (sc.tunnelOverrides || [])[t.key] || null, cm = ovCur && ovCur.caveMoves;
+  const nMoved = cm ? Object.keys(cm.r || {}).length + Object.keys(cm.s || {}).length : 0;
   div.innerHTML = `${head}
     <div class="field"><label>Forma</label><select class="tsShape" title="Forma de la sección del túnel.">${opt(shapes, t.shape)}</select></div>
     <div class="field"><label>Tipo</label><select class="tsType" title="Artificial: sección regular en todo el recorrido. Natural: caverna irregular de roca, que puede abrirse en una bóveda con estalactitas y rocas.">${opt(types, t.type)}</select></div>
@@ -267,7 +271,8 @@ function tunnelCard(t, open) {
       <div class="field tsRockDenBox"${rOn ? '' : ' hidden'}><label>Densidad de rocas <span class="val tsRockDenV">${rD} %</span></label><input type="range" class="tsRockDen" min="0" max="100" step="1" value="${rD}" title="Cantidad de rocas en el piso de la caverna (50 % = normal)."></div>
       <label class="check small tsChk"><input type="checkbox" class="tsStal"${sOn ? ' checked' : ''}> Estalactitas</label>
       <div class="field tsStalDenBox"${sOn ? '' : ' hidden'}><label>Densidad de estalactitas <span class="val tsStalDenV">${sD} %</span></label><input type="range" class="tsStalDen" min="0" max="100" step="1" value="${sD}" title="Cantidad de estalactitas en el techo de la caverna (50 % = normal)."></div>
-      <label class="check small tsChk" title="Activado: todas las rocas en una malla y todas las estalactitas en otra. Desactivado: cada roca y cada estalactita se exporta como un objeto independiente, con el pivote de la roca en el piso y el de la estalactita en su base, pegada al techo."><input type="checkbox" class="tsSingle"${t.singleMesh !== false ? ' checked' : ''}> Single mesh</label></div>
+      <label class="check small tsChk" title="Activado: todas las rocas en una malla y todas las estalactitas en otra. Desactivado: cada roca y cada estalactita se exporta como un objeto independiente, con el pivote de la roca en el piso y el de la estalactita en su base, pegada al techo."><input type="checkbox" class="tsSingle"${t.singleMesh !== false ? ' checked' : ''}> Single mesh</label>
+      <div class="tsCaveMove"${t.singleMesh === false ? '' : ' hidden'}><div class="meta tsCaveSel"></div><button class="small tsCaveReset"${nMoved ? '' : ' disabled'} title="Devuelve las rocas y estalactitas movidas a su lugar original">Restablecer posiciones${nMoved ? ` (${nMoved})` : ''}</button></div></div>
     <div class="field"><label>Costado abierto</label><select class="tsOpen" title="Deja abierto un costado del túnel (galería), sostenido por pilares.">${opt(opens, t.openMode || 'none')}</select></div>
     <div class="field tsPilBox${closed ? ' disabled' : ''}"><label>Pilares <span class="val"><input type="number" class="tsPilN" min="0" max="200" step="1" style="width:56px" value="${t.pillarCount}"></span></label>
       <input type="range" class="tsPil" min="0" max="40" step="1" value="${Math.min(40, t.pillarCount)}" title="Cantidad de pilares en el lado abierto."></div>
@@ -307,7 +312,8 @@ function tunnelCard(t, open) {
   q('.tsStal').addEventListener('change', (e) => { q('.tsStalDenBox').hidden = !e.target.checked; cave({}); });
   q('.tsRockDen').addEventListener('input', (e) => { const v = numIn(e.target.value, 0, 100, true); q('.tsRockDenV').textContent = `${v} %`; cave({ rockDensity: v }); });
   q('.tsStalDen').addEventListener('input', (e) => { const v = numIn(e.target.value, 0, 100, true); q('.tsStalDenV').textContent = `${v} %`; cave({ stalDensity: v }); });
-  q('.tsSingle').addEventListener('change', (e) => cave({ singleMesh: e.target.checked }));
+  q('.tsSingle').addEventListener('change', (e) => { if (e.target.checked && state.selCave) state.selCave = null; cave({ singleMesh: e.target.checked }); });
+  q('.tsCaveReset').addEventListener('click', () => { pushUndo(); cave({ caveMoves: undefined }); });
   const pilSet = (v) => { v = numIn(v, 0, 200, true); if (v == null) return; q('.tsPilN').value = v; q('.tsPil').value = Math.min(40, v); setOv({ pillars: v }); };
   q('.tsPil').addEventListener('input', (e) => pilSet(e.target.value));
   q('.tsPilN').addEventListener('change', (e) => pilSet(e.target.value));
@@ -337,6 +343,7 @@ function clearAllSelections() {
   if (state.selItem) selectItem(null);
   if (state.selHill != null || state.selTunnel != null) selectHill(null);
   state.selTunnel = null;
+  state.selCave = null;
   refreshArcBox();
   if (typeof editor !== 'undefined') { editor.draw(); profile.draw(); preview.updateHandles(); preview.setHillSelection(null); }
 }
@@ -351,11 +358,51 @@ function deleteSelectedHill() {
 }
 function selectTunnel(id) {
   state.selTunnel = id;
+  if (state.selCave && state.selCave.tid !== id) state.selCave = null;
   if (id != null) setTimeout(() => { try { focusPanel('hills', document.querySelector('#tunnelList .tun-card.sel') || $('tunnelList')); } catch { /* iniciando */ } }, 0);
   if (id != null) { state.selHill = null; if (state.selItem) { state.selItem = null; preview.buildItems(); preview.updateHandles(); refreshItemsInfo(); } }
   if (typeof refreshHillPanel === 'function') refreshHillPanel();
   if (typeof refreshTunnelInfo === 'function') refreshTunnelInfo();
   if (typeof editor !== 'undefined') { editor.draw(); preview.setHillSelection(state.selHill); }
+}
+/**
+ * Roca o estalactita suelta (túnel sin «single mesh») seleccionada: {tid, kind: 'r' | 's', key}. Se mueve en planta
+ * (gizmo XY en 3D o arrastrándola en el mapa); la roca sigue sobre el piso y la estalactita pegada al techo.
+ */
+function selectCave(c, refresh = true) {
+  state.selCave = c || null;
+  if (c) {
+    if (state.selTunnel !== c.tid) { state.selTunnel = c.tid; state.selHill = null; refreshTunnelInfo(); }
+    if (state.selItem) { state.selItem = null; preview.buildItems(); refreshItemsInfo(); }
+    if (state.tool !== 'pan') setTool('pan');
+  }
+  if (refresh && typeof editor !== 'undefined') { editor.draw(); preview.setHillSelection(state.selHill); }
+  refreshCaveInfo();
+}
+/** Guarda la nueva posición (s, u en el túnel) de una roca o estalactita y rehace la escena. */
+function commitCaveMove(c, P) {
+  if (!c || !P) return;
+  const t = (state.tunnelInfo || []).find((q) => q.id === c.tid);
+  if (!t) return;
+  pushUndo();
+  const ci = preview.caveItem(c);
+  if (ci) Object.assign(ci.it, { x: P.x, y: P.y, z: P.z, s: P.s, u: P.u }); // el mapa la muestra ya en su lugar
+  const sc = state.scene;
+  const list = (sc.tunnelOverrides || []).slice();
+  const cur = t.key >= 0 && list[t.key] ? { ...list[t.key] } : { k: t.k, s: +t.sMid.toFixed(2) };
+  const mv = { r: { ...((cur.caveMoves && cur.caveMoves.r) || {}) }, s: { ...((cur.caveMoves && cur.caveMoves.s) || {}) } };
+  mv[c.kind][c.key] = [+P.s.toFixed(3), +P.u.toFixed(3)];
+  cur.caveMoves = mv;
+  if (t.key >= 0 && list[t.key]) list[t.key] = cur; else { list.push(cur); t.key = list.length - 1; }
+  sc.tunnelOverrides = list;
+  sceneChanged();
+}
+/** Texto de la tarjeta del túnel: qué está seleccionado y cuántas se movieron. */
+function refreshCaveInfo() {
+  const el = document.querySelector('#tunnelList .tun-card.sel .tsCaveSel');
+  if (!el) return;
+  const c = state.selCave;
+  el.textContent = c ? `Seleccionada: ${c.kind === 'r' ? 'roca' : 'estalactita'} ${c.key + 1}. Arrástrala en el mapa o con el gizmo en 3D.` : 'Clic en una roca o estalactita (mapa o 3D) para seleccionarla y moverla.';
 }
 /** Selecciona un atajo (índice en project.alts): lo resalta y lleva el panel a sus parámetros. */
 function selectAlt(i) {
@@ -470,6 +517,7 @@ function altAt(p, tolLayout) {
 function selectHill(id, redraw = true) {
   state.selHill = id;
   state.selTunnel = null;
+  state.selCave = null;
   if (typeof preview !== 'undefined' && preview.refreshPaintOverlay && state.tool === 'hill') preview.refreshPaintOverlay();
   if (id != null && state.selAlt != null) { state.selAlt = null; refreshPanels(); preview.update(false, true); }
   if (id != null) setTimeout(() => { try { focusPanel('hills', $('hillSelBox')); } catch { /* iniciando */ } }, 0);
@@ -537,6 +585,7 @@ function itemsChanged(quick = false) {
   if (!quick) refreshItemsInfo();
 }
 function selectItem(ref) {
+  if (ref) state.selCave = null;
   const changedGroup = !ref || !state.selItem || ref.type !== state.selItem.type || ref.gid !== state.selItem.gid;
   state.selItem = ref;
   if (changedGroup && typeof renderItemsPanel === 'function' && document.querySelector('.igroup')) renderItemsPanel();
@@ -1575,7 +1624,7 @@ const app = {
     if (el) el.textContent = B.dirt.length || B.barriers.length ? `${B.dirt.length ? `Camino de tierra: ${B.dirtTris.toLocaleString('es')} triángulos` : ''}${B.dirt.length && B.barriers.length ? ' · ' : ''}${B.barriers.length ? `barreras: ${B.barrierTris.toLocaleString('es')} triángulos` : ''}. Clic en una barrera o en el camino (vista 3D o mapa) trae esta sección. Se exportan en «bordes».` : 'Sin bordes.';
   },
   altAtWorld(x, y) { const L = state.layout; if (!L) return null; const [lx, ly] = L.toLayout(x, y); return altAt([lx, ly], 0.5 / L.scale); },
-  onGameMove(s) { if (preview.game && preview.game.dragging) return; editor.gameS = s; editor.draw(); },
+  onGameMove(s) { if (preview.game && preview.game.dragging) return; editor.gameS = s; profile.gameS = s; editor.draw(); profile.draw(); },
   // arrastrar el auto de la cámara de juego en el mapa
   beginCarDrag() { if (preview.game) preview.game.dragging = true; },
   moveCarTo(sv) {
@@ -1583,12 +1632,23 @@ const app = {
     if (!g || !g.active) return;
     g.s = sv;
     g.snapCamera = true; // la cámara salta con el auto
-    editor.gameS = sv; editor.draw();
+    editor.gameS = sv; profile.gameS = sv; editor.draw(); profile.draw();
     app.setHover(sv, 'map');
   },
   endCarDrag() { if (preview.game) preview.game.dragging = false; },
   selectHill(id) { selectHill(id); },
   selectTunnel(id) { selectTunnel(id); },
+  selectCave(c, refresh = true) { selectCave(c, refresh); },
+  commitCaveMove(c, P) { commitCaveMove(c, P); },
+  /** Rocas y estalactitas sueltas del túnel seleccionado (para el mapa): [{kind, key, x, y, z, rad}]. */
+  caveItemsSel() {
+    const tid = state.selTunnel;
+    if (tid == null || typeof preview === 'undefined' || !preview.tunnelGeoById) return [];
+    const t = preview.tunnelGeoById.get(tid);
+    if (!t || t.singleMesh !== false || !t.natural) return [];
+    return [...t.rockItems, ...t.stalItems];
+  },
+  moveCaveLive(c, x, y) { return preview.moveCaveLive(c, x, y); },
   // ---- imagen de referencia ----
   refBeginDrag() { pushUndoRef(); },
   refMove(dx, dy) { if (!state.ref) return; state.ref.x += dx; state.ref.y += dy; editor.draw(); },

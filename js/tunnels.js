@@ -356,6 +356,7 @@ export function applyTunnelOverrides(layout, runs, sp) {
     t.rockDensity = o && Number.isFinite(o.rockDensity) ? clamp(o.rockDensity, 0, 100) : sp.caveRockDensity ?? 50;
     t.stalDensity = o && Number.isFinite(o.stalDensity) ? clamp(o.stalDensity, 0, 100) : sp.caveStalDensity ?? 50;
     t.singleMesh = o && typeof o.singleMesh === 'boolean' ? o.singleMesh : sp.caveSingleMesh !== false;
+    t.caveMoves = o && o.caveMoves && typeof o.caveMoves === 'object' ? o.caveMoves : null;
     // medidas propias del túnel (si no, las por defecto del proyecto)
     const num = (key, def, a, b) => (o && Number.isFinite(o[key]) ? clamp(o[key], a, b) : def);
     t.width = num('width', sp.tunnelWidth, 4, 200);
@@ -568,11 +569,69 @@ export function buildTunnelGeometry(layout, elev, spIn, runs, opts = {}) {
     // estalactitas y rocas (solo cavernas), cada cosa con su casilla y su densidad (50 % = cantidad normal).
     // Cada una se arma en coordenadas locales respecto de su pivote: la roca en el piso (centro de su base) y la
     // estalactita en su base, pegada al techo. Con «single mesh» se unen en una sola malla por tipo.
+    // Cada una tiene una clave estable (su número en la serie aleatoria) y se puede mover en planta: t.caveMoves
+    // guarda {r: {clave: [s, u]}, s: {...}} en coordenadas del túnel (s a lo largo, u lateral).
     const stalItems = [], rockItems = [];
     const seedT = 1000 + t.id * 7919 + (sp.treeSeed | 0);
     const randS = rng(seedT), randR = rng(seedT + 104729); // series separadas: cambiar una no mueve la otra
     const stalOn = t.stal !== false, rocksOn = t.rocks !== false;
     const stalK = clamp(t.stalDensity ?? 50, 0, 100) / 50, rockK = clamp(t.rockDensity ?? 50, 0, 100) / 50;
+    const moves = t.caveMoves || {};
+    // --- ubicar en el túnel: de (x, y) a (s, u) y de (s, u) al pivote sobre el piso o pegado al techo ---
+    const secAt = (sv) => { let a = 0; while (a < ns - 1 && sList[a + 1] < sv) a++; return a; };
+    const ceilV = (R, u) => { // altura del techo (local) en u; y el rango de u del techo
+      let lo = Infinity, hi = -Infinity, v = null;
+      for (let q = ca; q <= cb; q++) { if (!keep[q]) continue; lo = Math.min(lo, R.loc[q][0]); hi = Math.max(hi, R.loc[q][0]); }
+      for (let q = ca; q < cb && v == null; q++) {
+        if (!keep[q] || !keep[q + 1]) continue;
+        const [u0, v0] = R.loc[q], [u1, v1] = R.loc[q + 1];
+        if ((u - u0) * (u - u1) <= 0 && u0 !== u1) v = v0 + (v1 - v0) * (u - u0) / (u1 - u0);
+      }
+      return { v, lo, hi };
+    };
+    const sMin = Math.max(sList[0], t.e0) + 0.3, sMax = Math.min(sList[ns], t.e1) - 0.3; // dentro del túnel (hasta las bocas)
+    const toSU = (x, y) => {
+      let a = 0, bd = Infinity;
+      for (let q = 0; q <= ns; q++) { const F = ring[q].F, d = (x - F.x) ** 2 + (y - F.y) ** 2; if (d < bd) { bd = d; a = q; } }
+      const F0 = ring[a].F;
+      const sv = clamp(sList[a] + (x - F0.x) * F0.tx + (y - F0.y) * F0.ty, sMin, sMax);
+      const F = frameAt(r, e, sv), l2 = F.L[0] * F.L[0] + F.L[1] * F.L[1] || 1;
+      return { s: sv, u: ((x - F.x) * F.L[0] + (y - F.y) * F.L[1]) / l2 };
+    };
+    const rockAt = (sv, u, rad) => {
+      sv = clamp(sv, sMin, sMax);
+      const R = ring[secAt(sv)], F = frameAt(r, e, sv), m = rad * 0.8;
+      const lim = (side) => (side === open ? F.w / 2 + extSide(side) + 1 : Math.abs(R.loc[side > 0 ? N - 1 : 0][0]) - m);
+      u = clamp(u, -Math.max(0, lim(-1)), Math.max(0, lim(1)));
+      const P = F.at(u, 0);
+      return { s: sv, u, x: P[0], y: P[1], z: P[2] };
+    };
+    const stalAt = (sv, u) => {
+      sv = clamp(sv, sMin, sMax);
+      const a = secAt(sv), A = ring[a], B = ring[Math.min(ns, a + 1)];
+      const f = B === A ? 0 : clamp((sv - A.s) / Math.max(1e-6, B.s - A.s), 0, 1);
+      const cA = ceilV(A, u), cB = ceilV(B, u);
+      const lo = Math.max(cA.lo, cB.lo) + 0.3, hi = Math.min(cA.hi, cB.hi) - 0.3;
+      if (lo < hi) u = clamp(u, lo, hi);
+      const vA = ceilV(A, u).v, vB = ceilV(B, u).v;
+      const v = vA == null ? vB : vB == null ? vA : vA + (vB - vA) * f;
+      const F = frameAt(r, e, sv), P = F.at(u, v ?? Hb + 1);
+      return { s: sv, u, x: P[0], y: P[1], z: P[2], room: (v ?? Hb + 1) - Hb - 0.4 };
+    };
+    const stalGeo = (rad, len) => {
+      const pos = [];
+      for (let m = 0; m < 6; m++) { const ang = (m / 6) * Math.PI * 2; pos.push(Math.cos(ang) * rad, Math.sin(ang) * rad, 0.3); }
+      pos.push(0, 0, -len);
+      const idx = [];
+      for (let m = 0; m < 6; m++) idx.push(m, 6, (m + 1) % 6);
+      return { positions: pos, indices: idx };
+    };
+    const placeStal = (it, sv, u) => {
+      const P = stalAt(sv, u);
+      const len = Math.max(0.3, Math.min(it.len, P.room));
+      Object.assign(it, { x: P.x, y: P.y, z: P.z, s: P.s, u: P.u }, stalGeo(it.rad, len));
+      return it;
+    };
     if (natural && stalOn && stalK > 0) {
       const nSt = Math.round(((t.s1 - t.s0) / 4) * (0.3 + sp.caveSize * 1.7) * stalK);
       for (let k2 = 0; k2 < nSt; k2++) {
@@ -587,15 +646,10 @@ export function buildTunnelGeometry(layout, elev, spIn, runs, opts = {}) {
         if (room < 0.6) continue;
         const len = Math.min(room, 0.6 + len0 * (1 + 4 * sp.caveSize));
         const rad = 0.25 + rad0 * 0.6 * (0.5 + sp.caveSize);
-        const pos = [];
-        for (let m = 0; m < 6; m++) {
-          const ang = (m / 6) * Math.PI * 2;
-          pos.push(Math.cos(ang) * rad, Math.sin(ang) * rad, 0.3);
-        }
-        pos.push(0, 0, -len);
-        const idx = [];
-        for (let m = 0; m < 6; m++) idx.push(m, 6, (m + 1) % 6);
-        stalItems.push({ x: p[0], y: p[1], z: p[2], positions: pos, indices: idx });
+        const it = { kind: 's', key: k2, rad, len, x: p[0], y: p[1], z: p[2], s: sList[a], u: ring[a].loc[q][0], ...stalGeo(rad, len) };
+        const mv = moves.s && moves.s[k2];
+        if (mv) { placeStal(it, mv[0], mv[1]); it.moved = true; }
+        stalItems.push(it);
       }
     }
     if (natural && rocksOn && rockK > 0) {
@@ -622,9 +676,18 @@ export function buildTunnelGeometry(layout, elev, spIn, runs, opts = {}) {
         V.forEach(([vx, vy, vz], m) => { const j = J[m]; pos.push(vx * rad * j, vy * rad * j, vz * rad * j + lift); });
         const idx = [];
         for (const f of F8) idx.push(f[0], f[1], f[2]);
-        rockItems.push({ x: piv[0], y: piv[1], z: piv[2], positions: pos, indices: idx });
+        const it = { kind: 'r', key: k2, rad, x: piv[0], y: piv[1], z: piv[2], s: sList[a], u, positions: pos, indices: idx };
+        const mv = moves.r && moves.r[k2];
+        if (mv) { const P = rockAt(mv[0], mv[1], rad); Object.assign(it, { x: P.x, y: P.y, z: P.z, s: P.s, u: P.u, moved: true }); }
+        rockItems.push(it);
       }
     }
+    /** Ubica una roca o estalactita movida a (x, y): queda sobre el piso o pegada al techo, dentro del túnel. */
+    const caveSnap = (it, x, y) => {
+      const su = toSU(x, y);
+      if (it.kind === 'r') return rockAt(su.s, su.u, it.rad);
+      return placeStal({ ...it }, su.s, su.u);
+    };
     // mallas unidas (siempre: la vista previa las usa; se exportan así con «single mesh»)
     const merge = (items) => {
       const P = [], I = [];
@@ -662,7 +725,7 @@ export function buildTunnelGeometry(layout, elev, spIn, runs, opts = {}) {
       openMode: t.openMode ?? sp.tunnelOpen, pillarCount: nPil, custom: !!t.custom, key: t.key ?? -1,
       shape: sp.tunnelShape, type: sp.tunnelType, natural, density: sp.tunnelDensity, meshMode: t.meshMode || 'uniform', maxTris: t.maxTris, adapt: t.adapt, rocksOn, stalOn, rockDensity: t.rockDensity ?? 50, stalDensity: t.stalDensity ?? 50, singleMesh, sections: ns + 1, profilePts: N,
       width: sp.tunnelWidth, height: sp.tunnelHeight, caveSize: sp.caveSize, portalFrame: sp.portalFrame ?? 1, portalDepth: sp.portalDepth ?? 1,
-      walls, ceiling, walkways, portals, stalactites, rocks, stalItems: singleMesh ? [] : stalItems, rockItems: singleMesh ? [] : rockItems, pillars, tris, box,
+      walls, ceiling, walkways, portals, stalactites, rocks, stalItems, rockItems, caveSnap, pillars, tris, box,
     });
   }
   return out;

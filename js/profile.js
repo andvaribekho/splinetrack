@@ -43,6 +43,7 @@ export class ProfileView {
     canvas.addEventListener('pointerleave', () => { if (!this.drag) { this.tip.hidden = true; this.app.setHover(null, 'profile'); } });
     canvas.addEventListener('pointerdown', (e) => this.onDown(e));
     const up = () => {
+      if (this.carDrag) { this.carDrag = false; this.frozen = null; this.app.endCarDrag(); this.cv.style.cursor = 'grab'; this.tip.hidden = true; this.draw(); return; }
       if (this.pan) { this.pan = null; this.cv.style.cursor = 'default'; return; }
       if (this.selDrag) { // Perfil de tramo + Shift: elige el tramo
         const d = this.selDrag;
@@ -121,6 +122,18 @@ export class ProfileView {
   resetView() { this.view = null; this.frozen = null; this.draw(); }
 
   onDown(e) {
+    if (e.button === 0) { // autito de la cámara de juego: arrastrarlo lo mueve a lo largo de la pista (y en el juego)
+      const [cx, cy] = this.localPos(e);
+      if (this.hitCar(cx, cy)) {
+        e.preventDefault();
+        this.cv.setPointerCapture(e.pointerId);
+        this.carDrag = true;
+        this.frozen = this.scales(); // la escala no cambia mientras se arrastra
+        this.app.beginCarDrag();
+        this.cv.style.cursor = 'grabbing';
+        return;
+      }
+    }
     if (e.button === 1) {
       // botón medio: desplazar la vista del perfil
       const sc = this.scales();
@@ -223,6 +236,16 @@ export class ProfileView {
     if (!sc) return;
     const r = this.cv.getBoundingClientRect();
     const x = e.clientX - r.left;
+    if (this.carDrag) {
+      const sv = Math.max(0, Math.min(sc.Lm - 0.01, sc.sAt(x)));
+      this.app.moveCarTo(sv);
+      this.tip.hidden = false;
+      this.tip.style.left = `${e.clientX + 12}px`;
+      this.tip.style.top = `${e.clientY - 30}px`;
+      this.tip.textContent = `auto en s ${sv.toFixed(0)} m`;
+      return;
+    }
+    if (this.hitCar(x, e.clientY - r.top)) this.cv.style.cursor = 'grab';
     if (this.pan) {
       const P = this.pan, y = e.clientY - r.top;
       const ds = ((x - P.x) / (P.f.x1 - P.f.x0)) * (P.v.s1 - P.v.s0), dz = ((y - P.y) / (P.f.y1 - P.f.y0)) * (P.v.z1 - P.v.z0);
@@ -498,6 +521,48 @@ export class ProfileView {
       ctx.fillStyle = '#fff';
       ctx.beginPath(); ctx.arc(x, sy(e0.z[i]), 4, 0, Math.PI * 2); ctx.fill();
     }
+    this.drawGameCar(sc);
+  }
+
+  /** ¿(x, y) cae sobre el autito de la cámara de juego? */
+  hitCar(x, y) {
+    const c = this.carScreen;
+    return !!(c && this.app.state.gameActive && this.gameS != null && Math.hypot(x - c.x, y - c.y) < 16);
+  }
+
+  /** Autito de la cámara de juego (de perfil, inclinado según la pendiente) sobre la calzada. Se puede arrastrar. */
+  drawGameCar(sc) {
+    this.carScreen = null;
+    const L = this.app.state.layout, E = this.app.state.result;
+    if (!this.app.state.gameActive || this.gameS == null || !L || !E) return;
+    const r = L.routes[0], z = E.routes[0].z;
+    const s = ((this.gameS % r.L) + r.L) % r.L;
+    const zAtS = (sv) => { const f = (((sv % r.L) + r.L) % r.L) / r.ds, i = Math.floor(f), j = r.closed ? (i + 1) % r.n : Math.min(r.n - 1, i + 1), t = f - i; return z[Math.min(r.n - 1, i)] * (1 - t) + z[j] * t; };
+    const x = sc.sx(s), y = sc.sy(zAtS(s));
+    if (x < sc.f.x0 - 20 || x > sc.f.x1 + 20) return;
+    const ang = Math.atan2(sc.sy(zAtS(s + 3)) - sc.sy(zAtS(s - 3)), sc.sx(s + 3) - sc.sx(s - 3));
+    this.carScreen = { x, y: y - 6 };
+    const { ctx } = this;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(ang);
+    const drag = this.carDrag;
+    // sombra
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.beginPath(); ctx.ellipse(0, 1, 13, 2.5, 0, 0, Math.PI * 2); ctx.fill();
+    // carrocería (el frente mira hacia donde avanza la pista, a la derecha)
+    ctx.fillStyle = '#e53935'; ctx.strokeStyle = drag ? '#ffe066' : '#fff'; ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(-12, -3); ctx.lineTo(-11, -7); ctx.lineTo(-5, -8); ctx.lineTo(-2, -12); ctx.lineTo(5, -12); ctx.lineTo(8, -8); ctx.lineTo(12, -7); ctx.lineTo(12.5, -3);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    // ventanas
+    ctx.fillStyle = '#9fd4ff';
+    ctx.beginPath(); ctx.moveTo(-1.2, -11); ctx.lineTo(1.2, -11); ctx.lineTo(1.2, -8.3); ctx.lineTo(-3.6, -8.3); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(2.4, -11); ctx.lineTo(4.6, -11); ctx.lineTo(6.8, -8.3); ctx.lineTo(2.4, -8.3); ctx.closePath(); ctx.fill();
+    // ruedas
+    ctx.fillStyle = '#1b1d22'; ctx.strokeStyle = '#c8ccd4'; ctx.lineWidth = 1.2;
+    for (const wx of [-7, 7.5]) { ctx.beginPath(); ctx.arc(wx, -3, 3, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
+    ctx.restore();
   }
 }
 

@@ -152,7 +152,21 @@ for (const [key, s] of Object.entries(SAMPLES)) {
           check(cnt(gD)[0] > cnt(gA)[0] * 1.5 && cnt(gD)[1] < cnt(gA)[1] * 0.4, `${key}: densidad de rocas y de estalactitas (${cnt(gD)} vs ${cnt(gA)})`);
           const g0 = ov({ rocks: true, stal: true, rockDensity: 0 });
           check(cnt(g0)[0] === 0 && cnt(g0)[1] === cnt(gA)[1], `${key}: densidad 0 = sin rocas`);
-          check(gA.singleMesh && gA.rockItems.length === 0, `${key}: single mesh por defecto`);
+          check(gA.singleMesh && gA.rockItems.length === cnt(gA)[0], `${key}: single mesh por defecto`);
+          // mover una roca y una estalactita en planta: la roca sigue en el piso y la estalactita pegada al techo
+          {
+            const r0 = gA.rockItems[0], s0 = gA.stalItems[0];
+            const pr = gA.caveSnap(r0, r0.x + 3, r0.y - 2), ps = gA.caveSnap(s0, s0.x - 2, s0.y + 3);
+            const gM = ov({ rocks: true, stal: true, caveMoves: { r: { [r0.key]: [pr.s, pr.u] }, s: { [s0.key]: [ps.s, ps.u] } } });
+            const r1 = gM.rockItems.find((q) => q.key === r0.key), s1 = gM.stalItems.find((q) => q.key === s0.key);
+            const same = gM.rockItems.filter((q) => q.key !== r0.key).every((q) => { const o = gA.rockItems.find((w) => w.key === q.key); return o && Math.hypot(o.x - q.x, o.y - q.y) < 1e-9; });
+            check(r1 && r1.moved && Math.hypot(r1.x - pr.x, r1.y - pr.y) < 1e-6 && Math.hypot(r1.x - r0.x, r1.y - r0.y) > 1 && same, `${key}: roca movida en planta (${r1 && Math.hypot(r1.x - r0.x, r1.y - r0.y).toFixed(2)} m)`);
+            const floorOK = gA.caveSnap(r0, r1.x, r1.y);
+            check(Math.abs(r1.z - floorOK.z) < 1e-6 && Math.abs(r1.z - E.routes[0].z[Math.round(r1.s / L.routes[0].ds) % L.routes[0].n]) < 1.5, `${key}: la roca movida queda sobre el piso`);
+            check(s1 && s1.moved && Math.hypot(s1.x - s0.x, s1.y - s0.y) > 1 && s1.z - r1.z > 4, `${key}: estalactita movida pegada al techo (z ${s1 && s1.z.toFixed(2)})`);
+            const far = gA.caveSnap(r0, r0.x + 500, r0.y + 500);
+            check(far.s <= t0.e1 && far.s >= t0.e0, `${key}: no sale del túnel al arrastrar lejos`);
+          }
           const gI = ov({ rocks: true, stal: true, singleMesh: false });
           const okR = gI.rockItems.length === cnt(gA)[0] && gI.rockItems.every((it) => { let mn = Infinity; for (let q = 2; q < it.positions.length; q += 3) mn = Math.min(mn, it.positions[q]); return mn < 0.05 && mn > -0.5; });
           const okS = gI.stalItems.length === cnt(gA)[1] && gI.stalItems.every((it) => { let mx = -Infinity, mn = Infinity; for (let q = 2; q < it.positions.length; q += 3) { mx = Math.max(mx, it.positions[q]); mn = Math.min(mn, it.positions[q]); } return Math.abs(mx - 0.3) < 1e-6 && mn < -0.5; });

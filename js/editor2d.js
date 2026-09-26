@@ -197,6 +197,16 @@ export class Editor2D {
         if (e.button === 0) {
           const m = this.hitMarker(sx, sy);
           if (m) { this.app.selectCrossing(m.id); return; }
+          // roca o estalactita suelta del túnel seleccionado: seleccionar y arrastrar (en planta)
+          const cvI = tool === 'pan' ? this.hitCave(sx, sy) : null;
+          if (cvI) {
+            const tid = this.app.state.selTunnel;
+            this.app.selectCave({ tid, kind: cvI.kind, key: cvI.key });
+            const L0 = this.app.state.layout, [lx0, ly0] = L0.toLayout(cvI.x, cvI.y);
+            const [px0, py0] = this.toScreen(lx0, ly0);
+            this.caveDrag = { c: { tid, kind: cvI.kind, key: cvI.key }, off: [sx - px0, sy - py0], pos: null };
+            return;
+          }
           // elemento de pista: seleccionar y arrastrar
           const pl = this.toLayout(sx, sy);
           const ref = this.app.itemAtLayout(pl, 6 / this.view.zoom);
@@ -231,6 +241,14 @@ export class Editor2D {
       const p = this.toLayout(sx, sy);
       if (this.carDrag) { const sv = this.app.nearestMainS(p, Infinity); if (sv !== null) this.app.moveCarTo(sv); return; }
       if (this.painting) { this.addPaint(p); return; }
+      if (this.caveDrag) {
+        const L0 = this.app.state.layout, [lx, ly] = this.toLayout(sx - this.caveDrag.off[0], sy - this.caveDrag.off[1]);
+        const [wx, wy] = L0.toWorld(lx, ly);
+        const P = this.app.moveCaveLive(this.caveDrag.c, wx, wy);
+        if (P) this.caveDrag.pos = P;
+        this.draw();
+        return;
+      }
       if (this.itemDrag) { this.app.dragItemToLayout(this.itemDrag.start, p); return; }
       if (this.bridgeDrag) { this.app.dragBridgeLayout(this.bridgeDrag.last, p); this.bridgeDrag.last = p; return; }
       if (this.ref3dDrag) { this.app.moveRef3dLayout(this.ref3dDrag.last, p); this.ref3dDrag.last = p; return; }
@@ -275,6 +293,7 @@ export class Editor2D {
  const tl = this.app.state.tool;
       if (this.hitCar(sx, sy)) { cv.style.cursor = 'grab'; return; }
       if (tl === 'paint' || tl === 'hill' || tl === 'itemPaint' || tl === 'sculpt' || tl === 'river') { this.paintCursor = p; cv.style.cursor = 'none'; this.draw(); return; }
+      if (tl === 'pan' && this.hitCave(sx, sy)) { cv.style.cursor = 'move'; return; }
       if (tl === 'pan' && this.app.itemAtLayout(p, 6 / this.view.zoom)) { cv.style.cursor = 'move'; return; }
       if (tl === 'pan' && this.app.state.ref3d && this.app.state.ref3d.sel && !this.app.state.ref3d.locked && this.hitRef3d(p)) { cv.style.cursor = 'move'; return; }
       if (tl === 'pan' && this.app.bridgeAtLayout(p, 3 / this.view.zoom) != null) { cv.style.cursor = 'ew-resize'; if (s !== this.hoverS) { this.hoverS = s; this.app.setHover(s, 'map'); } return; }
@@ -305,6 +324,7 @@ export class Editor2D {
     const end = (e) => {
       if (this.carDrag) { this.carDrag = false; this.app.endCarDrag(); cv.style.cursor = 'grab'; return; }
       if (this.painting) { const ses = this.painting; this.painting = null; this.app.endPaint(ses.kind, ses); this.draw(); return; }
+      if (this.caveDrag) { const d = this.caveDrag; this.caveDrag = null; if (d.pos) this.app.commitCaveMove(d.c, d.pos); else this.draw(); return; }
       if (this.itemDrag) { this.itemDrag = null; this.app.endItemDrag(); return; }
       if (this.bridgeDrag) { this.bridgeDrag = null; this.app.endBridgeDrag(); return; }
       if (this.ref3dDrag) { this.ref3dDrag = null; this.app.endRef3dMove(); return; }
@@ -487,6 +507,40 @@ export class Editor2D {
     ctx.beginPath(); ctx.moveTo(k, 0); ctx.lineTo(-k * 0.7, k * 0.62); ctx.lineTo(-k * 0.35, 0); ctx.lineTo(-k * 0.7, -k * 0.62); ctx.closePath();
     ctx.fill(); ctx.stroke();
     ctx.restore();
+  }
+
+  /** Rocas (café) y estalactitas (triángulo celeste) sueltas del túnel seleccionado (sin «single mesh»). */
+  drawCaveItems(L) {
+    const items = this.app.caveItemsSel ? this.app.caveItemsSel() : [];
+    if (!items.length) return;
+    const { ctx } = this;
+    const sel = this.app.state.selCave, dr = this.caveDrag;
+    ctx.save();
+    for (const it of items) {
+      const isSel = sel && sel.kind === it.kind && sel.key === it.key;
+      const [wx, wy] = isSel && dr && dr.pos ? [dr.pos.x, dr.pos.y] : [it.x, it.y];
+      const [lx, ly] = L.toLayout(wx, wy);
+      const [cx, cy] = this.toScreen(lx, ly);
+      const r = Math.max(3, Math.min(9, it.rad * this.view.zoom / L.scale));
+      ctx.lineWidth = isSel ? 2.5 : 1;
+      ctx.strokeStyle = isSel ? '#ffe066' : 'rgba(0,0,0,0.7)';
+      if (it.kind === 'r') { ctx.fillStyle = 'rgba(150,110,80,0.95)'; ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
+      else { ctx.fillStyle = 'rgba(170,215,255,0.95)'; ctx.beginPath(); ctx.moveTo(cx, cy + r); ctx.lineTo(cx - r, cy - r * 0.8); ctx.lineTo(cx + r, cy - r * 0.8); ctx.closePath(); ctx.fill(); ctx.stroke(); }
+    }
+    ctx.restore();
+  }
+  /** Roca o estalactita suelta bajo el cursor (en píxeles de pantalla). */
+  hitCave(sx, sy) {
+    const L = this.app.state.layout;
+    const items = L && this.app.caveItemsSel ? this.app.caveItemsSel() : [];
+    let best = null, bd = 9;
+    for (const it of items) {
+      const [lx, ly] = L.toLayout(it.x, it.y);
+      const [cx, cy] = this.toScreen(lx, ly);
+      const d = Math.hypot(sx - cx, sy - cy);
+      if (d < bd) { bd = d; best = it; }
+    }
+    return best;
   }
 
   /** Elementos de pista: charcos (círculos), turbo pads (rectángulos con flecha) y nitro strips (franjas). */
@@ -1018,6 +1072,7 @@ export class Editor2D {
     if (L && st.ref3d && st.ref3d.fp && st.ref3d.visible !== false && st.ref3d.show2d !== false) this.drawRef3d(L, st.ref3d);
     if (L) this.drawLayout(L, E);
     if (L && E) this.drawItems(L);
+    if (L && E) this.drawCaveItems(L);
     if (L && st.selAlt != null) this.drawSelectedAlt(L);
     if (L && st.selBridge != null) this.drawSelectedBridge(L);
     if (L && this.app.state.gameActive && this.gameS != null) this.drawGameCar(L);

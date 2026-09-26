@@ -681,6 +681,8 @@ export class Preview3D {
     this.waterMesh = null;
     this.hillMeshes = [];
     this.tunnelMeshes = [];
+    this.caveMeshes = []; // rocas y estalactitas sueltas (túneles sin «single mesh»)
+    this.tunnelGeoById = new Map();
     this.hillData = null;
     this.objTris = { hills: new Map(), tunnels: new Map() };
     const info = { terrainTris: 0, terrainCell: 0, trees: 0, ms: 0, tunnelTris: 0, tunnels: [], hills: [], hillTris: 0, gateTris: 0 };
@@ -833,7 +835,22 @@ export class Preview3D {
             if (n) { const m = this.extras.children[this.extras.children.length - 1]; m.userData.tunnelId = t.id; this.tunnelMeshes.push(m); this.markExag(m, (x, y) => roadZ(x, y)); }
             return n;
           };
-          let tris = addT(t.walls, wm) + addT(t.ceiling, cm) + addT(t.walkways, km) + addT(t.stalactites, rm) + addT(t.rocks, rm);
+          let tris = addT(t.walls, wm) + addT(t.ceiling, cm) + addT(t.walkways, km);
+          this.tunnelGeoById.set(t.id, t);
+          this.roadZFn = roadZ;
+          if (t.singleMesh === false && t.natural) {
+            // cada roca y estalactita como objeto propio (pivote en el piso / en su base): se seleccionan y se mueven
+            for (const it of [...t.stalItems, ...t.rockItems]) {
+              const cmh = new THREE.Mesh(mkGeo({ positions: new Float32Array(it.positions), indices: it.indices }), rm.clone());
+              cmh.position.set(it.x, it.y, it.z);
+              cmh.userData = { tunnelId: t.id, cave: { tid: t.id, kind: it.kind, key: it.key }, exagObj: { z: it.z, shift: roadZ(it.x, it.y) } };
+              cmh.name = `${t.name}_${it.kind === 'r' ? 'roca' : 'estalactita'}_${it.key}`;
+              this.tunnelMeshes.push(cmh);
+              this.caveMeshes.push(cmh);
+              this.extras.add(cmh);
+              tris += it.indices.length / 3;
+            }
+          } else tris += addT(t.stalactites, rm) + addT(t.rocks, rm);
           for (const pt of t.portals) tris += addT(pt.geo, pm0);
           for (const pl of t.pillars) {
             const pm = new THREE.Mesh(mkGeo(pillarGeometry(pl)), plm);
@@ -848,6 +865,7 @@ export class Preview3D {
           info.tunnels.push({ id: t.id, name: t.name, len: t.len, s0: t.sMid - t.len / 2, s1: t.sMid + t.len / 2, stal: t.stalOn, pillars: t.pillars.length, tris, k: t.k, sMid: t.sMid, openMode: t.openMode, pillarCount: t.pillarCount, custom: t.custom, key: t.key, shape: t.shape, type: t.type, density: t.density, meshMode: t.meshMode, maxTris: t.maxTris, adapt: t.adapt, rocks: t.rocksOn, rockDensity: t.rockDensity, stalDensity: t.stalDensity, singleMesh: t.singleMesh, sections: t.sections, profilePts: t.profilePts, width: t.width, height: t.height, caveSize: t.caveSize, portalFrame: t.portalFrame, portalDepth: t.portalDepth });
           this.objTris.tunnels.set(t.id, { name: t.name, tris });
         }
+        if (this.app.state.selCave) this.setCaveSelection(true); // la roca o estalactita seleccionada sigue resaltada y con su gizmo
       }
     }
     // pórtico de salida
@@ -974,12 +992,53 @@ export class Preview3D {
     if (frame) this.needsFrame = true;
   }
 
+  /** Resalta la roca o estalactita seleccionada (amarillo) y pone el gizmo XY sobre ella. */
+  setCaveSelection(frame = true) {
+    const c = this.app.state.selCave;
+    for (const m of this.caveMeshes || []) {
+      const u = m.userData.cave, on = !!c && u.tid === c.tid && u.kind === c.kind && u.key === c.key;
+      if (on) { m.material.emissive.set(0xffd54f); m.material.emissiveIntensity = 0.8; m.renderOrder = 12; m.material.depthTest = false; m.material.transparent = true; m.material.opacity = 0.95; }
+      else if (m.material.depthTest === false) { m.material.depthTest = true; m.material.transparent = false; m.material.opacity = 1; m.renderOrder = 0; }
+    }
+    if (frame) { this.updateHandles(); this.needsFrame = true; }
+  }
+
+  /** Malla y datos de una roca o estalactita suelta. */
+  caveItem(c) {
+    if (!c) return null;
+    const t = this.tunnelGeoById && this.tunnelGeoById.get(c.tid);
+    if (!t) return null;
+    const it = (c.kind === 'r' ? t.rockItems : t.stalItems).find((q) => q.key === c.key);
+    const mesh = (this.caveMeshes || []).find((m) => m.userData.cave.tid === c.tid && m.userData.cave.kind === c.kind && m.userData.cave.key === c.key);
+    return it ? { t, it, mesh } : null;
+  }
+
+  /** Mueve en vivo (sin reconstruir) una roca o estalactita a (x, y): sobre el piso o pegada al techo. */
+  moveCaveLive(c, x, y) {
+    const ci = this.caveItem(c);
+    if (!ci) return null;
+    const P = ci.t.caveSnap(ci.it, x, y);
+    if (ci.mesh) {
+      const shift = this.roadZFn ? this.roadZFn(P.x, P.y) : 0;
+      ci.mesh.userData.exagObj = { z: P.z, shift };
+      ci.mesh.position.set(P.x, P.y, P.z + shift * (this.zExag - 1));
+      if (P.positions) { // estalactita: su largo se ajusta al espacio bajo el techo
+        const g = ci.mesh.geometry, a = g.getAttribute('position');
+        if (a.count * 3 === P.positions.length) { a.array.set(P.positions); a.needsUpdate = true; g.computeVertexNormals(); g.computeBoundingSphere(); }
+      }
+    }
+    this.needsFrame = true;
+    return P;
+  }
+
   /** Resalta el cerro seleccionado (sin reconstruir). */
   setHillSelection(id, frame = true) {
     const st = this.app.state;
     const glow = (m, sel) => { m.material.emissive.set(sel ? 0x6b5210 : 0x000000); m.material.emissiveIntensity = sel ? 0.45 : 0; };
     for (const m of this.hillMeshes || []) glow(m, st.selHill != null && m.userData.hillId === st.selHill);
     for (const m of this.tunnelMeshes || []) glow(m, st.selTunnel != null && m.userData.tunnelId === st.selTunnel);
+    this.setCaveSelection(false);
+    if (st.selCave || this.tc.object === this.proxy) this.updateHandles();
     if (this.statsDiv) this.updateStats();
     this.updateHillGizmo();
     if (frame) this.needsFrame = true;
@@ -1086,6 +1145,12 @@ export class Preview3D {
     if (this.decoGroup) this.decoGroup.traverse((o) => { if (o.isInstancedMesh) decoMeshes.push(o); });
     const water = this.waterMesh && this.extras.children.includes(this.waterMesh) ? [this.waterMesh] : [];
     const objs = [...refMeshes, ...edgeMeshes, ...(this.riverMeshes || []), ...(this.wallMeshes || []), ...water, ...decoMeshes, ...this.itemsGroup.children, ...this.hillMeshes, ...(this.tunnelMeshes || []), ...(this.terrainMesh ? [this.terrainMesh] : []), ...this.trackGroup.children, ...veg];
+    // rocas y estalactitas sueltas del túnel seleccionado: se eligen aunque las tape el cerro
+    const st0 = this.app.state;
+    const caves = st0.selTunnel != null ? (this.caveMeshes || []).filter((m) => m.userData.cave.tid === st0.selTunnel) : [];
+    const hc = caves.length ? ray.intersectObjects(caves, false) : [];
+    if (hc.length) { this.app.selectCave({ ...hc[0].object.userData.cave }); return; }
+    if (st0.selCave) this.app.selectCave(null, false);
     const h = ray.intersectObjects(objs, false);
     const ud = h.length ? h[0].object.userData : {};
     const onTrack = h.length && this.trackGroup.children.includes(h[0].object);
@@ -1365,6 +1430,18 @@ export class Preview3D {
       c.material?.dispose();
     }
     const st = this.app.state;
+    if (st.tool === 'pan' && st.selCave && st.layout && st.result) {
+      // roca o estalactita seleccionada: gizmo solo en el plano XY
+      const ci = this.caveItem(st.selCave);
+      if (ci && ci.mesh && !this.tc.dragging) {
+        this.tc.setMode('translate');
+        this.tc.showX = true; this.tc.showY = true; this.tc.showZ = false;
+        this.proxy.position.copy(ci.mesh.position);
+        this.tc.attach(this.proxy);
+      } else if (!ci && !this.tc.dragging) this.tc.detach();
+      this.needsFrame = true;
+      return;
+    }
     if (st.tool === 'pan' && st.selItem && st.layout && st.result) {
       // elemento de pista seleccionado: gizmo solo en el plano XY
       const it = this.findItem(st.selItem);
@@ -1441,6 +1518,7 @@ export class Preview3D {
 
   onDragStart() {
     const st = this.app.state;
+    if (st.tool === 'pan' && st.selCave) { this.caveDragMode = true; return; }
     if (st.tool === 'pan' && st.selItem) {
       this.itemDragMode = true;
       this.dragStart = this.proxy.position.clone();
@@ -1472,6 +1550,12 @@ export class Preview3D {
   }
 
   onGizmoMove() {
+    if (this.caveDragMode) {
+      const p = this.proxy.position;
+      const P = this.moveCaveLive(this.app.state.selCave, p.x, p.y);
+      if (P) this.caveDragLast = P;
+      return;
+    }
     if (this.itemDragMode) {
       const p = this.proxy.position;
       this.app.dragItemBy(p.x - this.dragStart.x, p.y - this.dragStart.y);
@@ -1512,6 +1596,12 @@ export class Preview3D {
   }
 
   onDragEnd() {
+    if (this.caveDragMode) {
+      this.caveDragMode = false;
+      if (this.caveDragLast) this.app.commitCaveMove(this.app.state.selCave, this.caveDragLast);
+      this.caveDragLast = null;
+      return;
+    }
     if (this.itemDragMode) {
       this.itemDragMode = false;
       this.app.endItemDrag();
