@@ -256,13 +256,18 @@ function tunnelCard(t, open) {
   const res = (d) => { const { N, step } = tunnelResolution({ tunnelDensity: d }); return `${N - 1} lados · cada ${step.toFixed(1)} m`; };
   const W = t.width ?? sc.tunnelWidth, H = t.height ?? sc.tunnelHeight, cs = t.caveSize ?? sc.caveSize;
   const fr = t.portalFrame ?? sc.portalFrame ?? 1, dp = t.portalDepth ?? sc.portalDepth ?? 1;
+  const rOn = t.rocks !== false, sOn = t.stal !== false, rD = t.rockDensity ?? 50, sD = t.stalDensity ?? 50;
   div.innerHTML = `${head}
     <div class="field"><label>Forma</label><select class="tsShape" title="Forma de la sección del túnel.">${opt(shapes, t.shape)}</select></div>
     <div class="field"><label>Tipo</label><select class="tsType" title="Artificial: sección regular en todo el recorrido. Natural: caverna irregular de roca, que puede abrirse en una bóveda con estalactitas y rocas.">${opt(types, t.type)}</select></div>
     <div class="field"><label>Ancho del túnel <span class="val"><input type="number" class="tsWN" min="4" step="0.5" style="width:62px" value="${W}"> m</span></label><input type="range" class="tsW" min="6" max="40" step="0.5" value="${Math.min(40, W)}" title="Ancho interior del túnel (como mínimo el ancho de la pista + 1 m)."></div>
     <div class="field"><label>Altura libre <span class="val tsHV">${H} m</span></label><input type="range" class="tsH" min="4" max="20" step="0.5" value="${H}" title="Altura libre del túnel sobre la calzada."></div>
     <div class="tsCaveBox${nat ? '' : ' disabled'}"><div class="field"><label>Tamaño de la caverna <span class="val tsCSV">${Math.round(cs * 100)} %</span></label><input type="range" class="tsCS" min="0" max="1" step="0.05" value="${cs}" title="Al mínimo es un túnel irregular; más alto, se abre una bóveda grande con más estalactitas y rocas."></div>
-      <div class="row gap"><label class="check small"><input type="checkbox" class="tsRocks"${t.rocks !== false ? ' checked' : ''}> Rocas</label><label class="check small"><input type="checkbox" class="tsStal"${t.stal !== false ? ' checked' : ''}> Estalactitas</label></div></div>
+      <label class="check small tsChk"><input type="checkbox" class="tsRocks"${rOn ? ' checked' : ''}> Rocas</label>
+      <div class="field tsRockDenBox"${rOn ? '' : ' hidden'}><label>Densidad de rocas <span class="val tsRockDenV">${rD} %</span></label><input type="range" class="tsRockDen" min="0" max="100" step="1" value="${rD}" title="Cantidad de rocas en el piso de la caverna (50 % = normal)."></div>
+      <label class="check small tsChk"><input type="checkbox" class="tsStal"${sOn ? ' checked' : ''}> Estalactitas</label>
+      <div class="field tsStalDenBox"${sOn ? '' : ' hidden'}><label>Densidad de estalactitas <span class="val tsStalDenV">${sD} %</span></label><input type="range" class="tsStalDen" min="0" max="100" step="1" value="${sD}" title="Cantidad de estalactitas en el techo de la caverna (50 % = normal)."></div>
+      <label class="check small tsChk" title="Activado: todas las rocas en una malla y todas las estalactitas en otra. Desactivado: cada roca y cada estalactita se exporta como un objeto independiente, con el pivote de la roca en el piso y el de la estalactita en su base, pegada al techo."><input type="checkbox" class="tsSingle"${t.singleMesh !== false ? ' checked' : ''}> Single mesh</label></div>
     <div class="field"><label>Costado abierto</label><select class="tsOpen" title="Deja abierto un costado del túnel (galería), sostenido por pilares.">${opt(opens, t.openMode || 'none')}</select></div>
     <div class="field tsPilBox${closed ? ' disabled' : ''}"><label>Pilares <span class="val"><input type="number" class="tsPilN" min="0" max="200" step="1" style="width:56px" value="${t.pillarCount}"></span></label>
       <input type="range" class="tsPil" min="0" max="40" step="1" value="${Math.min(40, t.pillarCount)}" title="Cantidad de pilares en el lado abierto."></div>
@@ -296,8 +301,13 @@ function tunnelCard(t, open) {
   q('.tsWN').addEventListener('change', (e) => wSet(e.target.value));
   q('.tsH').addEventListener('input', (e) => { const v = numIn(e.target.value, 2, 60); q('.tsHV').textContent = `${v} m`; setOv({ height: v }); });
   q('.tsCS').addEventListener('input', (e) => { const v = numIn(e.target.value, 0, 1); q('.tsCSV').textContent = `${Math.round(v * 100)} %`; setOv({ caveSize: v }); });
-  q('.tsRocks').addEventListener('change', (e) => setOv({ rocks: e.target.checked, stal: t.stal !== false }));
-  q('.tsStal').addEventListener('change', (e) => setOv({ stal: e.target.checked, rocks: t.rocks !== false }));
+  // rocas y estalactitas: cada casilla agrega o quita solo lo suyo (se guardan las dos, así no dependen una de otra)
+  const cave = (patch) => setOv({ rocks: q('.tsRocks').checked, stal: q('.tsStal').checked, ...patch });
+  q('.tsRocks').addEventListener('change', (e) => { q('.tsRockDenBox').hidden = !e.target.checked; cave({}); });
+  q('.tsStal').addEventListener('change', (e) => { q('.tsStalDenBox').hidden = !e.target.checked; cave({}); });
+  q('.tsRockDen').addEventListener('input', (e) => { const v = numIn(e.target.value, 0, 100, true); q('.tsRockDenV').textContent = `${v} %`; cave({ rockDensity: v }); });
+  q('.tsStalDen').addEventListener('input', (e) => { const v = numIn(e.target.value, 0, 100, true); q('.tsStalDenV').textContent = `${v} %`; cave({ stalDensity: v }); });
+  q('.tsSingle').addEventListener('change', (e) => cave({ singleMesh: e.target.checked }));
   const pilSet = (v) => { v = numIn(v, 0, 200, true); if (v == null) return; q('.tsPilN').value = v; q('.tsPil').value = Math.min(40, v); setOv({ pillars: v }); };
   q('.tsPil').addEventListener('input', (e) => pilSet(e.target.value));
   q('.tsPilN').addEventListener('change', (e) => pilSet(e.target.value));
@@ -2327,7 +2337,7 @@ function selectBridge(i) {
     if (state.selItem) selectItem(null);
   }
   refreshBridgeList();
-  if (i != null) setTimeout(() => { try { focusPanel('ctrl', document.querySelector(`#bridgeList .item[data-i="${i}"]`)); } catch { /* iniciando */ } }, 0);
+  if (i != null) setTimeout(() => { try { focusPanel('spline', document.querySelector(`#bridgeList .item[data-i="${i}"]`)); } catch { /* iniciando */ } }, 0);
   editor.draw();
   preview.update(false, true);
   if (i != null) {
@@ -3812,9 +3822,9 @@ function bindControls() {
   // bifurcar: nueva ruta alternativa entre el primer y el último punto seleccionado
   $('forkSep').addEventListener('input', () => { $('forkSepVal').textContent = `${$('forkSep').value} m`; });
   $('forkSepVal').textContent = `${$('forkSep').value} m`;
-  // botones de la barra: radio fijo y bifurcar con los valores del panel «Puntos seleccionados»
+  // botones de la barra: radio fijo y bifurcar con los valores del panel «Spline»
   $('btnTbRadius').addEventListener('click', () => {
-    focusPanel('arc');
+    focusPanel('spline');
     const sel = state.selSet, run = sel ? contiguousRun(sel.key) : null;
     if (!run || run.length < 3) { toast('Para una curva de radio fijo selecciona 3 o más puntos seguidos con Shift+arrastrar.'); return; }
     onRadius($('arcRadiusNum').value);
@@ -3825,7 +3835,7 @@ function bindControls() {
   $('bridgeWidthNum').addEventListener('change', () => bwPair(parseFloat($('bridgeWidthNum').value)));
   $('btnBridge').addEventListener('click', () => createBridge(parseFloat($('bridgeWidthNum').value)));
   $('btnTbBridge').addEventListener('click', () => {
-    focusPanel('arc', $('bridgeControls'));
+    focusPanel('spline', $('bridgeControls'));
     if (!openEndsSelected()) { toast('Para un puente: abre el circuito (borra un punto con «Abrir» activado) y selecciona los dos extremos con Shift.'); return; }
     createBridge(parseFloat($('bridgeWidthNum').value) || state.geom.width);
   });
@@ -3947,7 +3957,7 @@ function bindControls() {
     else app.setXform(k);
   });
   $('btnTbFork').addEventListener('click', () => {
-    focusPanel('arc');
+    focusPanel('spline');
     const sel = state.selSet;
     if (!sel || sel.key !== 'main' || sel.idxs.size < 2) { toast('Para bifurcar selecciona 2 o más puntos de la ruta principal con Shift: sale en el primero y vuelve en el último.'); return; }
     forkSelection({ right: -1, left: 1, center: 0 }[$('forkSide').value], parseFloat($('forkSep').value));
@@ -4183,8 +4193,8 @@ function setTool(t) {
   const eb = document.getElementById('editBox');
   if (eb) eb.hidden = t !== 'edit';
   if (t === 'pan') document.querySelectorAll('.panel.focus-ring').forEach((p) => p.classList.remove('focus-ring')); // Navegar / Esc quitan el resaltado
-  // al editar puntos, la barra lateral muestra «Puntos seleccionados»
-  if (t === 'edit') { try { focusPanel('arc'); } catch { /* aún iniciando */ } }
+  // al editar puntos, la barra lateral muestra «Spline»
+  if (t === 'edit') { try { focusPanel('spline'); } catch { /* aún iniciando */ } }
   syncToolButtons();
 }
 
@@ -5212,12 +5222,12 @@ function focusPanel(id, sub = null) {
 }
 /** Botones (fuera de la barra lateral) con parámetros asociados: a qué sección llevan. */
 const PANEL_FOR_BUTTON = {
-  'tool:edit': 'arc', 'tool:draw': 'trace', 'tool:extend': 'trace', 'tool:alt': 'alts', 'tool:start': 'gate', 'tool:ref': 'ref',
+  'tool:edit': 'spline', 'tool:draw': 'trace', 'tool:extend': 'trace', 'tool:alt': 'alts', 'tool:start': 'gate', 'tool:ref': 'ref',
   btnDecoNew: 'deco', 'tool:hill': 'hills', 'tool:river': 'rivers', 'tool:paint': 'terrain', 'tool:sculpt': 'terrain', 'tool:flat': 'elev', 'tool:profile': 'elev', btnSusp: 'susp', btnCut: 'cut', btnSculptTool: 'terrain', btnRef3dTop: 'ref3d',
   btnGame: 'sky', btnExportBlender: 'export', btnExportMax: 'export', btnExportJSON: 'export', btnExportOBJ: 'export',
-  btnExportGLB2: 'export', btnExportFBX2: 'export', btnTbRadius: 'arc', btnTbFork: 'arc', btnGenTerrain: 'terrain', btnGenTrees: 'trees',
+  btnExportGLB2: 'export', btnExportFBX2: 'export', btnTbRadius: 'spline', btnTbFork: 'spline', btnGenTerrain: 'terrain', btnGenTrees: 'trees',
 };
-const PANEL_SUB = { 'tool:sculpt': 'sculptCurveBox', btnSculptTool: 'sculptCurveBox' }; // elemento interior al que se baja
+const PANEL_SUB = { 'tool:sculpt': 'sculptCurveBox', btnSculptTool: 'sculptCurveBox', btnTbRadius: 'arcControls', btnTbFork: 'forkControls' }; // elemento interior al que se baja
 function bindPanelFocus() {
   document.addEventListener('click', (e) => {
     const b = e.target.closest && e.target.closest('button');
@@ -5680,12 +5690,12 @@ const HINTS = {
   trackMaxTrisNum: 'Tope exacto de triángulos de la pista (puede superar el máximo del control deslizante).',
   trackAdapt: 'Solo en «Optimizado»: al mínimo, las curvas tienen apenas algo más de geometría que las rectas; al máximo, las rectas tienen mucho menos que las curvas.',
   trackTexOpacity: 'Opacidad de la textura de la pista en las vistas 2D y 3D: bájala para ver los colores por altura que hay debajo. No cambia la exportación.',
-  btnTbBridge: 'Crea un puente entre los dos extremos abiertos seleccionados (cierra el circuito), con el ancho del panel «Puntos seleccionados».',
+  btnTbBridge: 'Crea un puente entre los dos extremos abiertos seleccionados (cierra el circuito), con el ancho del panel «Spline».',
   openOnDelete: 'Si está activado, al borrar un punto de un circuito cerrado el circuito queda abierto en ese lugar (en vez de cerrarse con un punto menos).',
   bridgeWidth: 'Ancho propio del puente (con una transición suave en sus extremos).',
   btnBridge: 'Une los dos extremos seleccionados con un puente de ancho propio.',
-  btnTbRadius: 'Curva de radio fijo con los puntos seleccionados (3 o más seguidos), usando el radio del panel «Puntos seleccionados».',
-  btnTbFork: 'Bifurca la pista entre el primer y el último punto seleccionado, con el lado y la separación del panel «Puntos seleccionados».',
+  btnTbRadius: 'Curva de radio fijo con los puntos seleccionados (3 o más seguidos), usando el radio del panel «Spline».',
+  btnTbFork: 'Bifurca la pista entre el primer y el último punto seleccionado, con el lado y la separación del panel «Spline».',
   stripBorder: 'Agrega a todos los nitro strips un borde: paredes sin espesor que suben desde su contorno (una cara, sin techo), para ponerles una textura de «glow».',
   stripBorderHeight: 'Altura del borde de los nitro strips (igual para todos).',
   stripBorderHeightNum: 'Altura exacta del borde en metros.',

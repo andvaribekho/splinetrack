@@ -143,6 +143,20 @@ for (const [key, s] of Object.entries(SAMPLES)) {
           const HP = buildHills(L, E, { ...spN, caveRocks: false, tunnelOverrides: [{ k: t0.k, s: (t0.s0 + t0.s1) / 2, rocks: true }] }, T, hills);
           const gp = HP.tunnelGeo.find((g) => g.id === t0.id);
           check(nRock(HN) > 0 && nRock(HO) === 0 && gp.stalactites.indices.length + gp.rocks.indices.length > 0, `${key}: cavernas con o sin rocas y estalactitas (${nRock(HN)} / ${nRock(HO)})`);
+          // cada casilla por separado, densidades propias y objetos independientes con su pivote
+          const ov = (o) => buildHills(L, E, { ...spN, tunnelOverrides: [{ k: t0.k, s: (t0.s0 + t0.s1) / 2, ...o }] }, T, hills).tunnelGeo.find((g) => g.id === t0.id);
+          const cnt = (g) => [g.rocks.indices.length / 24, g.stalactites.indices.length / 18];
+          const gA = ov({ rocks: true, stal: true }), gR = ov({ rocks: false, stal: true }), gS = ov({ rocks: true, stal: false });
+          check(cnt(gA)[0] > 0 && cnt(gA)[1] > 0 && cnt(gR)[0] === 0 && cnt(gR)[1] === cnt(gA)[1] && cnt(gS)[1] === 0 && cnt(gS)[0] === cnt(gA)[0], `${key}: rocas y estalactitas independientes (${cnt(gA)} / ${cnt(gR)} / ${cnt(gS)})`);
+          const gD = ov({ rocks: true, stal: true, rockDensity: 100, stalDensity: 10 });
+          check(cnt(gD)[0] > cnt(gA)[0] * 1.5 && cnt(gD)[1] < cnt(gA)[1] * 0.4, `${key}: densidad de rocas y de estalactitas (${cnt(gD)} vs ${cnt(gA)})`);
+          const g0 = ov({ rocks: true, stal: true, rockDensity: 0 });
+          check(cnt(g0)[0] === 0 && cnt(g0)[1] === cnt(gA)[1], `${key}: densidad 0 = sin rocas`);
+          check(gA.singleMesh && gA.rockItems.length === 0, `${key}: single mesh por defecto`);
+          const gI = ov({ rocks: true, stal: true, singleMesh: false });
+          const okR = gI.rockItems.length === cnt(gA)[0] && gI.rockItems.every((it) => { let mn = Infinity; for (let q = 2; q < it.positions.length; q += 3) mn = Math.min(mn, it.positions[q]); return mn < 0.05 && mn > -0.5; });
+          const okS = gI.stalItems.length === cnt(gA)[1] && gI.stalItems.every((it) => { let mx = -Infinity, mn = Infinity; for (let q = 2; q < it.positions.length; q += 3) { mx = Math.max(mx, it.positions[q]); mn = Math.min(mn, it.positions[q]); } return Math.abs(mx - 0.3) < 1e-6 && mn < -0.5; });
+          check(okR && okS, `${key}: rocas y estalactitas como objetos con pivote en el piso / en la base (${gI.rockItems.length}, ${gI.stalItems.length})`);
         }
       }
     }

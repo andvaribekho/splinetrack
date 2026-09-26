@@ -412,3 +412,5 @@ button.km-keys:hover { border-color: var(--accent); background: rgba(242,169,59,
 .settings-body .meta { color: var(--muted); font-size: calc(11px * var(--fs, 1)); line-height: 1.45; margin: 4px 0; }
 .settings-body p.meta { font-size: calc(11px * var(--fs, 1)); }
 #btnSettings.on { border-color: var(--accent); color: var(--accent); }
+.tun-card [hidden] { display: none !important; }
+.tun-card .tsChk { margin: 6px 0 2px; }

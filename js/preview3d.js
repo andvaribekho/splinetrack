@@ -845,7 +845,7 @@ export class Preview3D {
             tris += 12;
           }
           info.tunnelTris += tris;
-          info.tunnels.push({ id: t.id, name: t.name, len: t.len, s0: t.sMid - t.len / 2, s1: t.sMid + t.len / 2, stal: t.stal, pillars: t.pillars.length, tris, k: t.k, sMid: t.sMid, openMode: t.openMode, pillarCount: t.pillarCount, custom: t.custom, key: t.key, shape: t.shape, type: t.type, density: t.density, meshMode: t.meshMode, maxTris: t.maxTris, adapt: t.adapt, rocks: t.rocks, sections: t.sections, profilePts: t.profilePts, width: t.width, height: t.height, caveSize: t.caveSize, portalFrame: t.portalFrame, portalDepth: t.portalDepth });
+          info.tunnels.push({ id: t.id, name: t.name, len: t.len, s0: t.sMid - t.len / 2, s1: t.sMid + t.len / 2, stal: t.stalOn, pillars: t.pillars.length, tris, k: t.k, sMid: t.sMid, openMode: t.openMode, pillarCount: t.pillarCount, custom: t.custom, key: t.key, shape: t.shape, type: t.type, density: t.density, meshMode: t.meshMode, maxTris: t.maxTris, adapt: t.adapt, rocks: t.rocksOn, rockDensity: t.rockDensity, stalDensity: t.stalDensity, singleMesh: t.singleMesh, sections: t.sections, profilePts: t.profilePts, width: t.width, height: t.height, caveSize: t.caveSize, portalFrame: t.portalFrame, portalDepth: t.portalDepth });
           this.objTris.tunnels.set(t.id, { name: t.name, tris });
         }
       }

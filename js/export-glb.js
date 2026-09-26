@@ -138,8 +138,15 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
         put('techo', t.ceiling, tm.ceil);
         put('veredas', t.walkways, walkMat);
         for (const pt of t.portals) put(pt.suffix, pt.geo, tm.portal);
-        put('estalactitas', t.stalactites, rockMat);
-        put('rocas', t.rocks, rockMat);
+        // rocas y estalactitas: una malla por tipo (single mesh) o cada una como objeto propio con su pivote
+        // (la roca en el piso, la estalactita en su base pegada al techo)
+        const items = (list, nm) => list.forEach((it, i) => {
+          const m = mesh(`${t.name}_${nm}_${String(i + 1).padStart(2, '0')}`, new Float32Array(it.positions), it.indices, null, rockMat);
+          m.position.set(it.x, it.y, it.z);
+          grp.add(m);
+        });
+        if (t.singleMesh === false) { items(t.stalItems || [], 'estalactita'); items(t.rockItems || [], 'roca'); }
+        else { put('estalactitas', t.stalactites, rockMat); put('rocas', t.rocks, rockMat); }
         t.pillars.forEach((pl, i) => {
           const pg = pillarGeometry(pl);
           const m = mesh(`${t.name}_pilar_${String(i + 1).padStart(2, '0')}`, pg.positions, pg.indices, null, pillarMat);

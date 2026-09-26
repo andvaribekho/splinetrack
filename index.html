@@ -111,27 +111,21 @@
         <label class="check"><input type="checkbox" id="reverse"> Invertir sentido</label>
       </section>
 
-      <section class="panel" data-panel="ctrl">
-        <h2>Puntos del spline</h2>
+      <section class="panel" data-panel="spline">
+        <h2>Spline</h2>
         <div id="ctrlBox">
+          <div class="row gap">
+            <button id="btnCtrlMore" title="Más puntos siguiendo la forma actual">Más puntos</button>
+            <button id="btnCtrlLess" title="Menos puntos siguiendo la forma actual">Menos puntos</button>
+            <button id="btnCtrlReset" title="Descarta los cambios y regenera los puntos desde el trazo original">Descartar cambios</button>
+          </div>
           <div class="meta" id="ctrlInfo"></div>
           <div class="meta" data-instr>Mapa: arrastra un punto para moverlo · doble clic sobre la pista agrega uno · clic derecho, Alt+clic o Supr lo borran · Shift+arrastrar selecciona varios (Shift+clic suma o quita uno) para darles un radio fijo.</div>
           <div class="meta" data-instr>Perfil: arrastra un punto en vertical para fijar su altura (◆) · doble clic agrega un punto con esa altura · clic derecho o Alt+clic la vuelve automática.</div>
           <div class="meta" data-instr>3D: clic en una esfera para seleccionarla y muévela con el gizmo (Libre, Plano XY o Solo Z).</div>
           <div class="meta" data-instr>Varios puntos: Shift+clic suma o quita uno y Shift+arrastrar dibuja un cuadro, en el mapa, el perfil o la vista 3D. Al arrastrar uno de los seleccionados se mueven todos juntos.</div>
-          <div class="row gap">
-            <button id="btnCtrlLess" title="Menos puntos siguiendo la forma actual">Menos puntos</button>
-            <button id="btnCtrlMore" title="Más puntos siguiendo la forma actual">Más puntos</button>
-            <button id="btnCtrlReset" title="Descarta los cambios y regenera los puntos desde el trazo original">Descartar cambios</button>
-          </div>
-          <h3 class="subhead">Puentes</h3>
-          <div id="bridgeList" class="list"></div>
         </div>
-      </section>
-
-      <section class="panel" data-panel="arc">
-        <h2>Puntos seleccionados</h2>
-        <h3 class="subhead" style="margin-top:4px">Curva de radio fijo</h3>
+        <h3 class="subhead">Curva de radio fijo</h3>
         <div class="meta" id="arcInfo"></div>
         <div id="arcControls">
           <div class="field"><label>Radio <span class="val"><input type="number" id="arcRadiusNum" min="1" step="0.5" style="width:72px"> m</span></label><input type="range" id="arcRadius" min="5" max="400" step="1"></div>
@@ -158,6 +152,8 @@
           <div class="row gap"><button id="btnBridge">Crear puente</button></div>
         </div>
         <div class="meta" id="bridgeInfo"></div>
+        <h3 class="subhead">Puentes</h3>
+        <div id="bridgeList" class="list"></div>
       </section>
 
       <section class="panel" data-panel="elev">

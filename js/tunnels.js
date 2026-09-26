@@ -352,7 +352,10 @@ export function applyTunnelOverrides(layout, runs, sp) {
     t.rocks = o && typeof o.rocks === 'boolean' ? o.rocks : sp.caveRocks !== false; // rocas del piso (cavernas)
     // estalactitas: por separado (los proyectos anteriores tenían un solo valor para ambas cosas)
     const genStal = typeof sp.caveStalactites === 'boolean' ? sp.caveStalactites : sp.caveRocks !== false;
-    t.stal = o && typeof o.stal === 'boolean' ? o.stal : o && typeof o.rocks === 'boolean' ? o.rocks : genStal;
+    t.stal = o && typeof o.stal === 'boolean' ? o.stal : o && typeof o.rocks === 'boolean' && o.stalDensity === undefined && o.rockDensity === undefined ? o.rocks : genStal;
+    t.rockDensity = o && Number.isFinite(o.rockDensity) ? clamp(o.rockDensity, 0, 100) : sp.caveRockDensity ?? 50;
+    t.stalDensity = o && Number.isFinite(o.stalDensity) ? clamp(o.stalDensity, 0, 100) : sp.caveStalDensity ?? 50;
+    t.singleMesh = o && typeof o.singleMesh === 'boolean' ? o.singleMesh : sp.caveSingleMesh !== false;
     // medidas propias del túnel (si no, las por defecto del proyecto)
     const num = (key, def, a, b) => (o && Number.isFinite(o[key]) ? clamp(o[key], a, b) : def);
     t.width = num('width', sp.tunnelWidth, 4, 200);
@@ -562,53 +565,76 @@ export function buildTunnelGeometry(layout, elev, spIn, runs, opts = {}) {
       { suffix: 'boca_entrada', geo: portal(true) },
       { suffix: 'boca_salida', geo: portal(false) },
     ];
-    // estalactitas y rocas (solo cavernas)
-    const sPos = [], sIdx = [];
-    const rPos = [], rIdx = [];
-    if (natural) {
-      const nSt = Math.round(((t.s1 - t.s0) / 4) * (0.3 + sp.caveSize * 1.7));
+    // estalactitas y rocas (solo cavernas), cada cosa con su casilla y su densidad (50 % = cantidad normal).
+    // Cada una se arma en coordenadas locales respecto de su pivote: la roca en el piso (centro de su base) y la
+    // estalactita en su base, pegada al techo. Con «single mesh» se unen en una sola malla por tipo.
+    const stalItems = [], rockItems = [];
+    const seedT = 1000 + t.id * 7919 + (sp.treeSeed | 0);
+    const randS = rng(seedT), randR = rng(seedT + 104729); // series separadas: cambiar una no mueve la otra
+    const stalOn = t.stal !== false, rocksOn = t.rocks !== false;
+    const stalK = clamp(t.stalDensity ?? 50, 0, 100) / 50, rockK = clamp(t.rockDensity ?? 50, 0, 100) / 50;
+    if (natural && stalOn && stalK > 0) {
+      const nSt = Math.round(((t.s1 - t.s0) / 4) * (0.3 + sp.caveSize * 1.7) * stalK);
       for (let k2 = 0; k2 < nSt; k2++) {
-        const a = Math.floor(rand() * ns);
-        const q = Math.floor(ca + rand() * Math.max(1, cb - ca + 1));
+        const a = Math.floor(randS() * ns);
+        const q = Math.floor(ca + randS() * Math.max(1, cb - ca + 1));
+        const len0 = randS(), rad0 = randS();
         if (!keep[q]) continue;
         const { F, pts } = ring[a];
         const p = pts[q];
         const ceil = (p[2] - F.z);
         const room = ceil - Hb - 0.4;
         if (room < 0.6) continue;
-        const len = Math.min(room, 0.6 + rand() * (1 + 4 * sp.caveSize));
-        const rad = 0.25 + rand() * 0.6 * (0.5 + sp.caveSize);
-        const base = sPos.length / 3;
+        const len = Math.min(room, 0.6 + len0 * (1 + 4 * sp.caveSize));
+        const rad = 0.25 + rad0 * 0.6 * (0.5 + sp.caveSize);
+        const pos = [];
         for (let m = 0; m < 6; m++) {
           const ang = (m / 6) * Math.PI * 2;
-          sPos.push(p[0] + Math.cos(ang) * rad, p[1] + Math.sin(ang) * rad, p[2] + 0.3);
+          pos.push(Math.cos(ang) * rad, Math.sin(ang) * rad, 0.3);
         }
-        sPos.push(p[0], p[1], p[2] - len);
-        for (let m = 0; m < 6; m++) sIdx.push(base + m, base + 6, base + ((m + 1) % 6));
+        pos.push(0, 0, -len);
+        const idx = [];
+        for (let m = 0; m < 6; m++) idx.push(m, 6, (m + 1) % 6);
+        stalItems.push({ x: p[0], y: p[1], z: p[2], positions: pos, indices: idx });
       }
-      const nRock = Math.round(((t.s1 - t.s0) / 6) * sp.caveSize * 2);
+    }
+    if (natural && rocksOn && rockK > 0) {
+      const nRock = Math.round(((t.s1 - t.s0) / 6) * (0.2 + sp.caveSize * 1.8) * rockK);
+      const V = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -0.6]];
+      const F8 = [[0, 2, 4], [2, 1, 4], [1, 3, 4], [3, 0, 4], [2, 0, 5], [1, 2, 5], [3, 1, 5], [0, 3, 5]];
       for (let k2 = 0; k2 < nRock; k2++) {
-        const a = Math.floor(rand() * ns);
-        const side = rand() < 0.5 ? 1 : -1;
+        const a = Math.floor(randR() * ns);
+        const side = randR() < 0.5 ? 1 : -1;
+        const u0 = randR(), rad0 = randR();
+        const J = V.map(() => 0.7 + randR() * 0.6);
         if (side === open) continue;
         const { F, pts } = ring[a];
         const foot = pts[side > 0 ? N - 1 : 0];
         const wallU = Math.abs((foot[0] - F.x) * F.L[0] + (foot[1] - F.y) * F.L[1]);
         const minU = F.w / 2 + extSide(side) + 1.2;
         if (wallU < minU + 0.8) continue;
-        const u = side * (minU + rand() * (wallU - minU - 0.5));
-        const rad = 0.4 + rand() * Math.min(2.2, (wallU - minU) * 0.5) * (0.5 + sp.caveSize);
-        const c = F.at(u, rad * 0.5);
-        const base = rPos.length / 3;
-        const V = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -0.6]];
-        for (const [vx, vy, vz] of V) {
-          const j = 0.7 + rand() * 0.6;
-          rPos.push(c[0] + vx * rad * j, c[1] + vy * rad * j, c[2] + vz * rad * j);
-        }
-        const F8 = [[0, 2, 4], [2, 1, 4], [1, 3, 4], [3, 0, 4], [2, 0, 5], [1, 2, 5], [3, 1, 5], [0, 3, 5]];
-        for (const f of F8) rIdx.push(base + f[0], base + f[1], base + f[2]);
+        const u = side * (minU + u0 * (wallU - minU - 0.5));
+        const rad = 0.4 + rad0 * Math.min(2.2, (wallU - minU) * 0.5) * (0.5 + sp.caveSize);
+        // pivote: el punto del piso bajo la roca; la base de la roca queda apoyada en él (hundida un poco)
+        const piv = F.at(u, 0);
+        const lift = 0.6 * rad * J[5] - 0.1 * rad;
+        const pos = [];
+        V.forEach(([vx, vy, vz], m) => { const j = J[m]; pos.push(vx * rad * j, vy * rad * j, vz * rad * j + lift); });
+        const idx = [];
+        for (const f of F8) idx.push(f[0], f[1], f[2]);
+        rockItems.push({ x: piv[0], y: piv[1], z: piv[2], positions: pos, indices: idx });
       }
     }
+    // mallas unidas (siempre: la vista previa las usa; se exportan así con «single mesh»)
+    const merge = (items) => {
+      const P = [], I = [];
+      for (const it of items) {
+        const base = P.length / 3;
+        for (let q = 0; q < it.positions.length; q += 3) P.push(it.positions[q] + it.x, it.positions[q + 1] + it.y, it.positions[q + 2] + it.z);
+        for (const q of it.indices) I.push(base + q);
+      }
+      return { positions: new Float32Array(P), indices: I };
+    };
     // pilares en el lado abierto: cubo estirado con pivote en su base
     const pillars = [];
     const nPil = t.pillarCount ?? sp.tunnelPillars;
@@ -628,18 +654,15 @@ export function buildTunnelGeometry(layout, elev, spIn, runs, opts = {}) {
         pillars.push({ x: baseP[0], y: baseP[1], z: baseP[2], h, size: 1.1, angle: Math.atan2(F.ty, F.tx) });
       }
     }
-    // cavernas: rocas y estalactitas opcionales (general o propio de cada túnel)
-    if (t.rocks === false) { rPos.length = 0; rIdx.length = 0; }
-    if (t.stal === false) { sPos.length = 0; sIdx.length = 0; }
-    const stalactites = { positions: new Float32Array(sPos), indices: sIdx };
-    const rocks = { positions: new Float32Array(rPos), indices: rIdx };
-    const tris = (walls.indices.length + ceiling.indices.length + walkways.indices.length + portals.reduce((a2, p) => a2 + p.geo.indices.length, 0) + sIdx.length + rIdx.length) / 3 + pillars.length * 12;
+    const stalactites = merge(stalItems), rocks = merge(rockItems);
+    const singleMesh = t.singleMesh !== false;
+    const tris = (walls.indices.length + ceiling.indices.length + walkways.indices.length + portals.reduce((a2, p) => a2 + p.geo.indices.length, 0) + stalactites.indices.length + rocks.indices.length) / 3 + pillars.length * 12;
     out.push({
       id: t.id, name: `tunel_${String(t.id + 1).padStart(2, '0')}`, len: t.s1 - t.s0, k: t.k, sMid: (t.s0 + t.s1) / 2,
       openMode: t.openMode ?? sp.tunnelOpen, pillarCount: nPil, custom: !!t.custom, key: t.key ?? -1,
-      shape: sp.tunnelShape, type: sp.tunnelType, natural, density: sp.tunnelDensity, meshMode: t.meshMode || 'uniform', maxTris: t.maxTris, adapt: t.adapt, rocks: t.rocks !== false, stal: t.stal !== false, sections: ns + 1, profilePts: N,
+      shape: sp.tunnelShape, type: sp.tunnelType, natural, density: sp.tunnelDensity, meshMode: t.meshMode || 'uniform', maxTris: t.maxTris, adapt: t.adapt, rocksOn, stalOn, rockDensity: t.rockDensity ?? 50, stalDensity: t.stalDensity ?? 50, singleMesh, sections: ns + 1, profilePts: N,
       width: sp.tunnelWidth, height: sp.tunnelHeight, caveSize: sp.caveSize, portalFrame: sp.portalFrame ?? 1, portalDepth: sp.portalDepth ?? 1,
-      walls, ceiling, walkways, portals, stalactites, rocks, pillars, tris, box,
+      walls, ceiling, walkways, portals, stalactites, rocks, stalItems: singleMesh ? [] : stalItems, rockItems: singleMesh ? [] : rockItems, pillars, tris, box,
     });
   }
   return out;
