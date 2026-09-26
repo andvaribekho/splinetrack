@@ -331,6 +331,44 @@ export class ProfileView {
     for (const c of this.app.state.scene.suspRanges || []) { ctx.fillStyle = 'rgba(90,216,255,0.07)'; ctx.fillRect(sx(c.s0), f.y0, sx(c.s1) - sx(c.s0), f.y1 - f.y0); }
     // secciones socavadas: banda café
     for (const c of this.app.state.scene.cutRanges || []) { ctx.fillStyle = 'rgba(141,90,43,0.10)'; ctx.fillRect(sx(c.s0), f.y0, sx(c.s1) - sx(c.s0), f.y1 - f.y0); }
+    // túneles (ruta principal): banda gris, techo del túnel sobre la calzada y su nombre
+    {
+      const TI = (this.app.state.tunnelInfo || []).filter((t) => t.k === 0 && Number.isFinite(t.s0) && Number.isFinite(t.s1));
+      const r0t = L.routes[0], z0t = E.routes[0].z, hT = Math.max(2, (this.app.state.scene.tunnelHeight ?? 6));
+      for (const t of TI) {
+        const segs = t.s0 < 0 ? [[t.s0 + Lm, Lm], [0, t.s1]] : t.s1 > Lm ? [[t.s0, Lm], [0, t.s1 - Lm]] : [[t.s0, t.s1]];
+        for (const [a, b] of segs) {
+          ctx.fillStyle = 'rgba(150,160,185,0.10)';
+          ctx.fillRect(sx(a), f.y0, sx(b) - sx(a), f.y1 - f.y0);
+          // interior del túnel: de la calzada al techo (calzada + altura libre); si el techo queda fuera del gráfico
+          // se recorta arriba
+          const i0 = Math.max(0, Math.floor(a / r0t.ds)), i1 = Math.min(r0t.n - 1, Math.ceil(b / r0t.ds));
+          const top = (i) => sy(Math.min(zmax, z0t[i] + hT));
+          ctx.beginPath();
+          for (let i = i0; i <= i1; i++) { const x = sx(r0t.s[i]); if (i === i0) ctx.moveTo(x, top(i)); else ctx.lineTo(x, top(i)); }
+          for (let i = i1; i >= i0; i--) ctx.lineTo(sx(r0t.s[i]), sy(z0t[i]));
+          ctx.closePath();
+          ctx.fillStyle = 'rgba(160,170,195,0.16)'; ctx.fill();
+          ctx.strokeStyle = 'rgba(190,200,220,0.75)'; ctx.lineWidth = 1.4; ctx.setLineDash([5, 3]);
+          ctx.beginPath();
+          let pen = false;
+          for (let i = i0; i <= i1; i++) {
+            const zr = z0t[i] + hT;
+            if (zr > zmax) { pen = false; continue; } // techo fuera del gráfico: no se dibuja la línea
+            const x = sx(r0t.s[i]), y = sy(zr);
+            if (!pen) { ctx.moveTo(x, y); pen = true; } else ctx.lineTo(x, y);
+          }
+          ctx.stroke(); ctx.setLineDash([]);
+          // bocas
+          ctx.strokeStyle = 'rgba(190,200,220,0.55)'; ctx.lineWidth = 1;
+          for (const sv of [a, b]) { if ((sv === 0 && t.s0 < 0) || (sv === Lm && t.s1 > Lm)) continue; const i = Math.min(r0t.n - 1, Math.max(0, Math.round(sv / r0t.ds))); ctx.beginPath(); ctx.moveTo(sx(sv), sy(z0t[i])); ctx.lineTo(sx(sv), sy(Math.min(zmax, z0t[i] + hT))); ctx.stroke(); }
+        }
+        const mid = ((t.s0 + t.s1) / 2 + Lm) % Lm;
+        ctx.fillStyle = 'rgba(200,210,230,0.85)'; ctx.font = '10px Inter, sans-serif';
+        const lbl = `${t.name || `túnel ${t.id + 1}`} · ${hT} m`;
+        ctx.fillText(lbl, sx(mid) - ctx.measureText(lbl).width / 2, f.y0 + 22);
+      }
+    }
     // perfiles dibujados (violeta) y tramo elegido para dibujar (amarillo suave)
     for (const Z of this.app.profileZonesS ? this.app.profileZonesS() : []) {
       ctx.fillStyle = 'rgba(186,120,255,0.08)';

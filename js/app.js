@@ -8,7 +8,7 @@ import { Editor2D } from './editor2d.js';
 import { ProfileView } from './profile.js';
 import { Preview3D } from './preview3d.js';
 import { initPanels } from './panels.js';
-import { initInstructions } from './instructions.js';
+import { initInstructions, initPanelStripes } from './instructions.js';
 import { initSplitters } from './splitters.js';
 import { initHotkeys } from './hotkeys.js';
 import { DEFAULT_SCENE, terrainCell } from './scene.js';
@@ -5673,6 +5673,7 @@ function bindSceneControls() {
     state.tunnelInfo = tl;
     if (state.selTunnel != null && !tl.some((t) => t.id === state.selTunnel)) state.selTunnel = null;
     refreshTunnelInfo();
+    profile.draw(); // los túneles se ven en el perfil
   };
 }
 
@@ -5929,6 +5930,7 @@ syncControls();
 syncSceneControls();
 initInstructions(); // antes de los paneles: los textos de ayuda quedan detrás de «(instrucciones)»
 const panels = initPanels($('sidebar'));
+initPanelStripes(); // fondo alternado de las secciones (se rehace al desanclar o anclar)
 initSplitters();
 $('btnDockAll').addEventListener('click', () => panels.dockAll());
 initHints();
