@@ -414,3 +414,8 @@ button.km-keys:hover { border-color: var(--accent); background: rgba(242,169,59,
 #btnSettings.on { border-color: var(--accent); color: var(--accent); }
 .tun-card [hidden] { display: none !important; }
 .tun-card .tsChk { margin: 6px 0 2px; }
+/* puentes: una tarjeta por puente, colapsable */
+.bridge-card.collapsed .bbody { display: none; }
+.bridge-card [hidden] { display: none !important; }
+.bridge-card .thumb.inherited { opacity: 0.55; }
+.brand .ver { font-weight: 500; font-size: calc(10.5px * var(--fs, 1)); color: var(--muted); letter-spacing: 0; margin-left: 4px; }

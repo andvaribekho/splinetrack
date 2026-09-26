@@ -176,7 +176,7 @@ export function buildLayout(project, gpIn = {}) {
         }
         mainUni[i] = [px, py, Math.abs(b.w - base[i]) > 1e-6 ? w : mainUni[i][2]];
       }
-      bridges.push({ i0: j0, len: f, w: b.w, off: clamp(+b.off || 0, -1, 1), idx: bIndex, pa: null, pb: null });
+      bridges.push({ i0: j0, len: f, w: b.w, off: clamp(+b.off || 0, -1, 1), idx: bIndex, pa: null, pb: null, dirt: !!b.dirt, barrier: b.barrier !== false, uid: b.uid || null });
     });
     // con desplazamiento, el eje cambió: se vuelve a muestrear uniforme y se ubica el tramo de cada puente
     if (shifted) {
@@ -208,7 +208,7 @@ export function buildLayout(project, gpIn = {}) {
     const s0 = main.s[ia];
     let s1 = closed ? main.s[ib] : main.s[Math.min(nn - 1, b.i0 + b.len)];
     if (closed && s1 < s0) s1 += main.L;
-    return { s0, s1, w: b.w, off: b.off || 0, idx: b.idx };
+    return { s0, s1, w: b.w, off: b.off || 0, idx: b.idx, dirt: b.dirt, barrier: b.barrier, uid: b.uid }; // camino de tierra (no por defecto) y barrera (sí) propios
   });
   main.id = 0;
   main.kind = 'main';

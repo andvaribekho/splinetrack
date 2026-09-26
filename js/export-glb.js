@@ -192,8 +192,13 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
     }
     if (tm.bridgeParts.length) {
       const bt = tex(textures.bridge);
-      const deckMat = new THREE.MeshStandardMaterial({ name: 'puente', color: bt ? 0xffffff : 0x7a5433, map: bt, roughness: 0.9, metalness: 0, side: THREE.DoubleSide });
-      for (const p of tm.bridgeParts) grp.add(mesh(p.name, p.positions, p.indices, p.uvs, deckMat));
+      // cada puente con su propio material de piso (puente_NN)
+      for (const p of tm.bridgeParts) {
+        const own = textures.bridgeFor ? textures.bridgeFor(p.bridge) : null;
+        const t = own && own.deck ? tex(own.deck) : bt;
+        const deckMat = new THREE.MeshStandardMaterial({ name: `puente_${String(p.bridge + 1).padStart(2, '0')}`, color: t ? 0xffffff : 0x7a5433, map: t, roughness: 0.9, metalness: 0, side: THREE.DoubleSide });
+        grp.add(mesh(p.name, p.positions, p.indices, p.uvs, deckMat));
+      }
     }
     if (bp.length) {
       const mat = new THREE.MeshStandardMaterial({ name: 'puente_pilar', color: 0x7a818f, roughness: 0.9 });
@@ -223,6 +228,14 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
       const suspDirt = textures.suspDirt ? DM('camino_tierra_suspendido', tex(textures.suspDirt)) : null;
       const suspBar = textures.suspBarrier ? BM('barrera_suspendida', tex(textures.suspBarrier)) : null;
       const edgeMat = (m, kind) => {
+        if (m.bridge != null) { // camino de tierra y barrera de un puente: materiales únicos de ese puente
+          const nm = `${kind === 'dirt' ? 'camino_tierra' : 'barrera'}_puente_${String(m.bridge + 1).padStart(2, '0')}`;
+          if (!own.has(nm)) {
+            const bt2 = textures.bridgeFor ? textures.bridgeFor(m.bridge)[kind] : null;
+            own.set(nm, kind === 'dirt' ? DM(nm, tex(bt2 || textures.dirt)) : BM(nm, tex(bt2 || textures.barrier)));
+          }
+          return own.get(nm);
+        }
         if (m.susp && (kind === 'dirt' ? suspDirt : suspBar)) return kind === 'dirt' ? suspDirt : suspBar; // bordes del tramo suspendido
         if (!m.alt) return kind === 'dirt' ? dirtMat : barMat;
         const r = layout.routes[m.k];

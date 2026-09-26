@@ -1214,11 +1214,13 @@ export class Editor2D {
     const TS = suspTex && sus.some((c) => c.k === k) ? this.texStrip(suspTex, dir) : TT;
     const suspAt = (sv) => { for (const c of sus) { if (c.k !== k) continue; let d = sv - c.s0; if (r.closed) d = ((d % r.L) + r.L) % r.L; if (d >= 0 && d <= c.s1 - c.s0) return true; } return false; };
     const coveredAt = (sv) => { for (const c of cov) { if (c.k !== k) continue; let ss = sv; if (r.closed) { while (ss < c.s0) ss += r.L; while (ss > c.s1 + r.L) ss -= r.L; } if (ss >= c.s0 && ss <= c.s1) return true; } return false; };
-    const inBridge = (sv) => {
-      if (!r.bridges) return false;
-      for (const b of r.bridges) { const d = r.closed ? (((sv - b.s0) % r.L) + r.L) % r.L : sv - b.s0; if (d >= -1e-6 && d <= b.s1 - b.s0 + 1e-6) return true; }
-      return false;
+    const bridgeIdxAt = (sv) => {
+      if (!r.bridges) return -1;
+      for (const b of r.bridges) { const d = r.closed ? (((sv - b.s0) % r.L) + r.L) % r.L : sv - b.s0; if (d >= -1e-6 && d <= b.s1 - b.s0 + 1e-6) return b.idx; }
+      return -1;
     };
+    const TBm = new Map(); // material del piso propio de cada puente
+    const TBof = (bi) => { if (!TBm.has(bi)) TBm.set(bi, this.app.bridgeDeckCanvas ? this.texStrip(this.app.bridgeDeckCanvas(bi), dir) : TB); return TBm.get(bi); };
     const repLen = Math.max(0.5, L.routes[0].L / Math.max(1, sc.trackTexReps));
     const maxStep = Math.max(1, Math.min(Math.ceil(6 / (r.ds * pxPerM)), Math.floor((repLen * 0.9) / r.ds) || 1));
     const toS = (x, y) => { const [lx, ly] = L.toLayout(x, y); return this.toScreen(lx, ly); };
@@ -1241,7 +1243,8 @@ export class Editor2D {
     // tipo de cada segmento: 'b' tablero de puente, 'c' cubierto (túnel / bajo cruce), 'n' normal
     const kindOf = (sg) => {
       const sa = r.s[sg[0]], sb = sg[1] === 0 && r.closed ? r.L : r.s[sg[1]];
-      if (inBridge(sa) && inBridge(sb === r.L ? 0 : sb)) return 'b';
+      const ba = bridgeIdxAt(sa);
+      if (ba >= 0 && ba === bridgeIdxAt(sb === r.L ? 0 : sb)) return `b${ba}`;
       return coveredAt((sa + sb) / 2) ? 'c' : suspAt((sa + sb) / 2) ? 's' : 'n';
     };
     for (let q = 0; q < segs.length;) {
@@ -1257,7 +1260,7 @@ export class Editor2D {
     }
     const GROW_ALONG = 1.2, GROW_SIDE = 0.5; // px: solape entre cuadros y cobertura del borde de la base
     for (const [a, b, br] of groups) {
-      const T = br === 'b' ? TB : br === 'c' ? TC : br === 's' ? TS : TT;
+      const T = br[0] === 'b' ? TBof(+br.slice(1)) : br === 'c' ? TC : br === 's' ? TS : TT;
       const { cv: tex, W, H } = T;
       const sa = r.s[a], sb = b === 0 && r.closed ? r.L : r.s[b];
       if (sb <= sa) continue;

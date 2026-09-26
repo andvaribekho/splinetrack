@@ -785,6 +785,31 @@ for (const [key, s] of Object.entries(SAMPLES)) {
   check(dev < 0.05 && Math.abs(r1.w[midI] - 20) < 0.01, `puente de tramo: misma forma (desvío ${dev.toFixed(3)} m) y ancho propio`);
 }
 
+// bordes propios de cada puente: barrera (sí por defecto) y camino de tierra (no por defecto); la barrera se une con la de la pista
+{
+  const proj = SAMPLES.oval.build();
+  const L0 = buildLayout(proj, { lapLength: 1000 });
+  proj.main.ctrl = deriveControlPoints(proj.main.pts, true, 30 / L0.scale, 3);
+  const c = proj.main.ctrl;
+  const mk = (o) => { proj.main.bridges = [{ a: c[5].slice(0, 2), b: c[9].slice(0, 2), w: 18, ...o }]; const L = buildLayout(proj, { lapLength: 1000 }); return { L, E: computeElevation(L, { hills: 0.3 }) }; };
+  const names = (B) => [...B.dirt, ...B.barriers].map((m) => m.name);
+  { const { L, E } = mk({}); const B = buildEdgeMeshes(L, E, { barrierSide: 'none', dirtSide: 'none' });
+    check(names(B).includes('barrera_puente_01_izq') && names(B).includes('barrera_puente_01_der') && !names(B).some((n) => n.startsWith('camino_tierra')) && B.barriers.every((m) => m.bridge === 0), `puente: barrera por defecto y sin camino de tierra (${names(B)})`); }
+  { const { L, E } = mk({ dirt: true, barrier: false }); const B = buildEdgeMeshes(L, E, { barrierSide: 'none', dirtSide: 'none' });
+    check(names(B).includes('camino_tierra_puente_01_izq') && !B.barriers.length, `puente: camino de tierra propio y sin barrera (${names(B)})`); }
+  { const { L, E } = mk({}); const B = buildEdgeMeshes(L, E, { barrierSide: 'both', dirtSide: 'both', dirtWidth: 3 });
+    const road = B.barriers.find((m) => m.name === 'barrera_ruta_principal_izq'), br = B.barriers.find((m) => m.name === 'barrera_puente_01_izq');
+    // la barrera de la pista y la del puente comparten las filas del borde: hay un tramo de pista justo antes del primero del puente
+    const nSeg = br ? br.s.length - 1 : 0, Bs = new Set(br ? br.segs : []), Rs = new Set(road ? road.segs : []);
+    let ends = 0, joined = 0;
+    for (const a of Bs) { const pv = (a - 1 + nSeg) % nSeg, nx = (a + 1) % nSeg; if (!Bs.has(pv)) { ends++; if (Rs.has(pv)) joined++; } if (!Bs.has(nx)) { ends++; if (Rs.has(nx)) joined++; } }
+    check(road && br && road.positions === br.positions && ends === 2 && joined === 2, `puente: la barrera se une con la de la pista (${joined}/${ends} extremos)`);
+    const dirtBridge = B.dirt.find((m) => m.bridge === 0);
+    check(!dirtBridge, 'puente: sin camino de tierra sobre el tablero aunque la pista lo tenga'); }
+  { const { L, E } = mk({}); const TM = buildTrackMesh(L, E, {});
+    check(TM.bridgeGroups && TM.bridgeGroups.length === 1 && TM.bridgeGroups[0].bridge === 0 && TM.bridgeGroups[0].count > 0, 'puente: grupo de material propio del tablero'); }
+}
+
 // puentes desplazados hacia un borde: el borde del puente sigue el borde de la pista
 {
   const proj = SAMPLES.oval.build();
