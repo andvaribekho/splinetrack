@@ -1,9 +1,10 @@
 // Gráfico del perfil de elevación z(s) con cruces, zonas planas y pendientes fuera de rango.
+import { localizeCtx } from './i18n.js';
 
 export class ProfileView {
   constructor(canvas, app) {
     this.cv = canvas;
-    this.ctx = canvas.getContext('2d');
+    this.ctx = localizeCtx(canvas.getContext('2d'));
     this.app = app;
     this.tip = document.createElement('div');
     this.tip.className = 'tooltip';

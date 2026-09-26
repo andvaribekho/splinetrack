@@ -1,6 +1,7 @@
 // Editor 2D: muestra la imagen, el trazado coloreado por altura, los cruces y permite dibujar.
 import { edgeParams } from './tunnels.js';
 import { taubinSmooth, resampleUniform } from './geometry.js';
+import { localizeCtx } from './i18n.js';
 
 /** Afín que lleva el triángulo src [[u,v]×3] al triángulo dst [[x,y]×3]: [a, b, c, d, e, f] para setTransform. */
 function affine3(src, dst) {
@@ -36,7 +37,7 @@ export function zColor(t) {
 export class Editor2D {
   constructor(canvas, app) {
     this.cv = canvas;
-    this.ctx = canvas.getContext('2d');
+    this.ctx = localizeCtx(canvas.getContext('2d'));
     this.app = app;
     this.view = { ox: 0, oy: 0, zoom: 1 };
     this.stroke = null;

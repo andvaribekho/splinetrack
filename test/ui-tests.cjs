@@ -40,9 +40,10 @@ async function sample(name) {
   await idle();
 }
 async function tool(t) { await ev((t) => document.querySelector(`[data-tool=${t}]`).click(), t); await idle(); }
+const LANG = process.env.TSG_LANG || 'es';
 async function freshPage() {
   await page.goto(URL);
-  await ev(() => { localStorage.clear(); localStorage.setItem('tsg.autosave', JSON.stringify({ on: false })); }); // sin autoguardado durante las pruebas
+  await ev((lang) => { localStorage.clear(); localStorage.setItem('tsg.autosave', JSON.stringify({ on: false })); localStorage.setItem('tsg.lang', lang); }, LANG); // sin autoguardado; idioma fijo (español salvo TSG_LANG)
   await page.reload();
   await page.waitForFunction(() => window.__tsg && window.__tsg.idle);
   await idle();
@@ -653,6 +654,76 @@ test('cámara de juego: entra, oculta triggers, orbita (clic derecho restablece)
   await page.waitForFunction(() => !window.__tsg.preview.game.active);
 });
 
+test('idioma: inglés al momento (textos, ayudas, avisos, lista de opciones) y vuelta a español', async () => {
+  await reset('figure8');
+  await page.click('#btnSettings');
+  await page.selectOption('#uiLang', 'en');
+  await page.waitForFunction(() => document.getElementById('btnNew').textContent.trim() === 'New');
+  const en = await ev(() => {
+    const txt = (id) => document.getElementById(id).textContent.replace(/\s+/g, ' ').trim();
+    const grp = document.querySelector('section.panel[data-group]').getAttribute('data-group');
+    const opt = [...document.getElementById('trackTexDir')?.options || []].map((o) => o.textContent)[0] || '';
+    return { newBtn: txt('btnNew'), game: txt('btnGame'), grp, opt, lang: localStorage.getItem('tsg.lang'), html: document.documentElement.lang, name: window.__tsg.state.projectName };
+  });
+  expect(en.newBtn === 'New' && en.game === 'Game camera' && en.grp === 'Input' && en.lang === 'en' && en.html === 'en', `inglés: ${JSON.stringify(en)}`);
+  await page.keyboard.press('Escape');
+  // globo de ayuda y aviso (toast) armados por el código
+  await page.hover('#btnFlatten');
+  const tip = await page.waitForFunction(() => { const t = document.querySelector('.hint-tip'); return t && !t.hidden && t.textContent; }).then((h) => h.jsonValue());
+  expect(/^Flattens the selected points/.test(tip), `globo: ${tip}`);
+  await ev(() => document.getElementById('btnFlatten').click());
+  const toastTxt = await ev(() => document.getElementById('toast').textContent);
+  expect(/^Select points/.test(toastTxt), `aviso: ${toastTxt}`);
+  // nada visible sin traducir (salvo nombres de datos)
+  const miss = await ev(() => window.__tsg.i18n.missingTexts().filter((s) => !/^(pista|track|figure8|tunel_|cerro_)/.test(s)));
+  expect(miss.length === 0, `sin traducir: ${miss.slice(0, 8).join(' | ')}`);
+  // y de vuelta a español
+  await ev(() => window.__tsg.i18n.setLang('es'));
+  const es = await ev(() => [document.getElementById('btnNew').textContent.trim(), document.querySelector('section.panel[data-group]').getAttribute('data-group'), localStorage.getItem('tsg.lang')]);
+  expect(es[0] === 'Nuevo' && es[1] === 'Entrada' && es[2] === 'es', `español: ${es}`);
+});
+
+test('buscador: Ctrl+K, herramientas, parámetros en paneles plegados, ventanas y cámara de juego', async () => {
+  await reset('figure8');
+  const go = async (q, i = 0) => {
+    await page.keyboard.press('Control+k');
+    await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'searchBox');
+    await page.keyboard.type(q);
+    for (let k = 0; k < i; k++) await page.keyboard.press('ArrowDown');
+    const first = await ev(() => document.querySelector('#searchResults .sr-row.sel .sr-name')?.textContent || '');
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(120);
+    return first;
+  };
+  // herramienta: se selecciona
+  let first = await go('esculpir');
+  expect(first === 'Esculpir relieve' && await ev(() => window.__tsg.state.tool === 'sculpt'), `herramienta: ${first}`);
+  await page.keyboard.press('Escape');
+  // parámetro en un panel plegado: se despliega y se ilumina
+  await ev(() => { const sec = document.querySelector('section.panel[data-panel="terrain"]'); if (!sec.classList.contains('collapsed')) sec.querySelector('button[data-act="collapse"]').click(); });
+  first = await go('largo playa');
+  const t1 = await ev(() => { const sec = document.querySelector('section.panel[data-panel="terrain"]'); return [sec.classList.contains('collapsed'), !!document.querySelector('.search-flash'), document.activeElement && document.activeElement.id]; });
+  expect(first === 'Largo de la playa' && !t1[0] && t1[1], `panel plegado: ${first} ${t1}`);
+  // sin tildes, con un error de tipeo y con sinónimo
+  const r = await ev(() => [window.__tsg.search.search('peraltr')[0]?.name, window.__tsg.search.search('autosave')[0]?.name, window.__tsg.search.search('camara juego')[0]?.name]);
+  expect(r[0] === 'Peralte' && r[1] === 'Guardado automático' && /Cámara de juego/.test(r[2]), `búsquedas: ${r}`);
+  // parámetro en una ventana: la abre
+  first = await go('tamano del texto');
+  expect(/Tamaño del texto/.test(first) && await ev(() => !document.getElementById('settingsPop').hidden), `ventana: ${first}`);
+  await page.keyboard.press('Escape');
+  // parámetro de la cámara de juego: entra a la cámara y abre «Ajuste auto 3D»
+  first = await go('brillo');
+  await page.waitForFunction(() => window.__tsg.preview.game && window.__tsg.preview.game.active);
+  expect(first === 'Brillo' && await ev(() => !document.getElementById('carAdjBox').hidden), `cámara de juego: ${first}`);
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !window.__tsg.preview.game.active);
+  // en inglés busca en inglés (y también en español)
+  await ev(() => window.__tsg.i18n.setLang('en'));
+  const en = await ev(() => [window.__tsg.search.search('beach')[0]?.name, window.__tsg.search.search('playa')[0]?.name]);
+  expect(en[0] === 'Beach' && en[1] === 'Beach', `inglés: ${en}`);
+  await ev(() => window.__tsg.i18n.setLang('es'));
+});
+
 // ---------------------------------------------------------------------------------------------------------------
 /** Corre las pruebas elegidas en un navegador propio (un proceso). Devuelve {pass, fails, total}. */
 async function runTests(run, port) {
@@ -670,6 +741,7 @@ async function runTests(run, port) {
     const e0 = errs.length, ts = Date.now();
     try {
       await t.fn();
+      if (process.env.TSG_MISSING) { try { const m = await ev(() => window.__tsg.i18n.missingTexts()); require('fs').appendFileSync(process.env.TSG_MISSING, m.join('\n') + '\n'); } catch { /* sin página */ } }
       if (errs.length > e0) throw new Error('errores en la página: ' + errs.slice(e0).join(' | '));
       pass++;
       console.log(`  ✓ ${t.name} (${((Date.now() - ts) / 1000).toFixed(1)} s)`);

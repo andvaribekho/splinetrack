@@ -2,6 +2,8 @@
 // atributos (data-tool, data-gizmo…) o por palabras del texto del botón; un MutationObserver decora también los
 // botones que se crean después (tarjetas de atajos, sets de decoración, diálogos…).
 
+import { origText } from './i18n.js';
+
 const P = {
   upload: 'M12 16V4M7 9l5-5 5 5M4 20h16',
   download: 'M12 4v12M7 11l5 5 5-5M4 20h16',
@@ -117,7 +119,7 @@ function iconFor(btn) {
 }
 function textOf(btn) {
   let t = '';
-  for (const n of btn.childNodes) if (!(n.nodeType === 1 && n.classList.contains('bi'))) t += n.textContent;
+  for (const n of btn.childNodes) if (!(n.nodeType === 1 && n.classList.contains('bi'))) t += origText(n); // en español (el icono no cambia con el idioma)
   return t.trim();
 }
 const NS = 'http://www.w3.org/2000/svg';

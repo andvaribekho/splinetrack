@@ -22,6 +22,7 @@ export const ACTIONS = [
 
 /** Teclas y gestos fijos (no se reasignan). */
 export const FIXED = [
+  ['Ctrl+K o /', 'Buscar una herramienta o parámetro (te lleva a él)'],
   ['Esc', 'Herramienta «Navegar» y quita la selección; cierra ventanas de instrucciones; sale de la cámara de juego'],
   ['Ctrl+V', 'Pegar una imagen de minimapa (o de referencia con la herramienta «Referencia»)'],
   ['Enter', 'Aplica el valor escrito en un campo numérico'],

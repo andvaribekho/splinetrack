@@ -15,6 +15,9 @@ import { buildRivers } from '../js/rivers.js';
 import { buildTriggers, sculptField, bakeTreeList, bakeDecoList, moveTree, treeConeVerts, vegPlace } from '../js/scene.js';
 import { treeModelItems, decoSetItems } from '../js/deco.js';
 import { buildShadows, shadowCasters, sunShadowDir } from '../js/shadows.js';
+import { t as tr, __i18n } from '../js/i18n.js';
+import EN from '../js/i18n-en.js';
+import { readFileSync } from 'node:fs';
 import { SCULPT_PRESETS, curveLUT, curveEval, normCurve, presetOf } from '../js/sculptcurve.js';
 
 let fails = 0, passes = 0;
@@ -1326,6 +1329,28 @@ for (const [key, s] of Object.entries(SAMPLES)) {
   check(a47 && a53 && Math.abs(dist(a47, a53) - 0.06 * W0) < 0.05 && a07 && a0 && Math.abs(dist(a0, a07) - 0.07 * W0) < 0.05, `mantener líneas: franja central ${a47 && a53 ? dist(a47, a53).toFixed(2) : '?'} m (≈ ${(0.06 * W0).toFixed(2)}), borde ${a0 && a07 ? dist(a0, a07).toFixed(2) : '?'} m`);
   const Mn = buildTrackMesh(L, E, { transSubdiv: true, transDivs: [] });
   check(Mn.indices.length === M0.indices.length || Mn.rows[0] >= M0.rows[0], 'sin divisiones no cambia la calzada');
+}
+
+// 0.63: traducción al inglés. Cada texto de index.html tiene su traducción; los patrones conservan sus partes variables.
+{
+  console.log('· Idioma inglés');
+  __i18n.use('en');
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8').replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/g, '');
+  const dec = (x) => x.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&');
+  const found = new Set();
+  for (const m of html.replace(/="[^"]*"/g, '=""').matchAll(/>([^<>]+)</g)) found.add(dec(m[1]).replace(/\s+/g, ' ').trim());
+  for (const m of html.matchAll(/\b(?:title|placeholder|aria-label|data-group)="([^"]*)"/g)) found.add(dec(m[1]).replace(/\s+/g, ' ').trim());
+  const missing = [...found].filter((x) => /\p{L}{2}/u.test(x) && __i18n.lookup(x) == null);
+  check(missing.length === 0, `textos de index.html sin traducir (${missing.length}): ${missing.slice(0, 6).join(' | ')}`);
+  let bad = 0;
+  for (const [es, en] of Object.entries(EN)) { if (es.startsWith('__')) continue; const ph = (x) => (x.match(/\{\d+\}/g) || []).sort().join(); if (ph(es) !== ph(en)) { bad++; if (bad < 4) console.log('   placeholders:', es, '→', en); } }
+  check(bad === 0, `traducciones con partes variables distintas: ${bad}`);
+  check(tr('Nuevo') === 'New' && tr('  Pista ') === '  Track ' && tr('5 puntos borrados.') === '5 points deleted.', 'traducciones exactas y con número');
+  check(tr('5.0 m a la derecha (ensanche solo a ese lado)') === '5.0 m to the right (widens only on that side)', 'partes variables en español se traducen');
+  check(tr('No se pudo leer la imagen: bad header') === "Couldn't read the image: bad header", 'mensaje fijo + detalle');
+  check(tr('texto que no existe') === 'texto que no existe', 'sin traducción queda igual');
+  __i18n.use('es');
+  check(tr('Nuevo') === 'Nuevo', 'en español no cambia nada');
 }
 
 function hillsZeroFlat(L) {

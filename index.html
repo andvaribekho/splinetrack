@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Track Spline Generator v0.62</title>
+  <title>Track Spline Generator v0.63</title>
   <link rel="stylesheet" href="styles.css">
   <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.62</span></div>
+    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.63</span></div>
     <label class="proj-name-wrap" title="Nombre del proyecto: se usa al guardar (<nombre>.tsg.json) y en los autoguardados (<nombre>_auto_…)"><input id="projectName" class="proj-name" value="pista" spellcheck="false" maxlength="80"><span class="small muted" id="autosaveState"></span></label>
     <div class="top-actions">
       <button id="btnNew" title="Empezar de cero">Nuevo</button>
@@ -18,8 +18,12 @@
       <input id="fileProject" type="file" accept=".json,application/json" multiple hidden>
       <button id="btnUndo" title="Deshacer (Ctrl+Z)">Deshacer</button>
       <span class="sep"></span>
-      <button id="btnSettings" title="Tamaño del texto, atajos de teclado y ventanas">Ajustes</button>
+      <button id="btnSettings" title="Idioma, tamaño del texto, atajos de teclado, guardado automático y ventanas">Ajustes</button>
       <button class="primary" id="btnExportMenu" title="Exportar la pista o la escena (ventana)">Exportar</button>
+    </div>
+    <div class="search-wrap" id="searchWrap">
+      <input id="searchBox" type="search" placeholder="Buscar herramienta o parámetro… (Ctrl+K)" autocomplete="off" spellcheck="false" aria-label="Buscar herramienta o parámetro">
+      <div id="searchResults" class="search-results" hidden role="listbox"></div>
     </div>
   </header>
 
@@ -821,6 +825,8 @@
     <div class="instr-head"><span class="instr-title">Ajustes</span><button class="instr-x" id="btnSettingsClose" data-noicon title="Cerrar (Esc)">✕</button></div>
     <div class="instr-body settings-body">
       <p class="meta">Se guardan en este navegador (no en el proyecto).</p>
+      <h3 class="subhead">Idioma</h3>
+      <div class="field"><label for="uiLang">Idioma / Language</label><select id="uiLang" data-noi18n style="width:100%"></select></div>
       <h3 class="subhead">Tamaño del texto</h3>
       <div class="field"><label>Tamaño del texto <span class="val" id="uiTextSizeVal"></span></label><input type="range" id="uiTextSize" min="80" max="150" step="5">
         <div class="range-ends"><span>80 %</span><span>150 %</span></div></div>

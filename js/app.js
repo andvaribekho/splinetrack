@@ -24,6 +24,8 @@ import { makeGrassCanvas, makePadCanvas, makeGlowCanvas, makeAsphaltCanvas, make
 import { GameCam, makeDefaultSky } from './gamecam.js';
 import { tunnelResolution, edgeParams } from './tunnels.js';
 import { initButtonIcons, decorateButton } from './icons.js';
+import { initI18n, t as _t, setLang, getLang, LANGS, onLangChange, orig, origText, missingTexts, localizeCtx } from './i18n.js';
+import { initSearch } from './search.js';
 import { computeItems, defaultGroup, nextGroupId, itemAt, projectToTrack, groupName, itemName, ITEM_TYPES, SHARED_KEYS, effectiveGroup } from './items.js';
 
 const $ = (id) => document.getElementById(id);
@@ -2819,7 +2821,7 @@ function trackHasWork() {
 /** Pide confirmación antes de reemplazar la ruta principal (si tiene trabajo encima). */
 function confirmReplaceTrack(what) {
   if (!trackHasWork()) return true;
-  return window.confirm(`${what}: se pierden sus puntos editados, tramos y alturas fijadas. (Ctrl+Z la recupera.) ¿Continuar?`);
+  return window.confirm(_t(`${what}: se pierden sus puntos editados, tramos y alturas fijadas. (Ctrl+Z la recupera.) ¿Continuar?`));
 }
 /** Identificador estable de un puente (sus materiales propios se guardan con él). */
 function ensureBridgeUid(b) { if (b && !b.uid) b.uid = `br${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`; return b; }
@@ -4580,7 +4582,7 @@ function bindControls() {
   $('btnNew').addEventListener('click', () => {
     pushUndo();
     state.project = { main: null, alts: [], start: null, reverse: false };
-    state.flatZones = []; state.profileZones = []; state.profileSel = null; state.suspZones = []; state.cutZones = []; state.overrides = []; state.image = null; state.valDismissed = null; state.triggers = []; state.selTrigger = null; renderTriggerPanel(); setProjectName('pista');
+    state.flatZones = []; state.profileZones = []; state.profileSel = null; state.suspZones = []; state.cutZones = []; state.overrides = []; state.image = null; state.valDismissed = null; state.triggers = []; state.selTrigger = null; renderTriggerPanel(); setProjectName(defaultProjectName());
     syncControls(); scheduleBuild(); setTool('draw');
     setTimeout(() => editor.fit(), 0);
   });
@@ -4858,7 +4860,9 @@ function loadSample(k) {
 
 function saveProject() { download(`${projectFileName()}.tsg.json`, JSON.stringify(projectData()), 'application/json'); markSaved(); }
 /** Nombre de archivo seguro a partir del nombre del proyecto. */
-function projectFileName() { return String(state.projectName || 'pista').replace(/[^\w\-áéíóúñÁÉÍÓÚÑ ]/g, '').trim().replace(/\s+/g, '_').slice(0, 80) || 'pista'; }
+/** Nombre de proyecto por defecto (en el idioma de la interfaz; es el nombre del archivo). */
+function defaultProjectName() { return getLang() === 'es' ? 'pista' : 'track'; }
+function projectFileName() { return String(state.projectName || defaultProjectName()).replace(/[^\w\-áéíóúñÁÉÍÓÚÑ ]/g, '').trim().replace(/\s+/g, '_').slice(0, 80) || defaultProjectName(); }
 /** Datos del proyecto (lo que se guarda en el .tsg.json). */
 function projectData() {
   let thumbnail = null;
@@ -5194,7 +5198,7 @@ function toast(msg, kind = 'info') {
     document.body.appendChild(t);
   }
   t.classList.toggle('toast-err', kind === 'err');
-  t.textContent = msg;
+  t.textContent = _t(msg);
   t.hidden = false;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => (t.hidden = true), kind === 'err' ? 3300 : 4500);
@@ -5528,7 +5532,7 @@ const REF3D_KEEP = ['pos', 'rotZ', 'scale', 'visible', 'show2d', 'locked', 'look
 function ref3dSettings() { const R = state.ref3d; const o = {}; for (const k of REF3D_KEEP) o[k] = R[k]; return o; }
 // ---------- nombre del proyecto y guardado automático ----------
 function setProjectName(nm) {
-  state.projectName = String(nm || 'pista').slice(0, 80) || 'pista';
+  state.projectName = String(nm || defaultProjectName()).slice(0, 80) || defaultProjectName();
   if ($('projectName')) $('projectName').value = state.projectName;
   document.title = `${state.projectName} · Track Spline Generator v${VERSION}`;
 }
@@ -5670,7 +5674,7 @@ async function openAutosaves() {
 }
 function bindAutosave() {
   setProjectName(state.projectName);
-  $('projectName').addEventListener('change', (e) => { setProjectName(e.target.value.trim() || 'pista'); });
+  $('projectName').addEventListener('change', (e) => { setProjectName(e.target.value.trim() || defaultProjectName()); });
   $('projectName').addEventListener('keydown', (e) => { if (e.key === 'Enter') e.target.blur(); });
   const sync = () => {
     $('asOn').checked = !!asCfg.on; $('asMin').value = asCfg.min; $('asDir').value = asCfg.dir; $('asKeep').value = asCfg.keep;
@@ -6070,7 +6074,7 @@ function drawSculptCurve() {
   const dpr = window.devicePixelRatio || 1;
   const G = sculptCurveGeom(cv);
   if (cv.width !== Math.round(G.W * dpr) || cv.height !== Math.round(G.H * dpr)) { cv.width = Math.round(G.W * dpr); cv.height = Math.round(G.H * dpr); }
-  const g = cv.getContext('2d');
+  const g = localizeCtx(cv.getContext('2d'));
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, G.W, G.H);
   const pts = normCurve(state.scene.sculptCurve || DEFAULT_SCULPT_CURVE), f = curveEval(pts);
@@ -6863,13 +6867,14 @@ const HINTS = {
   showRaw: 'Muestra el trazo original (imagen o dibujo) punteado debajo del spline.',
 };
 
+const hintTexts = new WeakMap(); // elemento → texto de ayuda (en español), también para el buscador
 function initHints() {
   const tip = document.createElement('div');
   tip.className = 'tooltip hint-tip';
   tip.hidden = true;
   document.body.appendChild(tip);
   const show = (el, text) => {
-    tip.textContent = text;
+    tip.textContent = _t(text);
     tip.hidden = false;
     const r = el.getBoundingClientRect();
     const tw = Math.min(280, window.innerWidth - 20);
@@ -6884,6 +6889,7 @@ function initHints() {
   };
   const hide = () => (tip.hidden = true);
   const attach = (el, text) => {
+    hintTexts.set(el, text);
     el.addEventListener('mouseenter', () => show(el, text));
     el.addEventListener('mouseleave', hide);
     el.addEventListener('pointerdown', hide); // al hacer clic el globo se va (no tapa lo que se abre)
@@ -6908,7 +6914,7 @@ function initHints() {
   }
   // los botones con title pasan a usar el mismo globo de ayuda
   document.querySelectorAll('[title]').forEach((el) => {
-    const text = el.getAttribute('title');
+    const text = orig(el, 'title'); // el texto en español: el globo lo traduce al mostrarse (sirve al cambiar de idioma)
     el.removeAttribute('title');
     if (!HINTS[el.id]) attach(el, text);
   });
@@ -6929,6 +6935,12 @@ function initSettings(hk) {
     window.dispatchEvent(new Event('resize')); // splitters y vistas se reacomodan
   };
   applyText(ui.textSize || 100);
+  // idioma de la interfaz (se aplica al momento; los proyectos y los nombres exportados no cambian)
+  const langSel = $('uiLang');
+  langSel.innerHTML = LANGS.map(([c, n]) => `<option value="${c}">${n}</option>`).join('');
+  langSel.value = getLang();
+  langSel.addEventListener('change', () => setLang(langSel.value));
+  onLangChange((l) => { langSel.value = l; editor.draw(); profile.draw(); drawSculptCurve(); refreshPanels(); });
   $('uiTextSize').addEventListener('input', (e) => { applyText(e.target.value); saveUI(ui); });
   $('btnTextSizeReset').addEventListener('click', () => { applyText(100); saveUI(ui); });
 
@@ -7057,6 +7069,7 @@ function initSettings(hk) {
 }
 
 // ---------- arranque ----------
+initI18n(); // idioma de la interfaz (español si el navegador está en español; si no, inglés)
 const editor = new Editor2D($('canvas2d'), app);
 const profile = new ProfileView($('canvasProfile'), app);
 const preview = new Preview3D($('view3d'), app);
@@ -7078,8 +7091,9 @@ initPanelStripes(); // fondo alternado de las secciones (se rehace al desanclar 
 initSplitters();
 $('btnDockAll').addEventListener('click', () => panels.dockAll());
 initHints();
-$('appVersion').textContent = `v${VERSION}`; setProjectName(state.projectName);
+$('appVersion').textContent = `v${VERSION}`; setProjectName(state.projectName === 'pista' ? defaultProjectName() : state.projectName);
 initSettings(initHotkeys({ toast }));
+const search = initSearch({ panels, toast, hintOf: (el) => el && hintTexts.get(el), enterGame: () => { if (!(preview.game && preview.game.active)) $('btnGame').click(); } });
 setTool('pan');
 loadSample('figure8');
 undoStack.length = 0;
@@ -7100,4 +7114,4 @@ function idle(timeout = 30000) {
     step();
   });
 }
-window.__tsg = { state, app, editor, preview, profile, openProject, scheduleBuild, refreshBridgeList, refreshPanels, projectData, busy, idle, autosaveNow, openAutosaves, asCfg: () => asCfg, idbAll, asServer: () => asServer, setAsServer: (v) => { asServer = !!v; refreshAutosaveInfo(); }, setAsFolder: async (h) => { asFolder = h; await refreshFolderPerm(); refreshAutosaveInfo(); } }; // para depuración y pruebas // para depuración
+window.__tsg = { state, app, editor, preview, profile, search, i18n: { setLang, getLang, missingTexts, t: _t }, openProject, scheduleBuild, refreshBridgeList, refreshPanels, projectData, busy, idle, autosaveNow, openAutosaves, asCfg: () => asCfg, idbAll, asServer: () => asServer, setAsServer: (v) => { asServer = !!v; refreshAutosaveInfo(); }, setAsFolder: async (h) => { asFolder = h; await refreshFolderPerm(); refreshAutosaveInfo(); } }; // para depuración y pruebas // para depuración
