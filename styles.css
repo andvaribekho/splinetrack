@@ -344,3 +344,25 @@ button.small svg.bi { width: 11px; height: 11px; }
 #sunPad { width: 132px; height: 132px; border-radius: 8px; background: #151a23; border: 1px solid rgba(255,255,255,0.1); cursor: grab; touch-action: none; flex: none; }
 #autoElevBox.dimmed { opacity: 0.55; }
 #elevMode { margin-bottom: 6px; }
+
+/* barra de herramientas derecha: paneles anclados a la derecha */
+.sidebar-right { display: none; border-right: 0; border-left: 1px solid var(--line); }
+body.has-right .sidebar-right { display: block; }
+body.has-right .app { grid-template-columns: 330px 1fr 300px; }
+.panel .pbtn-right { display: none; }
+.panel.floating .pbtn-right { display: inline-block; }
+.dock-hint-right { position: fixed; top: 44px; right: 0; bottom: 0; width: 300px; background: rgba(242,169,59,0.12); border-left: 2px dashed rgba(242,169,59,0.8); color: #ffd28a; font-size: 12px; display: flex; align-items: center; justify-content: center; pointer-events: none; z-index: 30; opacity: 0; transition: opacity 0.12s; }
+.dock-hint-right.on { opacity: 1; }
+
+/* instrucciones: enlace y ventanita arrastrable */
+.instr-hidden { display: none !important; }
+.instr-link { background: none; border: 0; padding: 0; margin: 2px 0 4px; color: var(--muted); font-size: 11px; text-decoration: underline dotted; cursor: pointer; display: inline-block; }
+.instr-link:hover { color: var(--accent); }
+.instr-pop { position: fixed; width: 340px; max-width: calc(100vw - 16px); max-height: 70vh; display: flex; flex-direction: column; background: var(--panel); border: 1px solid #3a4458; border-radius: 8px; box-shadow: 0 12px 40px rgba(0,0,0,0.6); }
+.instr-head { display: flex; align-items: center; gap: 8px; padding: 7px 8px 7px 12px; background: var(--panel2); border-bottom: 1px solid var(--line); border-radius: 8px 8px 0 0; cursor: move; user-select: none; }
+.instr-title { flex: 1; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text); }
+.instr-x { background: none; border: 1px solid transparent; color: var(--muted); padding: 0 6px; line-height: 18px; border-radius: 4px; }
+.instr-x:hover { color: var(--accent); border-color: var(--line); }
+.instr-body { padding: 8px 12px 10px; overflow: auto; font-size: 12px; line-height: 1.5; color: var(--text); }
+.instr-body p { margin: 0 0 8px; }
+.instr-body p:last-child { margin-bottom: 0; }

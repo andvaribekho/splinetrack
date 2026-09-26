@@ -118,10 +118,10 @@
         <h2>Puntos del spline</h2>
         <div id="ctrlBox">
           <div class="meta" id="ctrlInfo"></div>
-          <div class="meta">Mapa: arrastra un punto para moverlo · doble clic sobre la pista agrega uno · clic derecho, Alt+clic o Supr lo borran · Shift+arrastrar selecciona varios (Shift+clic suma o quita uno) para darles un radio fijo.</div>
-          <div class="meta">Perfil: arrastra un punto en vertical para fijar su altura (◆) · doble clic agrega un punto con esa altura · clic derecho o Alt+clic la vuelve automática.</div>
-          <div class="meta">3D: clic en una esfera para seleccionarla y muévela con el gizmo (Libre, Plano XY o Solo Z).</div>
-          <div class="meta">Varios puntos: Shift+clic suma o quita uno y Shift+arrastrar dibuja un cuadro, en el mapa, el perfil o la vista 3D. Al arrastrar uno de los seleccionados se mueven todos juntos.</div>
+          <div class="meta" data-instr>Mapa: arrastra un punto para moverlo · doble clic sobre la pista agrega uno · clic derecho, Alt+clic o Supr lo borran · Shift+arrastrar selecciona varios (Shift+clic suma o quita uno) para darles un radio fijo.</div>
+          <div class="meta" data-instr>Perfil: arrastra un punto en vertical para fijar su altura (◆) · doble clic agrega un punto con esa altura · clic derecho o Alt+clic la vuelve automática.</div>
+          <div class="meta" data-instr>3D: clic en una esfera para seleccionarla y muévela con el gizmo (Libre, Plano XY o Solo Z).</div>
+          <div class="meta" data-instr>Varios puntos: Shift+clic suma o quita uno y Shift+arrastrar dibuja un cuadro, en el mapa, el perfil o la vista 3D. Al arrastrar uno de los seleccionados se mueven todos juntos.</div>
           <div class="row gap">
             <button id="btnCtrlLess" title="Menos puntos siguiendo la forma actual">Menos puntos</button>
             <button id="btnCtrlMore" title="Más puntos siguiendo la forma actual">Más puntos</button>
@@ -169,7 +169,7 @@
           <button data-mode="auto" title="El optimizador arma la elevación: colinas automáticas, rampas en los cruces, pendiente y radios dentro del límite. Las alturas fijadas (puntos naranjos) son pedidos">Automático</button>
           <button data-mode="direct" title="Cada punto naranjo es un fotograma clave: la curva pasa exactamente por él. Sin colinas automáticas; pendiente y cruces solo se avisan">Directo</button>
         </div>
-        <p class="hint" id="elevModeHint"></p>
+        <p class="hint" id="elevModeHint" data-instr></p>
         <div class="row gap" id="directTools">
           <button id="btnElevAuto" title="Corre el optimizador automático (con las colinas y la semilla de abajo) y deja sus alturas como fotogramas clave generados, en toda la pista o solo en la selección">Generar alturas automáticas</button>
           <button id="btnFixCross" title="Corrige los cruces sin separación suficiente: el paso de arriba sube y el de abajo baja, con rampas">Corregir cruces</button>
@@ -198,6 +198,7 @@
         <h3 class="subhead" id="profileZonesHead">Perfil de tramo y aplanar</h3>
         <p class="hint">Con <b>Perfil de tramo</b> (en la barra del gráfico de perfil): arrastra sobre la pista en el mapa (o con Shift en el gráfico de perfil) para elegir un tramo y dibuja en el gráfico de perfil la forma de la elevación: los puntos del tramo quedan a esa altura (el perfil no se guarda) y después se editan a mano libremente. Con <b>Editar puntos</b>, <b>Aplanar</b> (barra del gráfico de perfil) deja los puntos seleccionados a su altura promedio, plano estricto entre el primero y el último; después puedes volver a editarlos.</p>
         <div id="profileZoneList" class="list"></div>
+      </section>
 
       <section class="panel" data-panel="cross">
         <h2>Cruces <span class="badge" id="crossCount">0</span></h2>
@@ -821,6 +822,7 @@
       </div>
       <div class="validation" id="validation"></div>
     </main>
+    <aside class="sidebar sidebar-right" id="sidebarRight" aria-label="Barra de herramientas derecha"></aside>
   </div>
 
   <script type="module" src="js/app.js"></script>

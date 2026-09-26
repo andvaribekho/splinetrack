@@ -11,10 +11,13 @@ export function initSplitters() {
   if (!app || !ws || !side || !v2 || !pr) return;
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch { saved = {}; }
-  const sizes = { side: saved.side || null, col: saved.col || null, prof: saved.prof || null };
+  const sizes = { side: saved.side || null, col: saved.col || null, prof: saved.prof || null, right: saved.right || null };
+  const rightEl = document.getElementById('sidebarRight');
+  const hasRight = () => document.body.classList.contains('has-right');
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(sizes)); } catch { /* sin almacenamiento */ } };
   const apply = () => {
-    app.style.gridTemplateColumns = sizes.side ? `${sizes.side}px 1fr` : '';
+    // columna derecha (barra de herramientas) solo si tiene paneles anclados
+    app.style.gridTemplateColumns = hasRight() ? `${sizes.side || 330}px 1fr ${sizes.right || 300}px` : sizes.side ? `${sizes.side}px 1fr` : '';
     ws.style.gridTemplateColumns = sizes.col ? `${sizes.col}px 1fr` : '';
     ws.style.gridTemplateRows = sizes.prof ? `1fr ${sizes.prof}px auto` : '';
   };
@@ -30,12 +33,15 @@ export function initSplitters() {
   const sSide = mk('split-v', app, 'Arrastra para cambiar el ancho del panel lateral');
   const sCol = mk('split-v', ws, 'Arrastra para repartir el ancho entre la vista 2D y la 3D');
   const sRow = mk('split-h', ws, 'Arrastra para cambiar el alto del perfil de elevación');
+  const sRight = mk('split-v', app, 'Arrastra para cambiar el ancho de la barra derecha');
   const place = () => {
     const ar = app.getBoundingClientRect(), wr = ws.getBoundingClientRect();
     const sr = side.getBoundingClientRect(), r2 = v2.getBoundingClientRect(), rp = pr.getBoundingClientRect();
     Object.assign(sSide.style, { left: `${sr.right - ar.left - 3}px`, top: '0px', height: `${ar.height}px` });
     Object.assign(sCol.style, { left: `${r2.right - wr.left - 3}px`, top: '0px', height: `${r2.height}px` });
     Object.assign(sRow.style, { top: `${rp.top - wr.top - 3}px`, left: '0px', width: `${wr.width}px` });
+    sRight.style.display = hasRight() && rightEl ? '' : 'none';
+    if (hasRight() && rightEl) { const rr = rightEl.getBoundingClientRect(); Object.assign(sRight.style, { left: `${rr.left - ar.left - 3}px`, top: '0px', height: `${ar.height}px` }); }
   };
   const drag = (el, onMove) => {
     el.addEventListener('pointerdown', (e) => {
@@ -72,6 +78,11 @@ export function initSplitters() {
     const bottom = rp.bottom; // el perfil termina donde empieza la barra de validación
     sizes.prof = Math.round(Math.min(Math.max(80, bottom - e.clientY), bottom - r2.top - 160));
   });
+  drag(sRight, (e) => {
+    const ar = app.getBoundingClientRect();
+    sizes.right = Math.round(Math.min(Math.max(220, ar.right - e.clientX), ar.width * 0.45));
+  });
+  sRight.addEventListener('dblclick', () => { sizes.right = null; apply(); place(); save(); });
   sSide.addEventListener('dblclick', () => { sizes.side = null; apply(); place(); save(); });
   sCol.addEventListener('dblclick', () => { sizes.col = null; apply(); place(); save(); });
   sRow.addEventListener('dblclick', () => { sizes.prof = null; apply(); place(); save(); });
@@ -79,5 +90,5 @@ export function initSplitters() {
   place();
   new ResizeObserver(place).observe(ws);
   new ResizeObserver(place).observe(side);
-  window.addEventListener('resize', place);
+  window.addEventListener('resize', () => { apply(); place(); });
 }

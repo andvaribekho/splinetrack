@@ -8,6 +8,7 @@ import { Editor2D } from './editor2d.js';
 import { ProfileView } from './profile.js';
 import { Preview3D } from './preview3d.js';
 import { initPanels } from './panels.js';
+import { initInstructions } from './instructions.js';
 import { initSplitters } from './splitters.js';
 import { initHotkeys } from './hotkeys.js';
 import { DEFAULT_SCENE, terrainCell } from './scene.js';
@@ -5202,7 +5203,7 @@ function focusPanel(id, sub = null) {
     if (sub) sec.scrollTo({ top: Math.max(0, sub.getBoundingClientRect().top - sec.getBoundingClientRect().top + sec.scrollTop - 40), behavior: 'smooth' });
     return;
   }
-  const sb = $('sidebar');
+  const sb = sec.closest('.sidebar') || $('sidebar'); // barra izquierda o derecha
   const target = sub && sub.getBoundingClientRect().height ? sub : sec;
   // la sección arriba; si hay un elemento interior (un grupo, el cerro seleccionado) y no cabe, se baja hasta él
   let top = sec.getBoundingClientRect().top - sb.getBoundingClientRect().top + sb.scrollTop - 6;
@@ -5223,7 +5224,7 @@ const PANEL_SUB = { 'tool:sculpt': 'sculptCurveBox', btnSculptTool: 'sculptCurve
 function bindPanelFocus() {
   document.addEventListener('click', (e) => {
     const b = e.target.closest && e.target.closest('button');
-    if (!b || b.closest('#sidebar') || b.closest('.panel.floating')) return;
+    if (!b || b.closest('.sidebar') || b.closest('.panel.floating') || b.closest('.instr-pop')) return;
     const key = b.dataset.tool ? `tool:${b.dataset.tool}` : b.id;
     const pid = PANEL_FOR_BUTTON[key];
     const sub = PANEL_SUB[key] ? $(PANEL_SUB[key]) : null;
@@ -5926,6 +5927,7 @@ renderItemsPanel();
 refreshSkyThumb();
 syncControls();
 syncSceneControls();
+initInstructions(); // antes de los paneles: los textos de ayuda quedan detrás de «(instrucciones)»
 const panels = initPanels($('sidebar'));
 initSplitters();
 $('btnDockAll').addEventListener('click', () => panels.dockAll());
