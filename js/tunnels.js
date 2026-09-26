@@ -353,7 +353,15 @@ export function applyTunnelOverrides(layout, runs, sp) {
     // estalactitas: por separado (los proyectos anteriores tenían un solo valor para ambas cosas)
     const genStal = typeof sp.caveStalactites === 'boolean' ? sp.caveStalactites : sp.caveRocks !== false;
     t.stal = o && typeof o.stal === 'boolean' ? o.stal : o && typeof o.rocks === 'boolean' ? o.rocks : genStal;
-    t.sp = { ...sp, tunnelShape: t.shape, tunnelType: t.type, tunnelDensity: t.density };
+    // medidas propias del túnel (si no, las por defecto del proyecto)
+    const num = (key, def, a, b) => (o && Number.isFinite(o[key]) ? clamp(o[key], a, b) : def);
+    t.width = num('width', sp.tunnelWidth, 4, 200);
+    t.height = num('height', sp.tunnelHeight, 2, 60);
+    t.caveSize = num('caveSize', sp.caveSize, 0, 1);
+    t.portalFrame = num('frame', sp.portalFrame ?? 1, 0.05, 20);
+    t.portalDepth = num('depth', sp.portalDepth ?? 1, 0, 20);
+    t.sp = { ...sp, tunnelShape: t.shape, tunnelType: t.type, tunnelDensity: t.density, tunnelWidth: t.width, tunnelHeight: t.height,
+      caveSize: t.caveSize, portalFrame: t.portalFrame, portalDepth: t.portalDepth, tunnelMeshMode: t.meshMode, tunnelMaxTris: t.maxTris, tunnelAdapt: t.adapt };
   }
   return runs;
 }
@@ -630,6 +638,7 @@ export function buildTunnelGeometry(layout, elev, spIn, runs, opts = {}) {
       id: t.id, name: `tunel_${String(t.id + 1).padStart(2, '0')}`, len: t.s1 - t.s0, k: t.k, sMid: (t.s0 + t.s1) / 2,
       openMode: t.openMode ?? sp.tunnelOpen, pillarCount: nPil, custom: !!t.custom, key: t.key ?? -1,
       shape: sp.tunnelShape, type: sp.tunnelType, natural, density: sp.tunnelDensity, meshMode: t.meshMode || 'uniform', maxTris: t.maxTris, adapt: t.adapt, rocks: t.rocks !== false, stal: t.stal !== false, sections: ns + 1, profilePts: N,
+      width: sp.tunnelWidth, height: sp.tunnelHeight, caveSize: sp.caveSize, portalFrame: sp.portalFrame ?? 1, portalDepth: sp.portalDepth ?? 1,
       walls, ceiling, walkways, portals, stalactites, rocks, pillars, tris, box,
     });
   }

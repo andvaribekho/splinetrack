@@ -9,10 +9,6 @@ export const DEFAULT_GEOM = {
   lapLength: 1000, // m
   width: 14, // m
   useImageWidth: false,
-  altWidthSame: true, // los atajos usan el ancho de la pista
-  altWidth: 10, // m, si altWidthSame = false
-  altInheritWidth: false, // los atajos toman el ancho de la pista en la salida y la llegada (transición)
-  altFromCenter: true, // los atajos salen desde el eje de la pista (bajo ella); false = desde el borde
   detail: 14, // m entre puntos de control
   sketchSmooth: 3, // iteraciones de suavizado del trazo
 };
@@ -251,8 +247,8 @@ function buildAlt(alt, ai, main, gp, tw, scale, ds, warnings) {
   const pts = dedupe(src, 1e-6, false);
   if (pts.length < 2) return null;
   let w = withWidth(pts, gp, scale).map((p) => [...tw.toWorld(p[0], p[1]), p[2]]);
-  // ancho propio del atajo (por atajo > general de atajos > el de la pista); en los empalmes se hace una transición
-  const own = alt.width > 0 ? alt.width : gp.altWidthSame === false && gp.altWidth > 0 ? gp.altWidth : null;
+  // ancho propio del atajo (si no, el de la pista); con alt.inheritWidth, en los empalmes se hace una transición
+  const own = alt.width > 0 ? alt.width : null;
   if (own) w = w.map((p) => [p[0], p[1], own]);
   else if (!gp.useImageWidth) w = w.map((p) => [p[0], p[1], gp.width]);
   const name = alt.name || `atajo_${String(ai + 1).padStart(2, '0')}`;
@@ -329,14 +325,14 @@ function buildAlt(alt, ai, main, gp, tw, scale, ds, warnings) {
   // Los atajos salen desde el BORDE de la pista (no desde el eje): quedan pegados borde con borde y no se superponen.
   // Si el atajo es más angosto, se conecta del lado hacia el que sale.
   const aw = own || (gp.useImageWidth ? c0[2] : gp.width);
-  const inherit = !!gp.altInheritWidth;
+  const inherit = !!alt.inheritWidth; // ancho de la pista en la salida y la llegada (por atajo)
   const edgePoint = (sv, toward) => {
     const e = evalAt(main, sv);
     const tx = main.tx[e.i], ty = main.ty[e.i];
     const lx = -ty, ly = tx;
     const side = Math.sign((toward[0] - e.x) * lx + (toward[1] - e.y) * ly) || 1;
     const wEnd = inherit ? e.w : aw;
-    const u = gp.altFromCenter === false ? side * (e.w / 2 + wEnd / 2) : 0; // desde el eje (por defecto) o desde el borde
+    const u = 0 * side; // los atajos salen siempre desde el eje de la pista (su calzada queda bajo la principal)
     return { p: [e.x + lx * u, e.y + ly * u, wEnd], u };
   };
   const eIn = edgePoint(forkS, c0), eOut = edgePoint(mergeS, c1);
@@ -391,14 +387,14 @@ function buildAltCtrl(alt, ai, main, gp, wIn, own, name, ds, warnings) {
   if (!forward) { w = w.slice().reverse(); [endA, endB] = [endB, endA]; }
   const forkS = endA.s, mergeS = endB.s;
   const aw = own || (gp.useImageWidth ? w[Math.min(1, n - 1)][2] : gp.width);
-  const inherit = !!gp.altInheritWidth;
+  const inherit = !!alt.inheritWidth; // ancho de la pista en la salida y la llegada (por atajo)
   const edgePoint = (sv, toward) => {
     const e = evalAt(main, sv);
     const tx = main.tx[e.i], ty = main.ty[e.i];
     const lx = -ty, ly = tx;
     const side = Math.sign((toward[0] - e.x) * lx + (toward[1] - e.y) * ly) || 1;
     const wEnd = inherit ? e.w : aw;
-    const u = gp.altFromCenter === false ? side * (e.w / 2 + wEnd / 2) : 0;
+    const u = 0 * side; // siempre desde el eje de la pista
     return { p: [e.x + lx * u, e.y + ly * u, wEnd], u };
   };
   const inner = w.slice(1, n - 1).map((q) => [q[0], q[1], q[2]]);

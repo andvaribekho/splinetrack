@@ -866,7 +866,6 @@ export function buildHills(layout, elev, spIn, T, hills) {
   res.tunnels = tun.runs;
   const runById = new Map(tun.runs.map((t) => [t.id, t]));
   const box = portalBox(sp, layout.routes[0].w[0]);
-  const cover = Math.max(sp.tunnelRoof, box.thick + 0.3);
   const tunId = new Int32Array(S.length).fill(-1);
   const tunGrid = new SpatialGrid(16);
   let tunReach = 0;
@@ -881,10 +880,12 @@ export function buildHills(layout, elev, spIn, T, hills) {
       if (r.closed) { while (ss < t.e0) ss += r.L; while (ss > t.e1) ss -= r.L; }
       const tsp = t.sp || sp, nat = tsp.tunnelType === 'natural'; // tipo propio del túnel
       const top = tunnelTop(tsp, t, ss);
-      const vault = nat ? top / sp.tunnelHeight : 1;
-      const half = tunnelInnerWidth(sp, p.w, layout.routes[p.k]) / 2 * vault + (nat ? 0.6 + 3 * sp.caveSize : 0) + 1;
-      const q = { ...p, tun: id, top, half, open: t.openSide || 0 };
-      tunReach = Math.max(tunReach, half + box.thick + 2 + (t.openSide ? 2 * sp.tunnelWidth : 0));
+      const vault = nat ? top / tsp.tunnelHeight : 1;
+      const half = tunnelInnerWidth(tsp, p.w, layout.routes[p.k]) / 2 * vault + (nat ? 0.6 + 3 * tsp.caveSize : 0) + 1;
+      // marco y techo propios del túnel
+      if (!t.box) { t.box = portalBox(tsp, layout.routes[t.k].w[0]); t.cover = Math.max(sp.tunnelRoof, t.box.thick + 0.3); }
+      const q = { ...p, tun: id, top, half, open: t.openSide || 0, thick: t.box.thick, cover: t.cover, tw: tsp.tunnelWidth };
+      tunReach = Math.max(tunReach, half + t.box.thick + 2 + (t.openSide ? 2 * tsp.tunnelWidth : 0), t.box.A + 2);
       tunGrid.insert(p.x, p.y, q);
     }
   }
@@ -912,6 +913,7 @@ export function buildHills(layout, elev, spIn, T, hills) {
   });
   if (tun.runs.length) res.tunnelGeo = buildTunnelGeometry(layout, elev, sp, tun.runs, { collarIn: 1.5 * maxCell + 1 });
   const boxById = new Map(res.tunnelGeo.map((g) => [g.id, g.box]));
+  const boxA = Math.max(box.A, ...res.tunnelGeo.map((g) => (g.box ? g.box.A : 0)));
   const { minX: bx0, minY: by0, maxX: bx1, maxY: by1 } = T.bounds;
   const sink = 0.4;
   const samplers = [];
@@ -1016,9 +1018,9 @@ export function buildHills(layout, elev, spIn, T, hills) {
           const onOpen = p.open && Math.sign(u) === p.open && Math.abs(u) > p.w / 2;
           if (!onOpen && hh <= 0.5) { /* borde del cerro: sin cambios */ } else if (onOpen) {
             // lado abierto: el cerro se despeja por completo (bajo el terreno, así no queda nada en el piso entre los pilares)
-            if (Math.abs(u) < p.half + 2 * sp.tunnelWidth) z = Math.min(z, p.z - gap - 0.5, tz - 0.3);
-          } else if (Math.abs(u) < p.half + 1 + box.thick) {
-            z = Math.max(z, p.zc + p.top + cover); // el cerro cubre el techo del túnel
+            if (Math.abs(u) < p.half + 2 * p.tw) z = Math.min(z, p.z - gap - 0.5, tz - 0.3);
+          } else if (Math.abs(u) < p.half + 1 + p.thick) {
+            z = Math.max(z, p.zc + p.top + p.cover); // el cerro cubre el techo del túnel
           }
         }
       }
@@ -1072,7 +1074,7 @@ export function buildHills(layout, elev, spIn, T, hills) {
       if (below(a) && below(b) && below(cI)) return;
       if (tunReach > 0) {
         const mx = (X[a] + X[b] + X[cI]) / 3, my = (Y[a] + Y[b] + Y[cI]) / 3;
-        const nt = nearTunnel(mx, my, box.A + 2 * Math.max(cx, cy) + 2);
+        const nt = nearTunnel(mx, my, boxA + 2 * Math.max(cx, cy) + 2);
         if (nt) {
           const { p } = nt;
           const U = (q) => (q.x - p.x) * -p.ty + (q.y - p.y) * p.tx;

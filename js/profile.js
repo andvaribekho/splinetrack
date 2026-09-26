@@ -334,8 +334,9 @@ export class ProfileView {
     // túneles (ruta principal): banda gris, techo del túnel sobre la calzada y su nombre
     {
       const TI = (this.app.state.tunnelInfo || []).filter((t) => t.k === 0 && Number.isFinite(t.s0) && Number.isFinite(t.s1));
-      const r0t = L.routes[0], z0t = E.routes[0].z, hT = Math.max(2, (this.app.state.scene.tunnelHeight ?? 6));
+      const r0t = L.routes[0], z0t = E.routes[0].z;
       for (const t of TI) {
+        const hT = Math.max(2, t.height ?? this.app.state.scene.tunnelHeight ?? 6); // altura libre propia del túnel
         const segs = t.s0 < 0 ? [[t.s0 + Lm, Lm], [0, t.s1]] : t.s1 > Lm ? [[t.s0, Lm], [0, t.s1 - Lm]] : [[t.s0, t.s1]];
         for (const [a, b] of segs) {
           ctx.fillStyle = 'rgba(150,160,185,0.10)';

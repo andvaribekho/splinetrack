@@ -10,7 +10,8 @@ import { Preview3D } from './preview3d.js';
 import { initPanels } from './panels.js';
 import { initInstructions, initPanelStripes } from './instructions.js';
 import { initSplitters } from './splitters.js';
-import { initHotkeys } from './hotkeys.js';
+import { initHotkeys, comboOf } from './hotkeys.js';
+import { ACTIONS, FIXED, bindingOf, isDefault, setBinding, resetAll as resetKeymap, matchAction, comboLabel } from './keymap.js';
 import { DEFAULT_SCENE, terrainCell } from './scene.js';
 import { makeShadowCanvas, sunShadowDir } from './shadows.js';
 import { SCULPT_PRESETS, DEFAULT_SCULPT_CURVE, normCurve, curveEval, curveLUT, presetOf } from './sculptcurve.js';
@@ -226,81 +227,91 @@ function hillAt(p) {
   for (let i = state.hills.length - 1; i >= 0; i--) if (hillContainsL(state.hills[i], p)) return state.hills[i];
   return null;
 }
+/** Lista de túneles: cada uno con todos sus parámetros propios (no hay valores generales). */
 function refreshTunnelInfo() {
-  const el = $('tunnelInfo');
-  if (!el) return;
+  const el = $('tunnelList');
+  if (!el || draggingIn(el)) return;
   const tl = state.tunnelInfo || [];
-  if (!state.hills.length) { el.textContent = 'Pinta cerros con «Pintar cerros» (en el mapa o en la vista 3D). Si un cerro cubre la pista, se crea un túnel.'; return; }
-  if (!tl.length) { el.textContent = 'Ningún cerro cubre la pista lo suficiente para un túnel (debe superar la altura libre + techo); donde la cruza, la pista pasa en trinchera.'; return; }
-  el.innerHTML = `${tl.length} túnel(es): ${tl.map((t) => `<span class="tun-link${t.id === state.selTunnel ? ' on' : ''}" data-id="${t.id}">${t.name}</span> ${t.len.toFixed(0)} m (${t.tris.toLocaleString('es')} tri.)`).join(' · ')}. Haz clic en un túnel (aquí o en 3D) para seleccionarlo. Cada túnel exporta paredes, techo, veredas y dos bocas por separado.`;
-  el.querySelectorAll('.tun-link').forEach((a) => a.addEventListener('click', () => { const id = +a.dataset.id; selectTunnel(state.selTunnel === id ? null : id); }));
-  refreshTunnelSel();
+  if (!tl.length) { el.innerHTML = '<div class="tun-empty">No hay túneles para mostrar</div>'; return; }
+  el.innerHTML = '';
+  for (const t of tl) el.appendChild(tunnelCard(t, t.id === state.selTunnel));
 }
-/** Tarjeta del túnel seleccionado: costado abierto y pilares propios (si no, usa los valores generales). */
-function refreshTunnelSel() {
-  const box = $('tunnelSelBox');
-  if (!box || draggingIn(box)) return;
-  const t = (state.tunnelInfo || []).find((q) => q.id === state.selTunnel);
-  box.hidden = !t;
-  if (!t) { box.innerHTML = ''; return; }
+function tunnelCard(t, open) {
+  const div = document.createElement('div');
+  div.className = 'item tun-card' + (open ? ' sel' : '');
+  div.dataset.id = t.id;
+  const head = `<div class="head tun-head" title="Clic para seleccionar este túnel y ver sus parámetros"><strong>${t.name}</strong><span class="meta">${t.len.toFixed(0)} m · ${t.tris.toLocaleString('es')} tri.${open ? ` · ${t.sections || '?'} secciones × ${t.profilePts || '?'} puntos` : ''}</span></div>`;
+  if (!open) {
+    div.innerHTML = head;
+    div.querySelector('.tun-head').addEventListener('click', () => selectTunnel(t.id));
+    return div;
+  }
   const sc = state.scene;
-  const ov = (sc.tunnelOverrides || [])[t.key] || null;
-  const own = (k) => ov && ov[k] !== undefined && ov[k] !== null && ov[k] !== '';
-  const genOpen = { none: 'cerrado', left: 'abierto a la izquierda', right: 'abierto a la derecha' }[sc.tunnelOpen] || 'cerrado';
   const shapes = { rounded: 'Cuadrado con esquinas redondeadas', square: 'Cuadrado', circle: 'Círculo', oval: 'Ovalado' };
   const types = { artificial: 'Artificial (sección regular)', natural: 'Natural (caverna)' };
-  const opt = (map, gen) => `<option value="">Como el general (${(map[gen] || gen).toLowerCase()})</option>` + Object.entries(map).map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
-  const mode = t.meshMode || 'uniform';
-  box.innerHTML = `<div class="head"><strong>${t.name}</strong><span class="meta">${t.len.toFixed(0)} m · ${t.tris.toLocaleString('es')} tri. · ${t.sections || '?'} secciones × ${t.profilePts || '?'} puntos</span></div>
-    <div class="field"><label>Forma</label><select class="tsShape">${opt(shapes, sc.tunnelShape)}</select></div>
-    <div class="field"><label>Tipo</label><select class="tsType">${opt(types, sc.tunnelType)}</select></div>
-    <div class="field"><label>Costado abierto</label>
-      <select class="tsOpen"><option value="">Como el general (${genOpen})</option><option value="none">Cerrado</option><option value="left">Abierto a la izquierda (con pilares)</option><option value="right">Abierto a la derecha (con pilares)</option></select></div>
-    <label class="check small tsRocksBox${t.type === 'natural' ? '' : ' disabled'}"><input type="checkbox" class="tsRocks"${t.rocks !== false ? ' checked' : ''}> Rocas${own('rocks') ? '' : ' (como el general)'}</label>
-    <label class="check small tsRocksBox${t.type === 'natural' ? '' : ' disabled'}"><input type="checkbox" class="tsStal"${t.stal !== false ? ' checked' : ''}> Estalactitas${own('stal') ? '' : ' (como el general)'}</label>
-    <div class="field tsPilBox${t.openMode === 'none' ? ' disabled' : ''}"><label><input type="checkbox" class="tsPilOwn"${own('pillars') ? ' checked' : ''}> Pilares propios <span class="val"><input type="number" class="tsPilN" min="0" max="200" step="1" style="width:56px" value="${t.pillarCount}"></span></label>
-      <input type="range" class="tsPil" min="0" max="40" step="1" value="${Math.min(40, t.pillarCount)}"${own('pillars') ? '' : ' disabled'}></div>
-    <h4 class="mini">Geometría ${own('density') || own('meshMode') || own('maxTris') || own('adapt') ? '(propia)' : '(la general)'}</h4>
-    <div class="seg tsMode"><button data-mode="uniform" class="${mode === 'uniform' ? 'on' : ''}">Uniforme</button><button data-mode="optimized" class="${mode === 'optimized' ? 'on' : ''}">Optimizado</button></div>
-    <div class="field"><label>Densidad de polígonos <span class="val"><input type="number" class="tsDenN" min="1" max="100" step="1" style="width:52px" value="${t.density}"> %</span></label><input type="range" class="tsDen" min="1" max="100" step="1" value="${t.density}"></div>
-    <div class="field"><label>Máximo de triángulos <span class="val"><input type="number" class="tsMaxN" min="100" step="500" style="width:80px" value="${t.maxTris}"></span></label><input type="range" class="tsMax" min="500" max="150000" step="500" value="${Math.min(150000, t.maxTris)}"></div>
-    <div class="field tsAdaptBox"${mode === 'optimized' ? '' : ' hidden'}><label>Optimización <span class="val">${Math.round((t.adapt ?? 0.5) * 100)} %</span></label><input type="range" class="tsAdapt" min="0" max="1" step="0.01" value="${t.adapt ?? 0.5}">
+  const opens = { none: 'Cerrado', left: 'Abierto a la izquierda (con pilares)', right: 'Abierto a la derecha (con pilares)' };
+  const opt = (map, cur) => Object.entries(map).map(([k, v]) => `<option value="${k}"${k === cur ? ' selected' : ''}>${v}</option>`).join('');
+  const mode = t.meshMode || 'uniform', nat = t.type === 'natural', closed = (t.openMode || 'none') === 'none';
+  const res = (d) => { const { N, step } = tunnelResolution({ tunnelDensity: d }); return `${N - 1} lados · cada ${step.toFixed(1)} m`; };
+  const W = t.width ?? sc.tunnelWidth, H = t.height ?? sc.tunnelHeight, cs = t.caveSize ?? sc.caveSize;
+  const fr = t.portalFrame ?? sc.portalFrame ?? 1, dp = t.portalDepth ?? sc.portalDepth ?? 1;
+  div.innerHTML = `${head}
+    <div class="field"><label>Forma</label><select class="tsShape" title="Forma de la sección del túnel.">${opt(shapes, t.shape)}</select></div>
+    <div class="field"><label>Tipo</label><select class="tsType" title="Artificial: sección regular en todo el recorrido. Natural: caverna irregular de roca, que puede abrirse en una bóveda con estalactitas y rocas.">${opt(types, t.type)}</select></div>
+    <div class="field"><label>Ancho del túnel <span class="val"><input type="number" class="tsWN" min="4" step="0.5" style="width:62px" value="${W}"> m</span></label><input type="range" class="tsW" min="6" max="40" step="0.5" value="${Math.min(40, W)}" title="Ancho interior del túnel (como mínimo el ancho de la pista + 1 m)."></div>
+    <div class="field"><label>Altura libre <span class="val tsHV">${H} m</span></label><input type="range" class="tsH" min="4" max="20" step="0.5" value="${H}" title="Altura libre del túnel sobre la calzada."></div>
+    <div class="tsCaveBox${nat ? '' : ' disabled'}"><div class="field"><label>Tamaño de la caverna <span class="val tsCSV">${Math.round(cs * 100)} %</span></label><input type="range" class="tsCS" min="0" max="1" step="0.05" value="${cs}" title="Al mínimo es un túnel irregular; más alto, se abre una bóveda grande con más estalactitas y rocas."></div>
+      <div class="row gap"><label class="check small"><input type="checkbox" class="tsRocks"${t.rocks !== false ? ' checked' : ''}> Rocas</label><label class="check small"><input type="checkbox" class="tsStal"${t.stal !== false ? ' checked' : ''}> Estalactitas</label></div></div>
+    <div class="field"><label>Costado abierto</label><select class="tsOpen" title="Deja abierto un costado del túnel (galería), sostenido por pilares.">${opt(opens, t.openMode || 'none')}</select></div>
+    <div class="field tsPilBox${closed ? ' disabled' : ''}"><label>Pilares <span class="val"><input type="number" class="tsPilN" min="0" max="200" step="1" style="width:56px" value="${t.pillarCount}"></span></label>
+      <input type="range" class="tsPil" min="0" max="40" step="1" value="${Math.min(40, t.pillarCount)}" title="Cantidad de pilares en el lado abierto."></div>
+    <div class="field"><label>Grosor del marco de la boca <span class="val tsFrV">${(+fr).toFixed(1)} m</span></label><input type="range" class="tsFr" min="0.2" max="5" step="0.1" value="${fr}" title="Grosor del marco de cada boca, alrededor de la sección del túnel."></div>
+    <div class="field"><label>Cuánto sobresale la boca <span class="val tsDpV">${(+dp).toFixed(1)} m</span></label><input type="range" class="tsDp" min="0" max="5" step="0.1" value="${dp}" title="Cuánto sobresale la boca por fuera del cerro."></div>
+    <h4 class="mini">Geometría</h4>
+    <div class="seg tsMode"><button data-mode="uniform" class="${mode === 'uniform' ? 'on' : ''}" title="Secciones a distancia pareja">Uniforme</button><button data-mode="optimized" class="${mode === 'optimized' ? 'on' : ''}" title="Más secciones en curvas, cambios de pendiente y peralte; menos en las rectas">Optimizado</button></div>
+    <div class="field"><label>Densidad de polígonos <span class="val"><input type="number" class="tsDenN" min="1" max="100" step="1" style="width:52px" value="${t.density}"> %</span></label><input type="range" class="tsDen" min="1" max="100" step="1" value="${t.density}" title="Lados de la sección y distancia entre secciones a lo largo."><div class="range-ends"><span class="tsDenV">${res(t.density)}</span></div></div>
+    <div class="field"><label>Máximo de triángulos <span class="val"><input type="number" class="tsMaxN" min="100" step="500" style="width:80px" value="${t.maxTris}"></span></label><input type="range" class="tsMax" min="500" max="150000" step="500" value="${Math.min(150000, t.maxTris)}" title="Tope de triángulos del túnel (paredes, techo y veredas): manda sobre la densidad."></div>
+    <div class="field tsAdaptBox"${mode === 'optimized' ? '' : ' hidden'}><label>Optimización <span class="val tsAdV">${Math.round((t.adapt ?? 0.5) * 100)} %</span></label><input type="range" class="tsAdapt" min="0" max="1" step="0.01" value="${t.adapt ?? 0.5}">
       <div class="range-ends"><span>mínimo</span><span>máximo</span></div></div>
-    <div class="row gap"><button class="tsReset"${ov ? '' : ' disabled'} title="Vuelve a usar los valores generales en este túnel">Usar valores generales</button></div>`;
-  box.querySelector('.tsOpen').value = own('open') ? ov.open : '';
-  box.querySelector('.tsShape').value = own('shape') ? ov.shape : '';
-  box.querySelector('.tsType').value = own('type') ? ov.type : '';
+    <div class="row gap"><button class="tsReset" title="Vuelve a los valores por defecto en este túnel">Restablecer valores</button></div>`;
+  const q = (c) => div.querySelector(c);
+  q('.tun-head').addEventListener('click', () => selectTunnel(null));
   const setOv = (patch) => {
     const list = (sc.tunnelOverrides || []).slice();
     const cur = (t.key >= 0 && list[t.key]) ? { ...list[t.key] } : { k: t.k, s: +t.sMid.toFixed(2) };
     Object.assign(cur, patch);
     for (const k of Object.keys(cur)) if (k !== 'k' && k !== 's' && (cur[k] === undefined || cur[k] === null || cur[k] === '' || (typeof cur[k] === 'number' && !Number.isFinite(cur[k])))) delete cur[k];
-    const empty = Object.keys(cur).every((k) => k === 'k' || k === 's');
-    if (t.key >= 0 && list[t.key]) { if (empty) list.splice(t.key, 1); else list[t.key] = cur; }
-    else if (!empty) { list.push(cur); t.key = list.length - 1; }
+    if (t.key >= 0 && list[t.key]) list[t.key] = cur;
+    else { list.push(cur); t.key = list.length - 1; }
     sc.tunnelOverrides = list;
     sceneChanged();
   };
-  box.querySelector('.tsOpen').addEventListener('change', (e) => setOv({ open: e.target.value || undefined }));
-  // rocas y estalactitas por separado: cada cambio deja explícito el otro valor (los proyectos anteriores usaban uno solo para ambos)
-  const genStal = () => (typeof sc.caveStalactites === 'boolean' ? sc.caveStalactites : sc.caveRocks !== false);
-  box.querySelector('.tsRocks').addEventListener('change', (e) => setOv({ rocks: e.target.checked === (sc.caveRocks !== false) ? undefined : e.target.checked, stal: t.stal === genStal() ? undefined : t.stal }));
-  box.querySelector('.tsStal').addEventListener('change', (e) => setOv({ stal: e.target.checked === genStal() ? undefined : e.target.checked, rocks: t.rocks === (sc.caveRocks !== false) ? undefined : t.rocks }));
-  box.querySelector('.tsShape').addEventListener('change', (e) => setOv({ shape: e.target.value || undefined }));
-  box.querySelector('.tsType').addEventListener('change', (e) => setOv({ type: e.target.value || undefined }));
-  const pilSet = (v) => { v = Math.max(0, Math.min(200, Math.round(v))); box.querySelector('.tsPilN').value = v; box.querySelector('.tsPil').value = Math.min(40, v); setOv({ pillars: v }); };
-  box.querySelector('.tsPilOwn').addEventListener('change', (e) => { if (e.target.checked) pilSet(t.pillarCount); else setOv({ pillars: undefined }); });
-  box.querySelector('.tsPil').addEventListener('input', (e) => pilSet(parseFloat(e.target.value)));
-  box.querySelector('.tsPilN').addEventListener('change', (e) => { box.querySelector('.tsPilOwn').checked = true; box.querySelector('.tsPil').disabled = false; pilSet(parseFloat(e.target.value)); });
-  box.querySelectorAll('.tsMode button').forEach((b) => b.addEventListener('click', () => setOv({ meshMode: b.dataset.mode })));
-  const den = (v) => { v = Math.round(Math.max(1, Math.min(100, v))); if (Number.isFinite(v)) setOv({ density: v }); };
-  box.querySelector('.tsDen').addEventListener('input', (e) => den(parseFloat(e.target.value)));
-  box.querySelector('.tsDenN').addEventListener('change', (e) => den(parseFloat(e.target.value)));
-  const mx = (v) => { v = Math.round(Math.max(100, v)); if (Number.isFinite(v)) setOv({ maxTris: v }); };
-  box.querySelector('.tsMax').addEventListener('input', (e) => mx(parseFloat(e.target.value)));
-  box.querySelector('.tsMaxN').addEventListener('change', (e) => mx(parseFloat(e.target.value)));
-  box.querySelector('.tsAdapt').addEventListener('input', (e) => setOv({ adapt: Math.max(0, Math.min(1, parseFloat(e.target.value))) }));
-  box.querySelector('.tsReset').addEventListener('click', () => { const list = (sc.tunnelOverrides || []).slice(); if (t.key >= 0) list.splice(t.key, 1); sc.tunnelOverrides = list; sceneChanged(); });
+  const numIn = (v, a, b, round) => { v = parseFloat(v); if (!Number.isFinite(v)) return null; v = Math.max(a, Math.min(b, v)); return round ? Math.round(v) : v; };
+  q('.tsShape').addEventListener('change', (e) => setOv({ shape: e.target.value }));
+  q('.tsType').addEventListener('change', (e) => setOv({ type: e.target.value }));
+  q('.tsOpen').addEventListener('change', (e) => setOv({ open: e.target.value }));
+  const wSet = (v) => { v = numIn(v, 4, 200); if (v == null) return; q('.tsWN').value = v; q('.tsW').value = Math.min(40, v); setOv({ width: v }); };
+  q('.tsW').addEventListener('input', (e) => wSet(e.target.value));
+  q('.tsWN').addEventListener('change', (e) => wSet(e.target.value));
+  q('.tsH').addEventListener('input', (e) => { const v = numIn(e.target.value, 2, 60); q('.tsHV').textContent = `${v} m`; setOv({ height: v }); });
+  q('.tsCS').addEventListener('input', (e) => { const v = numIn(e.target.value, 0, 1); q('.tsCSV').textContent = `${Math.round(v * 100)} %`; setOv({ caveSize: v }); });
+  q('.tsRocks').addEventListener('change', (e) => setOv({ rocks: e.target.checked, stal: t.stal !== false }));
+  q('.tsStal').addEventListener('change', (e) => setOv({ stal: e.target.checked, rocks: t.rocks !== false }));
+  const pilSet = (v) => { v = numIn(v, 0, 200, true); if (v == null) return; q('.tsPilN').value = v; q('.tsPil').value = Math.min(40, v); setOv({ pillars: v }); };
+  q('.tsPil').addEventListener('input', (e) => pilSet(e.target.value));
+  q('.tsPilN').addEventListener('change', (e) => pilSet(e.target.value));
+  q('.tsFr').addEventListener('input', (e) => { const v = numIn(e.target.value, 0.05, 20); q('.tsFrV').textContent = `${v.toFixed(1)} m`; setOv({ frame: v }); });
+  q('.tsDp').addEventListener('input', (e) => { const v = numIn(e.target.value, 0, 20); q('.tsDpV').textContent = `${v.toFixed(1)} m`; setOv({ depth: v }); });
+  div.querySelectorAll('.tsMode button').forEach((b) => b.addEventListener('click', () => setOv({ meshMode: b.dataset.mode })));
+  const den = (v) => { v = numIn(v, 1, 100, true); if (v == null) return; q('.tsDenN').value = v; q('.tsDen').value = v; q('.tsDenV').textContent = res(v); setOv({ density: v }); };
+  q('.tsDen').addEventListener('input', (e) => den(e.target.value));
+  q('.tsDenN').addEventListener('change', (e) => den(e.target.value));
+  const mx = (v) => { v = numIn(v, 100, 1e7, true); if (v == null) return; q('.tsMaxN').value = v; q('.tsMax').value = Math.min(150000, v); setOv({ maxTris: v }); };
+  q('.tsMax').addEventListener('input', (e) => mx(e.target.value));
+  q('.tsMaxN').addEventListener('change', (e) => mx(e.target.value));
+  q('.tsAdapt').addEventListener('input', (e) => { const v = numIn(e.target.value, 0, 1); q('.tsAdV').textContent = `${Math.round(v * 100)} %`; setOv({ adapt: v }); });
+  q('.tsReset').addEventListener('click', () => { const list = (sc.tunnelOverrides || []).slice(); if (t.key >= 0) list.splice(t.key, 1); sc.tunnelOverrides = list; sceneChanged(); });
+  return div;
 }
 function clearAllSelections() {
   if (state.selDeco != null) { state.selDeco = null; if (typeof renderDecoPanel === 'function') renderDecoPanel(); }
@@ -329,7 +340,7 @@ function deleteSelectedHill() {
 }
 function selectTunnel(id) {
   state.selTunnel = id;
-  if (id != null) setTimeout(() => { try { focusPanel('hills', $('tunnelSelBox').hidden ? $('tunnelInfo') : $('tunnelSelBox')); } catch { /* iniciando */ } }, 0);
+  if (id != null) setTimeout(() => { try { focusPanel('hills', document.querySelector('#tunnelList .tun-card.sel') || $('tunnelList')); } catch { /* iniciando */ } }, 0);
   if (id != null) { state.selHill = null; if (state.selItem) { state.selItem = null; preview.buildItems(); preview.updateHandles(); refreshItemsInfo(); } }
   if (typeof refreshHillPanel === 'function') refreshHillPanel();
   if (typeof refreshTunnelInfo === 'function') refreshTunnelInfo();
@@ -3340,9 +3351,10 @@ function refreshPanels() {
       <div class="meta">${r ? `${r.L.toFixed(0)} m · sale en s=${r.forkS.toFixed(0)} m, vuelve en s=${r.mergeS.toFixed(0)} m` : a.keep === false ? 'Descartada (no se exporta)' : ''}</div>
       <div class="abody">
       <label class="check small" style="margin-top:4px"><input type="checkbox" class="awOn"${a.width > 0 ? ' checked' : ''}> Ancho propio</label>
-      <div class="field awBox${a.width > 0 ? '' : ' disabled'}"><label>Ancho <span class="val"><input type="number" class="aw" min="2" max="80" step="0.5" style="width:60px" value="${a.width > 0 ? a.width : (state.geom.altWidthSame === false ? state.geom.altWidth : state.geom.width)}"> m</span></label><input type="range" class="awR" min="2" max="40" step="0.5" value="${Math.min(40, a.width > 0 ? a.width : (state.geom.altWidthSame === false ? state.geom.altWidth : state.geom.width))}"></div>
+      <div class="field awBox${a.width > 0 ? '' : ' disabled'}"><label>Ancho <span class="val"><input type="number" class="aw" min="2" max="80" step="0.5" style="width:60px" value="${a.width > 0 ? a.width : state.geom.width}"> m</span></label><input type="range" class="awR" min="2" max="40" step="0.5" value="${Math.min(40, a.width > 0 ? a.width : state.geom.width)}"></div>
       <div class="field ajBox${a.legacyJoin ? ' disabled' : ''}" title="Largo de la curva con que el atajo sale de la pista y vuelve a ella (siempre tangente): menos = gira antes, más = curva más abierta"><label>Suavidad del empalme <span class="val ajVal">×${(a.joinSmooth ?? 1).toFixed(2)}</span></label><input type="range" class="aj" min="0.2" max="2" step="0.05" value="${a.joinSmooth ?? 1}"></div>
-      <label class="check small" title="Forma anterior: ignora los puntos del atajo cerca de la pista y arma el empalme con una curva automática (la salida y la llegada se corren)"><input type="checkbox" class="alegacy"${a.legacyJoin ? ' checked' : ''}> Empalme automático (forma antigua)</label>
+      <label class="check small" title="Transición de ancho: en la salida y en la llegada el atajo toma el ancho de la pista y pasa de forma gradual a su propio ancho"><input type="checkbox" class="ainh"${a.inheritWidth ? ' checked' : ''}> Ancho de la pista en la salida y la llegada</label>
+      <label class="check small" title="Ignora los puntos del atajo cerca de la pista y arma la salida y la llegada con una curva automática (los puntos de empalme se corren a donde la curva calza mejor)"><input type="checkbox" class="alegacy"${a.legacyJoin ? ' checked' : ''}> Empalme automático</label>
       <h4 class="mini atexH">Material de la pista</h4>
       ${texRow('track', 'Como la pista')}
       <h4 class="mini adirtH">Camino de tierra</h4>
@@ -3393,6 +3405,7 @@ function refreshPanels() {
     const aj = div.querySelector('input.aj');
     aj.addEventListener('input', () => { if (!ajEdit) { pushUndo(); ajEdit = true; } a.joinSmooth = parseFloat(aj.value); div.querySelector('.ajVal').textContent = `×${a.joinSmooth.toFixed(2)}`; scheduleBuild(); });
     aj.addEventListener('change', () => { ajEdit = false; });
+    div.querySelector('input.ainh').addEventListener('change', (e) => { pushUndo(); if (e.target.checked) a.inheritWidth = true; else delete a.inheritWidth; scheduleBuild(); });
     div.querySelector('input.alegacy').addEventListener('change', (e) => { pushUndo(); if (e.target.checked) a.legacyJoin = true; else delete a.legacyJoin; scheduleBuild(); });
     // camino de tierra y barrera propios: al primer cambio el atajo copia los valores que tenía y deja de depender de los generales
     let aeEdit = false;
@@ -3555,7 +3568,6 @@ const fmt = {
 const PARAMS = [
   ['lapLength', 'geom', fmt.m, 'build'],
   ['width', 'geom', fmt.m1, 'build'],
-  ['altWidth', 'geom', fmt.m1, 'build'],
   ['detail', 'geom', fmt.m, 'build'],
   ['sketchSmooth', 'geom', fmt.int, 'build'],
   ['hills', 'elev', fmt.hills, 'elev'],
@@ -3759,10 +3771,6 @@ function syncControls() {
     if (lab) lab.textContent = f(groupObj(g)[id]);
   }
   $('useImageWidth').checked = state.geom.useImageWidth;
-  $('altWidthSame').checked = state.geom.altWidthSame !== false;
-  $('altInheritWidth').checked = !!state.geom.altInheritWidth;
-  $('altFromCenter').checked = state.geom.altFromCenter !== false;
-  $('altWidthBox').classList.toggle('disabled', state.geom.altWidthSame !== false);
   $('closed').checked = state.closed;
   $('reverse').checked = !!state.project.reverse;
   $('seed').value = state.elev.seed;
@@ -3800,9 +3808,6 @@ function bindControls() {
   $('btnElevAuto').addEventListener('click', generateAutoHeights);
   $('btnFixCross').addEventListener('click', fixCrossings);
   $('useImageWidth').addEventListener('change', (e) => { state.geom.useImageWidth = e.target.checked; scheduleBuild(); });
-  $('altWidthSame').addEventListener('change', (e) => { state.geom.altWidthSame = e.target.checked; syncControls(); scheduleBuild(); });
-  $('altInheritWidth').addEventListener('change', (e) => { state.geom.altInheritWidth = e.target.checked; scheduleBuild(); });
-  $('altFromCenter').addEventListener('change', (e) => { state.geom.altFromCenter = e.target.checked; scheduleBuild(); });
   // bifurcar: nueva ruta alternativa entre el primer y el último punto seleccionado
   $('forkSep').addEventListener('input', () => { $('forkSepVal').textContent = `${$('forkSep').value} m`; });
   $('forkSepVal').textContent = `${$('forkSep').value} m`;
@@ -3945,16 +3950,15 @@ function bindControls() {
   $('xformNum').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); xfApply(); } });
   refreshXformBar();
   document.addEventListener('keydown', (e) => {
-    if (state.tool !== 'edit' || e.ctrlKey || e.metaKey || e.altKey || (preview.game && preview.game.active)) return;
+    if (state.tool !== 'edit' || (preview.game && preview.game.active)) return;
     const t = e.target || {};
     if (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA') return;
-    const k = e.code === 'Digit1' || e.code === 'Numpad1' ? '1' : e.code === 'Digit2' || e.code === 'Numpad2' ? '2' : /^Key[WER]$/.test(e.code) ? e.code.slice(3) : null;
+    // atajos reasignables en «Ajustes» (los atajos propios de botones se atienden antes)
+    const k = ['vertex', 'segment', 'move', 'rotate', 'scale'].find((id) => matchAction(e, id));
     if (!k) return;
-    // no pisa un atajo que el usuario haya asignado a esa tecla
-    try { const hk = JSON.parse(localStorage.getItem('tsg.hotkeys.v1') || '{}'); if (Object.values(hk).includes(k)) return; } catch { /* sin almacenamiento */ }
     e.preventDefault();
-    if (k === '1') app.setSubObj('vertex'); else if (k === '2') app.setSubObj('segment');
-    else app.setXform(k === 'W' ? 'move' : k === 'E' ? 'rotate' : 'scale');
+    if (k === 'vertex' || k === 'segment') app.setSubObj(k);
+    else app.setXform(k);
   });
   $('btnTbFork').addEventListener('click', () => {
     focusPanel('arc');
@@ -4050,7 +4054,7 @@ function bindControls() {
   document.addEventListener('keydown', (e) => {
     const tag = (e.target && e.target.tagName) || '';
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
-    if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+    if (!matchAction(e, 'delete')) return;
     // Supr borra lo que esté seleccionado: puntos (uno o varios), atajo, elemento de pista o cerro
     if (state.tool === 'edit' && state.selSet && state.selSet.idxs.size) {
       e.preventDefault();
@@ -4092,7 +4096,7 @@ function bindControls() {
   $('btnUndo').addEventListener('click', undo);
   $('btnUndo').disabled = true;
   document.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); }
+    if (matchAction(e, 'undo')) { e.preventDefault(); undo(); }
   });
 
   // imagen
@@ -4117,13 +4121,6 @@ function bindControls() {
     if (!file) return;
     if (state.tool === 'ref') loadRefBlob(file);
     else loadImageBlob(file, 'pegada');
-  });
-  $('btnTestImage').addEventListener('click', () => {
-    const keys = Object.keys(SAMPLES);
-    const k = state.lastSample || keys[Math.floor(Math.random() * keys.length)];
-    const cv = rasterizeLayout(SAMPLES[k].build(), 800, 600, 26);
-    setImage(cv);
-    runTrace();
   });
   $('btnTrace').addEventListener('click', runTrace);
 
@@ -4412,7 +4409,16 @@ async function openProject(text) {
   }
   pushUndo();
   state.project = d.project;
-  if (d.geom) Object.assign(state.geom, d.geom);
+  if (d.geom) {
+    Object.assign(state.geom, d.geom);
+    // proyectos anteriores: el ancho general de atajos y «ancho de la pista en la salida y llegada» pasan a cada atajo
+    const g = d.geom;
+    for (const a of (state.project && state.project.alts) || []) {
+      if (g.altWidthSame === false && g.altWidth > 0 && !(a.width > 0)) a.width = g.altWidth;
+      if (g.altInheritWidth && a.inheritWidth === undefined) a.inheritWidth = true;
+    }
+    for (const k of ['altWidthSame', 'altWidth', 'altInheritWidth', 'altFromCenter']) delete state.geom[k];
+  }
   if (d.elev) Object.assign(state.elev, d.elev, { flatZones: [], profileZones: [], pinFlats: [] });
   if (d.exp) Object.assign(state.exp, d.exp);
   if (d.trace) Object.assign(state.trace, d.trace);
@@ -4727,24 +4733,9 @@ function syncSceneControls() {
   if ($('sculptBrushPVal')) $('sculptBrushPVal').textContent = `${sc.sculptBrush} m`;
   if (typeof syncSculptCurveUI === 'function' && $('sculptPreset') && $('sculptPreset').options.length) syncSculptCurveUI();
   refreshHillPanel();
-  for (const k of ['tunnelShape', 'tunnelType', 'tunnelOpen', 'tunnelHeight', 'caveSize', 'tunnelPillars', 'tunnelDensity', 'portalFrame', 'portalDepth', 'startGateHeight']) set(k, sc[k]);
-  set('caveRocks', sc.caveRocks !== false);
-  set('caveStal', typeof sc.caveStalactites === 'boolean' ? sc.caveStalactites : sc.caveRocks !== false);
+  set('startGateHeight', sc.startGateHeight);
   set('startGate', sc.startGate); if (document.activeElement !== $('startText')) set('startText', sc.startText);
   $('startGateHeightVal').textContent = `${sc.startGateHeight} m`;
-  $('tunnelDensityVal').textContent = (() => { const { N, step } = tunnelResolution(sc); return `${N - 1} lados · cada ${step.toFixed(1)} m`; })();
-  $('portalFrameVal').textContent = `${(+sc.portalFrame).toFixed(1)} m`;
-  $('portalDepthVal').textContent = `${(+sc.portalDepth).toFixed(1)} m`;
-  set('tunnelWidth', Math.min(40, sc.tunnelWidth)); set('tunnelWidthNum', sc.tunnelWidth);
-  $('tunnelHeightVal').textContent = `${sc.tunnelHeight} m`;
-  $('caveSizeVal').textContent = `${Math.round(sc.caveSize * 100)} %`;
-  $('tunnelPillarsVal').textContent = `${sc.tunnelPillars}`;
-  document.querySelectorAll('#tunnelMeshMode button').forEach((b) => b.classList.toggle('on', b.dataset.mode === (sc.tunnelMeshMode || 'uniform')));
-  set('tunnelMaxTris', Math.min(150000, sc.tunnelMaxTris ?? 60000)); set('tunnelMaxTrisNum', sc.tunnelMaxTris ?? 60000);
-  set('tunnelAdapt', sc.tunnelAdapt ?? 0.5); $('tunnelAdaptVal').textContent = `${Math.round((sc.tunnelAdapt ?? 0.5) * 100)} %`;
-  $('tunnelAdaptBox').hidden = sc.tunnelMeshMode !== 'optimized';
-  $('caveBox').classList.toggle('disabled', sc.tunnelType !== 'natural');
-  $('pillarBox').classList.toggle('disabled', sc.tunnelOpen === 'none');
   set('riverMode', sc.riverMode); set('riverWalls', sc.riverWalls); set('riverDepth', sc.riverDepth); set('riverWallSubdiv', sc.riverWallSubdiv);
   if ($('riverDepthVal')) $('riverDepthVal').textContent = `${(+sc.riverDepth).toFixed(1)} m`;
   if ($('riverWallSubdivVal')) $('riverWallSubdivVal').textContent = `${sc.riverWallSubdiv}`;
@@ -4798,8 +4789,6 @@ function syncSceneControls() {
   $('trackTexOpacityVal').textContent = `${Math.round((sc.trackTexOpacity ?? 1) * 100)} %`;
   thumb('terrainTexThumb', state.terrainTex, 'btnTerrainTexRemove');
   { const gi = $('grassTexThumb'); if (!state.grassTex && !grassDefaultCanvas) grassDefaultCanvas = makeGrassCanvas(); gi.src = (state.grassTex || grassDefaultCanvas).toDataURL('image/png'); $('btnGrassTexRemove').disabled = !state.grassTex; }
-  const L = state.layout;
-  $('trackTexInfo').textContent = `${state.trackTex ? 'Textura propia' : 'Textura de asfalto por defecto'}: una repetición cada ${L ? (L.routes[0].L / sc.trackTexReps).toFixed(1) : '?'} m; a lo ancho cubre la pista una vez. Baja la opacidad para ver debajo los colores por altura (solo en la vista 3D; se exporta con la textura).`;
 }
 function refreshPaintInfo() {
   editor.draw();
@@ -4826,7 +4815,8 @@ function syncRef3dControls() {
   if (!box) return;
   box.hidden = !R;
   $('btnRef3dRemove').disabled = !R;
-  if (!R) { $('ref3dInfo').textContent = 'Importa un .fbx o .glb (por ejemplo, una pista anterior de tu juego) para compararlo con la pista nueva. Se muestra como un solo objeto que puedes mover, pero no editar.'; return; }
+  $('ref3dInfo').hidden = !R;
+  if (!R) { $('ref3dInfo').textContent = ''; return; }
   const set = (id, v) => { const el = $(id); if (el && el !== rangeDrag && document.activeElement !== el) { if (el.type === 'checkbox') el.checked = !!v; else el.value = v; } };
   set('ref3dVisible', R.visible !== false); set('ref3dShow2d', R.show2d !== false); set('ref3dLocked', !!R.locked);
   set('ref3dX', R.pos[0]); set('ref3dY', R.pos[1]); set('ref3dZ', R.pos[2]);
@@ -4836,7 +4826,7 @@ function syncRef3dControls() {
   set('ref3dGizmo', R.gizmo || 'translate');
   $('btnRef3dSelect').classList.toggle('active', !!R.sel);
   const b = R.bbox;
-  $('ref3dInfo').textContent = `${R.name} (${R.format}) · ${R.tris.toLocaleString('es')} triángulos · ${b ? `${b[0].toFixed(0)} × ${b[1].toFixed(0)} × ${b[2].toFixed(1)} m` : ''} · unidades ${R.unitScale === 1 ? 'm' : `×${+R.unitScale.toFixed(4)}`} · ${R.upAxis.toUpperCase()} arriba${R.sel ? ' · seleccionado: muévelo con el gizmo en 3D o arrastrando su silueta en el mapa' : ''}.`;
+  $('ref3dInfo').textContent = `${R.name} (${R.format}) · ${R.tris.toLocaleString('es')} triángulos · ${b ? `${b[0].toFixed(0)} × ${b[1].toFixed(0)} × ${b[2].toFixed(1)} m` : ''} · unidades ${R.unitScale === 1 ? 'm' : `×${+R.unitScale.toFixed(4)}`} · ${R.upAxis.toUpperCase()} arriba${R.sel ? ' · seleccionado' : ''}`;
 }
 /** Lee (o vuelve a leer, al cambiar unidades o eje) el modelo desde su archivo original. */
 async function loadRef3d(buffer, name, keep = null) {
@@ -5286,9 +5276,10 @@ function bindSceneControls() {
   document.addEventListener('keydown', (e) => {
     const tag = (e.target && e.target.tagName) || '';
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
-    if (e.key !== '[' && e.key !== ']') return;
+    const up = matchAction(e, 'brushUp');
+    if (!up && !matchAction(e, 'brushDown')) return;
     if (!PAINT_TOOLS.includes(state.tool)) return;
-    const f = e.key === ']' ? 1.15 : 1 / 1.15;
+    const f = up ? 1.15 : 1 / 1.15;
     if (state.tool === 'hill') setHillBrush(sc.hillBrush * f);
     else if (state.tool === 'sculpt') { sc.sculptBrush = Math.round(Math.min(200, Math.max(2, sc.sculptBrush * f))); syncSceneControls(); editor.draw(); }
     else { const k = brushKey(state.tool); sc[k] = Math.round(Math.min(200, Math.max(k === 'riverBrush' ? 1 : 3, sc[k] * f))); syncSceneControls(); editor.draw(); } // subdivisión, ríos y pinceles de elementos
@@ -5328,16 +5319,9 @@ function bindSceneControls() {
   $('btnHillDeselect').addEventListener('click', () => selectHill(null));
   $('startGate').addEventListener('change', (e) => { sc.startGate = e.target.checked; sceneChanged(); });
   $('startText').addEventListener('input', (e) => { sc.startText = e.target.value || 'START'; sceneChanged(); });
-  for (const k of ['tunnelDensity', 'portalFrame', 'portalDepth', 'startGateHeight']) num(k, k, false);
+  num('startGateHeight', 'startGateHeight', false);
   $('btnHillTool').addEventListener('click', () => { if (!sc.terrain) { sc.terrain = true; syncSceneControls(); sceneChanged(); } setTool('hill'); });
   $('btnHillClear').addEventListener('click', () => { if (!state.hills.length) return; pushUndo(); state.hills = []; state.selHill = null; refreshHillPanel(); editor.draw(); sceneChanged(); });
-  for (const k of ['tunnelShape', 'tunnelType', 'tunnelOpen']) $(k).addEventListener('change', (e) => { sc[k] = e.target.value; syncSceneControls(); sceneChanged(); });
-  for (const k of ['tunnelHeight', 'caveSize', 'tunnelPillars']) num(k, k, k === 'tunnelPillars');
-  document.querySelectorAll('#tunnelMeshMode button').forEach((b) => b.addEventListener('click', () => { sc.tunnelMeshMode = b.dataset.mode; syncSceneControls(); sceneChanged(); }));
-  const tMax = (v) => { v = Math.round(Math.max(100, v)); if (!Number.isFinite(v)) return; sc.tunnelMaxTris = v; syncSceneControls(); sceneChanged(); };
-  $('tunnelMaxTris').addEventListener('input', (e) => tMax(parseFloat(e.target.value)));
-  $('tunnelMaxTrisNum').addEventListener('change', (e) => tMax(parseFloat(e.target.value)));
-  $('tunnelAdapt').addEventListener('input', (e) => { sc.tunnelAdapt = Math.max(0, Math.min(1, parseFloat(e.target.value))); syncSceneControls(); sceneChanged(); });
   $('paintErase').addEventListener('change', (e) => { state.paintErase = e.target.checked; });
   $('btnPaintTool').addEventListener('click', () => { if (!sc.terrain) { sc.terrain = true; syncSceneControls(); sceneChanged(); } setTool('paint'); });
   // relieve esculpido en el terreno
@@ -5412,8 +5396,6 @@ function bindSceneControls() {
   $('btnSusp').addEventListener('click', suspFromSel);
   $('btnSuspTool').addEventListener('click', suspFromSel);
   $('btnBankTop').addEventListener('click', () => focusPanel('bank'));
-  $('caveRocks').addEventListener('change', (e) => { if (typeof sc.caveStalactites !== 'boolean') sc.caveStalactites = sc.caveRocks !== false; sc.caveRocks = e.target.checked; sceneChanged(); });
-  $('caveStal').addEventListener('change', (e) => { sc.caveStalactites = e.target.checked; sceneChanged(); });
   // material de las paredes socavadas (ríos y cascadas)
   for (const [id, key] of [['riverWall', 'riverWallTex'], ['fallWall', 'fallWallTex']]) {
     $(id + 'Btn').addEventListener('click', () => $(id + 'File').click());
@@ -5429,19 +5411,18 @@ function bindSceneControls() {
   // F3: mostrar u ocultar el wireframe (en cualquier momento, incluso con un campo enfocado)
   // F: la vista 3D encuadra lo seleccionado (sin selección, toda la pista)
   document.addEventListener('keydown', (e) => {
-    if (e.code !== 'KeyF' || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || (preview.game && preview.game.active)) return;
+    if (!matchAction(e, 'focus') || (preview.game && preview.game.active)) return;
     const t = e.target || {};
     if (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA') return;
-    try { const hk = JSON.parse(localStorage.getItem('tsg.hotkeys.v1') || '{}'); if (Object.values(hk).includes('F')) return; } catch { /* sin almacenamiento */ }
     e.preventDefault();
     preview.focusSelection();
   });
   document.addEventListener('keydown', (e) => {
-    if (e.key !== 'F3') return;
+    if (!matchAction(e, 'wire')) return;
     e.preventDefault();
     $('wireOn').checked = !$('wireOn').checked;
     wire();
-    toast(`Wireframe ${$('wireOn').checked ? 'visible' : 'oculto'} (F3)`);
+    toast(`Wireframe ${$('wireOn').checked ? 'visible' : 'oculto'} (${bindingOf('wire').map(comboLabel).join(' / ')})`);
   });
   // cámara de juego
   const game = new GameCam(preview, app);
@@ -5493,8 +5474,8 @@ function bindSceneControls() {
     const t = e.target || {};
     const typing = (t.tagName === 'INPUT' && ['text', 'number', 'search', 'email'].includes(t.type)) || t.tagName === 'TEXTAREA';
     if (typing) return;
-    if (e.key === 'c' || e.key === 'C') setCam(state.game.mode === 'third' ? 'first' : 'third');
-    else if (e.key === ' ') { e.preventDefault(); $('btnGamePause').click(); }
+    if (matchAction(e, 'gameCam')) setCam(state.game.mode === 'third' ? 'first' : 'third');
+    else if (matchAction(e, 'gamePause')) { e.preventDefault(); $('btnGamePause').click(); }
     else if (e.key === 'Escape' && !document.fullscreenElement) exitGame();
   });
   // cielo
@@ -5570,7 +5551,6 @@ function bindSceneControls() {
     $(numId).addEventListener('change', () => apply(parseFloat($(numId).value)));
   };
   pair('trackTexReps', 'trackTexRepsNum', 'trackTexReps', 1, true);
-  pair('tunnelWidth', 'tunnelWidthNum', 'tunnelWidth', 4, false);
   pair('terrainTexRepX', 'terrainTexRepXNum', 'terrainTexRepX', 0.1, false);
   pair('terrainTexRepY', 'terrainTexRepYNum', 'terrainTexRepY', 0.1, false);
   pair('riverWallTile', 'riverWallTileNum', 'riverWallTile', 0.5, false); // paredes socavadas de ríos y cascadas
@@ -5659,7 +5639,7 @@ function bindSceneControls() {
     const el = $('trackMeshInfo');
     if (!el) return;
     const f = (v) => Math.round(v).toLocaleString('es');
-    el.textContent = `${f(m.rows)} secciones de ${f(m.samples)} muestras · ${f(m.tris)} triángulos${m.uniTris ? ` (uniforme a esta densidad: ${f(m.uniTris)})` : ''}. ${state.scene.trackMeshMode === 'optimized' ? 'Las curvas, los cambios de pendiente, el peralte y los cambios de ancho reciben más secciones; las rectas, menos.' : 'Secciones a distancia pareja.'} El mapeado UV sigue la distancia recorrida, así que la textura se ve igual con más o menos secciones. El tope de triángulos manda sobre la densidad.`;
+    el.textContent = `${f(m.rows)} secciones de ${f(m.samples)} muestras · ${f(m.tris)} triángulos${m.uniTris ? ` (uniforme a esta densidad: ${f(m.uniTris)})` : ''}`;
   };
   app.onShadowInfo = (inf) => refreshShadowInfo(inf);
   app.onSceneInfo = (info) => {
@@ -5680,7 +5660,6 @@ function bindSceneControls() {
 // ---------- ayudas (hints) sobre cada opción ----------
 const HINTS = {
   btnLoadImage: 'Abre un PNG/JPG de minimapa. También puedes copiar una imagen y pegarla con Ctrl+V.',
-  btnTestImage: 'Genera una imagen de minimapa con el último ejemplo elegido y la traza, para probar el trazado por imagen.',
   thr: 'Brillo que separa pista y fondo (0–255). Solo se usa si desactivas el modo automático.',
   thrAuto: 'Automático: prueba varias formas de separar la pista del fondo y se queda con la que da un circuito más limpio.',
   invert: 'Cómo está dibujada la pista en la imagen. «Pista con borde» sirve para minimapas con contorno oscuro y relleno claro. En automático se elige solo.',
@@ -5688,8 +5667,6 @@ const HINTS = {
   btnTrace: 'Vuelve a trazar la imagen con el modo y el umbral elegidos. Reemplaza el trazado actual.',
   lapLength: 'Largo real de la vuelta en metros. Define la escala de todo: ancho, pendientes y alturas se miden con esta escala.',
   width: 'Ancho de la pista en metros. Se usa para el mallado, la holgura de los cruces y los avisos de horquillas.',
-  altWidthSame: 'Si está marcado, los atajos tienen el mismo ancho que la pista. Desmárcalo para darles su propio ancho (con una transición en los empalmes).',
-  altWidth: 'Ancho general de las rutas alternativas. Cada atajo puede tener además su propio ancho en la lista de rutas alternativas.',
   trackDensity: 'Densidad del trazado de la pista: cuántas secciones transversales tiene la malla. 100 % = una por cada muestra de la ruta; 1 % = una cada ~16 m.',
   trackDensityNum: 'Densidad exacta en %.',
   trackMaxTris: 'Tope de triángulos de la pista (todas las rutas): si la densidad pide más, las secciones se separan.',
@@ -5702,8 +5679,6 @@ const HINTS = {
   btnBridge: 'Une los dos extremos seleccionados con un puente de ancho propio.',
   btnTbRadius: 'Curva de radio fijo con los puntos seleccionados (3 o más seguidos), usando el radio del panel «Puntos seleccionados».',
   btnTbFork: 'Bifurca la pista entre el primer y el último punto seleccionado, con el lado y la separación del panel «Puntos seleccionados».',
-  altFromCenter: 'Activado (por defecto): los atajos salen desde el eje de la pista y su calzada queda unos centímetros por debajo de la principal donde se superponen, para no cortarla. Desactivado: salen desde el borde de la pista, pegados borde con borde.',
-  altInheritWidth: 'Los atajos toman el ancho de la pista en la salida y en la llegada, y pasan de forma gradual a su propio ancho. Desactivado: el atajo tiene su ancho desde el borde de la pista.',
   stripBorder: 'Agrega a todos los nitro strips un borde: paredes sin espesor que suben desde su contorno (una cara, sin techo), para ponerles una textura de «glow».',
   stripBorderHeight: 'Altura del borde de los nitro strips (igual para todos).',
   stripBorderHeightNum: 'Altura exacta del borde en metros.',
@@ -5809,8 +5784,6 @@ const HINTS = {
   barrierThick: 'Grosor de la barrera. Con 0 es un plano de una sola cara (mirando a la calzada).', barrierThickNum: 'Grosor exacto de la barrera en metros.',
   barrierTile: 'Tiling de la barrera: metros de pista por cada repetición de la textura (rojo + blanco en la de por defecto).', barrierTileNum: 'Metros por repetición de la textura de la barrera.',
   btnBarrierTex: 'Carga una textura para la barrera: U a lo largo, V de abajo hacia arriba.', btnDirtTex: 'Carga una textura para el camino de tierra: U a lo ancho, V a lo largo.',
-  tunnelMaxTris: 'Tope de triángulos de cada túnel (paredes, techo y veredas): manda sobre la densidad.', tunnelMaxTrisNum: 'Tope exacto de triángulos por túnel.',
-  tunnelAdapt: 'Solo en «Optimizado»: al mínimo, las curvas tienen apenas algo más de secciones que las rectas; al máximo, las rectas tienen muchas menos.',
   sculptStrength: 'Cuántos metros sube (clic izquierdo) o baja (clic derecho) cada toque del pincel en su centro; al pasar varias veces se acumula.',
   sculptStrengthP: 'Cuántos metros sube o baja cada toque del pincel de relieve en su centro.',
   sculptBrushP: 'Radio del pincel de relieve en metros (también con [ y ] mientras esculpes).',
@@ -5839,20 +5812,9 @@ const HINTS = {
   hillMaxTris: 'Tope de triángulos para este cerro. Si la densidad pide más, las celdas se agrandan hasta respetarlo.',
   btnHillDelete: 'Elimina el cerro seleccionado (también con Supr).',
   btnHillDeselect: 'Deja de editar el cerro: los controles vuelven a ser los valores para cerros nuevos (también con Esc).',
-  tunnelDensity: 'Polígonos de los túneles: lados de la sección y distancia entre secciones a lo largo.',
-  portalFrame: 'Grosor del marco de cada boca, alrededor de la sección del túnel.',
-  portalDepth: 'Cuánto sobresale la boca por fuera del cerro.',
   startGate: 'Agrega un pórtico con cartel en la línea de meta de la ruta principal.',
   startText: 'Texto del cartel del pórtico.',
   startGateHeight: 'Altura libre bajo la viga del pórtico.',
-  tunnelShape: 'Forma de la sección del túnel.',
-  tunnelWidth: 'Ancho interior del túnel (como mínimo el ancho de la pista + 1 m).',
-  tunnelWidthNum: 'Ancho interior exacto en metros.',
-  tunnelHeight: 'Altura libre del túnel sobre la calzada. Un cerro crea túnel si supera esta altura más el techo.',
-  tunnelType: 'Artificial: sección perfectamente regular en todo el recorrido. Natural: caverna irregular de roca, que puede abrirse en una bóveda con estalactitas y rocas.',
-  caveSize: 'Tamaño de la caverna: al mínimo es un túnel irregular; más alto, se abre una bóveda grande con más estalactitas y rocas.',
-  tunnelOpen: 'Deja abierto un costado del túnel (galería), sostenido por pilares.',
-  tunnelPillars: 'Cantidad de pilares por túnel en el lado abierto (cubos estirados con el pivote en su base).',
   btnDockAll: 'Vuelve a anclar todas las ventanas flotantes al panel lateral.',
   pinLocal3d: 'Activado: al cambiar la altura de un punto solo se mueve el tramo hasta los puntos vecinos; el resto de la pista queda igual.',
   arcRadius: 'Radio de la curva en metros. Los puntos seleccionados quedan sobre una circunferencia perfecta de este radio.',
@@ -5888,7 +5850,8 @@ function initHints() {
   const attach = (el, text) => {
     el.addEventListener('mouseenter', () => show(el, text));
     el.addEventListener('mouseleave', hide);
-    el.addEventListener('focus', () => show(el, text));
+    el.addEventListener('pointerdown', hide); // al hacer clic el globo se va (no tapa lo que se abre)
+    el.addEventListener('focus', () => { let kb = true; try { kb = el.matches(':focus-visible'); } catch { /* */ } if (kb) show(el, text); });
     el.addEventListener('blur', hide);
   };
   // icono ⓘ junto a la etiqueta de cada parámetro
@@ -5915,6 +5878,109 @@ function initHints() {
   });
 }
 
+// ---------- ajustes: tamaño del texto y atajos de teclado ----------
+const UI_KEY = 'tsg.ui.v1';
+function loadUI() { try { return JSON.parse(localStorage.getItem(UI_KEY) || '{}') || {}; } catch { return {}; } }
+function saveUI(u) { try { localStorage.setItem(UI_KEY, JSON.stringify(u)); } catch { /* sin almacenamiento */ } }
+function initSettings(hk) {
+  const ui = loadUI();
+  const applyText = (pct) => {
+    pct = clamp(Math.round((+pct || 100) / 5) * 5, 80, 150);
+    ui.textSize = pct;
+    document.documentElement.style.setProperty('--fs', String(pct / 100));
+    $('uiTextSize').value = pct;
+    $('uiTextSizeVal').textContent = `${pct} %`;
+    window.dispatchEvent(new Event('resize')); // splitters y vistas se reacomodan
+  };
+  applyText(ui.textSize || 100);
+  $('uiTextSize').addEventListener('input', (e) => { applyText(e.target.value); saveUI(ui); });
+  $('btnTextSizeReset').addEventListener('click', () => { applyText(100); saveUI(ui); });
+
+  const MODS = new Set(['Control', 'Shift', 'Alt', 'Meta', 'AltGraph', 'CapsLock', 'OS']);
+  const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+  const chip = (c) => `<kbd>${esc(comboLabel(c))}</kbd>`;
+  let cap = null;
+  const stopCap = () => {
+    if (!cap) return;
+    window.removeEventListener('keydown', cap.onKey, true);
+    document.removeEventListener('pointerdown', cap.onDown, true);
+    document.body.classList.remove('hk-capturing');
+    cap = null;
+    render();
+  };
+  const startCap = (row, done) => {
+    stopCap();
+    const slot = row.querySelector('.km-keys');
+    slot.innerHTML = '<span class="km-wait">Presiona una tecla… (Esc cancela)</span>';
+    row.classList.add('capturing');
+    document.body.classList.add('hk-capturing');
+    const onKey = (e) => {
+      e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+      if (MODS.has(e.key)) return;
+      if (e.key === 'Escape') { stopCap(); return; }
+      const c = comboOf(e);
+      stopCap();
+      done(c);
+    };
+    const onDown = (e) => { if (!row.contains(e.target)) stopCap(); };
+    cap = { onKey, onDown };
+    window.addEventListener('keydown', onKey, true);
+    document.addEventListener('pointerdown', onDown, true);
+  };
+  const btnUsing = (c) => hk.list().find((b) => b.combo === c);
+  const setAction = (a, c) => {
+    const b = btnUsing(c);
+    if (b) hk.set(b.key, null);
+    const taken = setBinding(a.id, [c]);
+    const also = [...taken.map((t) => `«${t.label}»`), ...(b ? [`el botón «${b.label}»`] : [])];
+    toast(`«${a.label}» ahora se activa con ${comboLabel(c)}.${also.length ? ` Se le quitó a ${also.join(' y ')}.` : ''}`);
+    render();
+  };
+  const setButton = (b, c) => {
+    const taken = [];
+    for (const a of ACTIONS) { const cur = bindingOf(a.id); if (cur.includes(c)) { setBinding(a.id, cur.filter((q) => q !== c)); taken.push(a); } }
+    hk.set(b.key, c);
+    toast(`«${b.label}» ahora se activa con ${comboLabel(c)}.${taken.length ? ` Se le quitó a ${taken.map((t) => `«${t.label}»`).join(' y ')}.` : ''}`);
+  };
+  function render() {
+    if (cap) return;
+    const list = $('keymapList');
+    list.innerHTML = '';
+    let group = null;
+    for (const a of ACTIONS) {
+      if (a.group !== group) { group = a.group; const h = document.createElement('div'); h.className = 'km-group'; h.textContent = group; list.appendChild(h); }
+      const combos = bindingOf(a.id);
+      const shadow = combos.map(btnUsing).filter(Boolean);
+      const row = document.createElement('div');
+      row.className = 'km-row' + (shadow.length ? ' warn' : '');
+      row.innerHTML = `<span class="km-label">${esc(a.label)}</span><button class="km-keys km-set" data-noicon title="Clic para cambiar el atajo">${combos.length ? combos.map(chip).join(' ') : '<span class="km-none">sin atajo</span>'}</button>
+        <span class="km-btns"><button class="x km-clear" title="Dejar sin atajo"${combos.length ? '' : ' disabled'}>✕</button><button class="x km-reset" title="Volver al atajo por defecto (${esc(a.def.map(comboLabel).join(' / '))})"${isDefault(a.id) ? ' disabled' : ''}>↺</button></span>`;
+      if (shadow.length) row.title = `El atajo del botón «${shadow[0].label}» usa la misma combinación y tiene prioridad.`;
+      row.querySelector('.km-set').addEventListener('click', () => startCap(row, (c) => setAction(a, c)));
+      row.querySelector('.km-clear').addEventListener('click', () => { setBinding(a.id, []); render(); });
+      row.querySelector('.km-reset').addEventListener('click', () => { setBinding(a.id, null); render(); });
+      list.appendChild(row);
+    }
+    const bl = $('btnHotkeyList');
+    bl.innerHTML = '';
+    const btns = hk.list();
+    if (!btns.length) bl.innerHTML = '<div class="km-empty">Ninguno. Haz clic derecho sobre cualquier botón para darle un atajo.</div>';
+    for (const b of btns) {
+      const row = document.createElement('div');
+      row.className = 'km-row' + (b.found ? '' : ' missing');
+      row.innerHTML = `<span class="km-label">${esc(b.label)}</span><button class="km-keys km-set" data-noicon title="Clic para cambiar el atajo">${chip(b.combo)}</button>
+        <span class="km-btns"><button class="x km-clear" title="Quitar el atajo de este botón">✕</button></span>`;
+      row.querySelector('.km-set').addEventListener('click', () => startCap(row, (c) => setButton(b, c)));
+      row.querySelector('.km-clear').addEventListener('click', () => hk.set(b.key, null));
+      bl.appendChild(row);
+    }
+    $('fixedKeyList').innerHTML = FIXED.map(([k, d]) => `<div class="km-row fixed"><span class="km-keys"><kbd>${esc(k)}</kbd></span><span class="km-label">${esc(d)}</span></div>`).join('');
+  }
+  hk.onChange(render);
+  $('btnKeymapReset').addEventListener('click', () => { resetKeymap(); render(); toast('Atajos de la app restablecidos (los atajos de botones se mantienen).'); });
+  render();
+}
+
 // ---------- arranque ----------
 const editor = new Editor2D($('canvas2d'), app);
 const profile = new ProfileView($('canvasProfile'), app);
@@ -5934,9 +6000,9 @@ initPanelStripes(); // fondo alternado de las secciones (se rehace al desanclar 
 initSplitters();
 $('btnDockAll').addEventListener('click', () => panels.dockAll());
 initHints();
-initHotkeys({ toast });
+initSettings(initHotkeys({ toast }));
 setTool('pan');
 loadSample('figure8');
 undoStack.length = 0;
 $('btnUndo').disabled = true;
-window.__tsg = { state, app, editor, preview, profile }; // para depuración
+window.__tsg = { state, app, editor, preview, profile, openProject }; // para depuración

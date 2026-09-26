@@ -174,6 +174,15 @@ for (const [key, s] of Object.entries(SAMPLES)) {
         const H2 = buildHills(L, E, { ...sp0, tunnelOverrides: [{ ...ovs[0], maxTris: 1200 }] }, T, hills);
         const g3 = H2.tunnelGeo.find((g) => g.id === t0.id);
         check(g3 && (g3.walls.indices.length + g3.ceiling.indices.length + g3.walkways.indices.length) / 3 <= 1200 * 1.05, `${key}: tope de triángulos por túnel (${g3 && (g3.walls.indices.length + g3.ceiling.indices.length + g3.walkways.indices.length) / 3})`);
+        // medidas propias: ancho, altura libre, marco y cuánto sobresale la boca
+        const H3 = buildHills(L, E, { ...sp0, tunnelOverrides: [{ k: t0.k, s: (t0.s0 + t0.s1) / 2, width: 26, height: 12, frame: 2.5, depth: 3 }] }, T, hills);
+        const t3 = H3.tunnels.find((t) => t.id === t0.id), g4 = H3.tunnelGeo.find((g) => g.id === t0.id), g0 = H.tunnelGeo.find((g) => g.id === t0.id);
+        check(t3 && t3.width === 26 && t3.height === 12 && t3.sp.tunnelHeight === 12 && t3.sp.portalFrame === 2.5, `${key}: túnel con medidas propias`);
+        check(g4 && g0 && g4.box && g0.box && g4.box.B > g0.box.B + 3 && g4.box.A > g0.box.A && g4.box.thick === 2.5 && g4.box.depth === 3, `${key}: boca según las medidas del túnel (B ${g0 && g0.box.B.toFixed(1)} → ${g4 && g4.box.B.toFixed(1)})`);
+        const zmaxOf = (g) => { let m = -Infinity; const P = g.ceiling.positions; for (let i = 2; i < P.length; i += 3) m = Math.max(m, P[i]); return m; };
+        if (g4 && g0) check(zmaxOf(g4) > zmaxOf(g0) + 2, `${key}: techo más alto con altura propia`);
+        const g5 = H3.tunnelGeo.find((g) => g.id !== t0.id), g6 = H.tunnelGeo.find((g) => g.id !== t0.id);
+        if (g5 && g6) check(Math.abs(g5.box.B - g6.box.B) < 1e-6, `${key}: los otros túneles no cambian`);
       }
     }
     // túnel con camino de tierra y barrera: la pared queda después de la barrera y el piso del túnel empieza tras ella
@@ -231,34 +240,23 @@ for (const [key, s] of Object.entries(SAMPLES)) {
       check(gr.count > gr0.count && gr0.count > 50 && gr.indices.length === gr.count * 12 && gr.uvs.length === gr.count * 16, `${key}: hierba (${gr0.count} / ${gr.count})`);
     }
   }
-  // atajos: salen desde el borde de la pista (borde con borde, a la misma altura), no desde el eje
+  // ancho de cada atajo: propio o el de la pista; con «ancho de la pista en la salida y la llegada» hace la transición
   if (L.routes.some((r) => r.kind === 'alt')) {
-    for (const gp0 of [{}, { altWidthSame: false, altWidth: 7 }, { altWidthSame: false, altWidth: 7, altInheritWidth: true }]) {
-      const gp = { ...gp0, altFromCenter: false };
-      const LA = buildLayout(proj, { lapLength: s.lap || 1000, ...gp });
-      const EA = computeElevation(LA, { hills: 0.5, bank: true });
-      const m = LA.routes[0], em = edgeSamples(LA, EA, 0);
-      LA.routes.forEach((a, ka) => {
+    for (const ao of [{}, { width: 7 }, { width: 7, inheritWidth: true }]) {
+      const projA = { ...proj, alts: proj.alts.map((a) => ({ ...a, ...ao })) };
+      const LA = buildLayout(projA, { lapLength: s.lap || 1000 });
+      LA.routes.forEach((a) => {
         if (a.kind !== 'alt') return;
-        const ea = edgeSamples(LA, EA, ka);
-        for (const [end, i, sM, u] of [['salida', 0, a.forkS, a.forkU], ['llegada', a.n - 1, a.mergeS, a.mergeU]]) {
-          const side = Math.sign(u);
-          const ai = side > 0 ? ea.right[i] : ea.left[i];
-          const im = Math.round(sM / m.ds) % m.n;
-          const mi = side > 0 ? em.left[im] : em.right[im];
-          const gap = Math.hypot(ai.x - mi.x, ai.y - mi.y), dz = Math.abs(ai.z - mi.z);
-          check(gap < 0.6 && dz < 0.1, `${key}: ${a.name} empalma borde con borde en la ${end} (${gap.toFixed(2)} m, dz ${dz.toFixed(3)}) ${JSON.stringify(gp)}`);
-        }
-        const wantMid = gp.altWidth || LA.routes[0].w[0];
-        const wantEnd = gp.altInheritWidth ? LA.routes[0].w[0] : wantMid;
-        check(Math.abs(a.w[Math.floor(a.n / 2)] - wantMid) < 0.01 && Math.abs(a.w[0] - wantEnd) < 0.01, `${key}: ancho del atajo ${JSON.stringify(gp)}`);
+        const wantMid = ao.width || LA.routes[0].w[0];
+        const wantEnd = ao.inheritWidth ? LA.routes[0].w[0] : wantMid;
+        check(Math.abs(a.w[Math.floor(a.n / 2)] - wantMid) < 0.01 && Math.abs(a.w[0] - wantEnd) < 0.01, `${key}: ancho del atajo ${JSON.stringify(ao)}`);
       });
     }
   }
   // atajos desde el eje (por defecto): su calzada queda bajo la principal donde se superponen
   if (L.routes.some((r) => r.kind === 'alt')) {
-    for (const gp of [{}, { altWidthSame: false, altWidth: 7 }]) {
-      const LA = buildLayout(proj, { lapLength: s.lap || 1000, ...gp });
+    for (const gp of [{}, { width7: true }]) {
+      const LA = buildLayout(gp.width7 ? { ...proj, alts: proj.alts.map((a) => ({ ...a, width: 7 })) } : proj, { lapLength: s.lap || 1000 });
       const EA = computeElevation(LA, { hills: 0.5, bank: true });
       const m = LA.routes[0], em = EA.routes[0];
       let worst = -Infinity;

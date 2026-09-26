@@ -49,6 +49,7 @@ function label(el) {
 
 export function initHotkeys({ toast } = {}) {
   let map = load(); // {buttonKey: combo}
+  let notify = () => {};
   const badge = () => {
     document.querySelectorAll('button .hk').forEach((b) => b.remove());
     for (const [k, combo] of Object.entries(map)) {
@@ -70,7 +71,7 @@ export function initHotkeys({ toast } = {}) {
     const k = dlg.dataset.key;
     if (e.key === 'Escape') { close(); return; }
     if ((e.key === 'Delete' || e.key === 'Backspace') && !e.ctrlKey && !e.altKey && !e.shiftKey) {
-      if (map[k]) { delete map[k]; store(map); badge(); toast && toast(`Atajo quitado de «${dlg.dataset.label}».`); }
+      if (map[k]) { delete map[k]; store(map); badge(); notify(); toast && toast(`Atajo quitado de «${dlg.dataset.label}».`); }
       close();
       return;
     }
@@ -79,6 +80,7 @@ export function initHotkeys({ toast } = {}) {
     map[k] = combo;
     store(map);
     badge();
+    notify();
     toast && toast(`«${dlg.dataset.label}» ahora se activa con ${combo}.`);
     close();
   };
@@ -111,7 +113,7 @@ export function initHotkeys({ toast } = {}) {
   document.addEventListener('pointerdown', (e) => { if (dlg && !e.target.closest('.hk-dialog')) close(); }, true);
   // disparar los atajos (antes que los atajos propios de la app)
   window.addEventListener('keydown', (e) => {
-    if (dlg || MODS.has(e.key)) return;
+    if (dlg || MODS.has(e.key) || document.body.classList.contains('hk-capturing')) return;
     const t = e.target;
     const tag = (t && t.tagName) || '';
     if ((tag === 'INPUT' && !['checkbox', 'radio', 'range', 'button'].includes(t.type)) || tag === 'TEXTAREA' || tag === 'SELECT' || (t && t.isContentEditable)) return;
@@ -128,5 +130,16 @@ export function initHotkeys({ toast } = {}) {
   // los botones que se crean después (listas) también muestran su atajo
   const obs = new MutationObserver(() => { clearTimeout(badge.t); badge.t = setTimeout(() => { obs.disconnect(); badge(); obs.observe(document.body, { childList: true, subtree: true }); }, 60); });
   obs.observe(document.body, { childList: true, subtree: true });
-  return { get: () => ({ ...map }), clear: () => { map = {}; store(map); badge(); } };
+  const listeners = [];
+  notify = () => listeners.forEach((f) => f());
+  const changed = () => { store(map); badge(); notify(); };
+  return {
+    get: () => ({ ...map }),
+    clear: () => { map = {}; changed(); },
+    /** [{key, combo, label, found}] de los botones con atajo propio. */
+    list: () => Object.entries(map).map(([k, combo]) => { const el = findButton(k); return { key: k, combo, label: el ? label(el) : k.replace(/^(#|txt:|tool:|cam:|speed:)/, ''), found: !!el }; }),
+    /** Asigna (o quita con null) el atajo de un botón; la misma combinación se quita de los otros botones. */
+    set: (k, combo) => { if (combo) { for (const [o, c] of Object.entries(map)) if (c === combo && o !== k) delete map[o]; map[k] = combo; } else delete map[k]; changed(); },
+    onChange: (f) => listeners.push(f),
+  };
 }

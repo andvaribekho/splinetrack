@@ -38,7 +38,6 @@
         <h2>Entrada</h2>
         <div class="row gap">
           <button id="btnLoadImage" title="También puedes pegar una imagen con Ctrl+V">Cargar imagen…</button>
-          <button id="btnTestImage" title="Rasteriza el ejemplo elegido para probar el trazado por imagen">Imagen de prueba</button>
           <input id="fileImage" type="file" accept="image/*" hidden>
         </div>
         <div class="field">
@@ -83,7 +82,8 @@
         <h2>Modelo de referencia 3D</h2>
         <div class="row gap"><button id="btnRef3d">Importar FBX / GLB…</button><button id="btnRef3dRemove" disabled>Quitar</button></div>
         <input id="fileRef3d" type="file" accept=".fbx,.glb,.gltf" hidden>
-        <p class="hint" id="ref3dInfo"></p>
+        <p class="hint">Importa un .fbx o .glb (por ejemplo, una pista anterior de tu juego) para compararlo con la pista nueva. Se muestra como un solo objeto que puedes mover, pero no editar. Con «Seleccionar y mover», muévelo con el gizmo en la vista 3D o arrastrando su silueta en el mapa.</p>
+        <p class="meta" id="ref3dInfo"></p>
         <div id="ref3dBox" hidden>
           <div class="row gap wrap"><label class="check"><input type="checkbox" id="ref3dVisible"> Visible</label><label class="check"><input type="checkbox" id="ref3dShow2d"> Silueta en el mapa</label><label class="check"><input type="checkbox" id="ref3dLocked"> Bloquear</label></div>
           <div class="row gap wrap"><button id="btnRef3dSelect">Seleccionar y mover</button><button id="btnRef3dCenter">Centrar en la pista</button><button id="btnRef3dReset">Posición del archivo</button></div>
@@ -104,10 +104,6 @@
         <div class="field"><label>Largo de vuelta <span class="val" id="lapLengthVal"></span></label><input type="range" id="lapLength" min="300" max="3000" step="10"></div>
         <div class="field"><label>Ancho de pista <span class="val" id="widthVal"></span></label><input type="range" id="width" min="6" max="30" step="0.5"></div>
         <label class="check"><input type="checkbox" id="useImageWidth"> Usar ancho medido en la imagen</label>
-        <label class="check"><input type="checkbox" id="altWidthSame"> Atajos con el mismo ancho que la pista</label>
-        <div class="field" id="altWidthBox"><label>Ancho de los atajos <span class="val" id="altWidthVal"></span></label><input type="range" id="altWidth" min="3" max="30" step="0.5"></div>
-        <label class="check"><input type="checkbox" id="altInheritWidth"> Atajos con el ancho de la pista en la salida y la llegada</label>
-        <label class="check"><input type="checkbox" id="altFromCenter"> Atajos salen desde el eje de la pista (quedan bajo la pista)</label>
         <div class="field"><label>Detalle (m entre puntos de control) <span class="val" id="detailVal"></span></label><input type="range" id="detail" min="4" max="40" step="1"></div>
         <div class="field"><label>Suavizado del trazo <span class="val" id="sketchSmoothVal"></span></label><input type="range" id="sketchSmooth" min="0" max="12" step="1"></div>
         <label class="check"><input type="checkbox" id="closed" checked> Circuito cerrado</label>
@@ -246,7 +242,7 @@
         </div>
         <div class="field"><label>Repeticiones a lo largo <span class="val"><input type="number" id="trackTexRepsNum" min="1" step="1" style="width:72px"></span></label><input type="range" id="trackTexReps" min="1" max="1000" step="1"></div>
         <div class="field"><label>Opacidad de la textura (vistas 2D y 3D) <span class="val" id="trackTexOpacityVal"></span></label><input type="range" id="trackTexOpacity" min="0" max="1" step="0.01"></div>
-        <p class="hint" id="trackTexInfo"></p>
+        <p class="hint">Sin textura propia se usa una de asfalto; a lo ancho cubre la pista una vez. Baja la opacidad para ver debajo los colores por altura (solo en la vista 3D; se exporta con la textura).</p>
         <p class="hint">Cada atajo tiene su propia textura, camino de tierra y barrera: están en su tarjeta, en <b>Rutas alternativas</b>.</p>
         <h3 id="coveredTexHead">Textura de tramos cubiertos (túneles y bajo cruces)</h3>
         <div class="row gap">
@@ -277,7 +273,8 @@
         <div class="field"><label>Máximo de triángulos <span class="val"><input type="number" id="trackMaxTrisNum" min="200" step="500" style="width:84px"></span></label><input type="range" id="trackMaxTris" min="1000" max="300000" step="1000"></div>
         <div class="field" id="trackAdaptBox"><label>Optimización <span class="val" id="trackAdaptVal"></span></label><input type="range" id="trackAdapt" min="0" max="1" step="0.01">
           <div class="range-ends"><span>mínimo: curvas con algo más</span><span>máximo: rectas con mucho menos</span></div></div>
-        <p class="hint" id="trackMeshInfo"></p>
+        <p class="hint">Uniforme: secciones a distancia pareja. Optimizado: las curvas, los cambios de pendiente, el peralte y los cambios de ancho reciben más secciones; las rectas, menos. El mapeado UV sigue la distancia recorrida, así que la textura se ve igual con más o menos secciones. El tope de triángulos manda sobre la densidad.</p>
+        <p class="meta" id="trackMeshInfo"></p>
       </section>
 
       <section class="panel" data-panel="edges">
@@ -381,48 +378,8 @@
           <p class="hint" id="hillInfo"></p>
         </div>
         <h3 class="subhead">Túneles</h3>
-        <div class="field">
-          <label>Forma del túnel (general)</label>
-          <select id="tunnelShape">
-            <option value="rounded">Cuadrado con esquinas redondeadas</option>
-            <option value="square">Cuadrado</option>
-            <option value="circle">Círculo</option>
-            <option value="oval">Ovalado</option>
-          </select>
-        </div>
-        <div class="field"><label>Ancho del túnel <span class="val"><input type="number" id="tunnelWidthNum" min="4" step="0.5" style="width:66px"> m</span></label><input type="range" id="tunnelWidth" min="6" max="40" step="0.5"></div>
-        <div class="field"><label>Altura libre <span class="val" id="tunnelHeightVal"></span></label><input type="range" id="tunnelHeight" min="4" max="20" step="0.5"></div>
-        <div class="seg" id="tunnelMeshMode" role="group" aria-label="Reparto de la geometría de los túneles">
-          <button data-mode="uniform" title="Secciones a distancia pareja">Uniforme</button>
-          <button data-mode="optimized" title="Más secciones en curvas, cambios de pendiente y peralte; menos en las rectas">Optimizado</button>
-        </div>
-        <div class="field"><label>Densidad de polígonos <span class="val" id="tunnelDensityVal"></span></label><input type="range" id="tunnelDensity" min="1" max="100" step="1"></div>
-        <div class="field"><label>Máximo de triángulos por túnel <span class="val"><input type="number" id="tunnelMaxTrisNum" min="100" step="500" style="width:80px"></span></label><input type="range" id="tunnelMaxTris" min="500" max="150000" step="500"></div>
-        <div class="field" id="tunnelAdaptBox"><label>Optimización <span class="val" id="tunnelAdaptVal"></span></label><input type="range" id="tunnelAdapt" min="0" max="1" step="0.01">
-          <div class="range-ends"><span>mínimo: curvas con algo más</span><span>máximo: rectas con mucho menos</span></div></div>
-        <p class="hint">Forma, tipo, costado abierto, pilares y geometría son los valores generales: selecciona un túnel (clic en 3D o en su nombre) para darle los suyos.</p>
-        <div class="field">
-          <label>Tipo (general)</label>
-          <select id="tunnelType">
-            <option value="artificial">Artificial (sección regular)</option>
-            <option value="natural">Natural (caverna)</option>
-          </select>
-        </div>
-        <div class="field" id="caveBox"><label>Tamaño de la caverna <span class="val" id="caveSizeVal"></span></label><input type="range" id="caveSize" min="0" max="1" step="0.05">
-          <label class="check small" style="margin-top:4px"><input type="checkbox" id="caveRocks"> Rocas</label> <label class="check small" style="margin-top:4px"><input type="checkbox" id="caveStal"> Estalactitas</label></div>
-        <div class="field">
-          <label>Costado abierto (general)</label>
-          <select id="tunnelOpen">
-            <option value="none">Cerrado</option>
-            <option value="left">Abierto a la izquierda (con pilares)</option>
-            <option value="right">Abierto a la derecha (con pilares)</option>
-          </select>
-        </div>
-        <div class="field" id="pillarBox"><label>Pilares por túnel (general) <span class="val" id="tunnelPillarsVal"></span></label><input type="range" id="tunnelPillars" min="1" max="40" step="1"></div>
-        <div class="field"><label>Grosor del marco de la boca <span class="val" id="portalFrameVal"></span></label><input type="range" id="portalFrame" min="0.2" max="5" step="0.1"></div>
-        <div class="field"><label>Cuánto sobresale la boca <span class="val" id="portalDepthVal"></span></label><input type="range" id="portalDepth" min="0" max="5" step="0.1"></div>
-        <p class="hint" id="tunnelInfo"></p>
-        <div id="tunnelSelBox" class="item sel" hidden></div>
+        <p class="hint">Si un cerro cubre la pista lo suficiente, se crea un túnel (donde no alcanza, la pista pasa en trinchera). Cada túnel tiene sus propios parámetros: forma, tipo, medidas, caverna, costado abierto y pilares, bocas y geometría. Haz clic en el nombre de un túnel (aquí o en la vista 3D) para seleccionarlo y ver sus parámetros. Cada túnel exporta paredes, techo, veredas y dos bocas por separado.</p>
+        <div id="tunnelList"></div>
       </section>
 
       <section class="panel" data-panel="items">
@@ -638,6 +595,22 @@
         <button class="primary wide" id="btnExportFBX" style="margin-top:6px">Exportar escena 3D (.fbx)</button>
         <p class="hint" id="exportInfo"></p>
       </section>
+
+      <section class="panel" data-panel="settings">
+        <h2>Ajustes</h2>
+        <p class="hint">Estos ajustes son de la interfaz y se guardan en este navegador (no en el proyecto). Para cambiar un atajo, haz clic sobre su tecla y presiona la tecla o combinación (Ctrl, Alt, Shift + tecla); Esc cancela. Si la combinación ya la usaba otra acción o un botón, se le quita a ese. También puedes darle un atajo a cualquier botón con clic derecho sobre él.</p>
+        <h3 class="subhead">Tamaño del texto</h3>
+        <div class="field"><label>Tamaño del texto <span class="val" id="uiTextSizeVal"></span></label><input type="range" id="uiTextSize" min="80" max="150" step="5">
+          <div class="range-ends"><span>80 %</span><span>150 %</span></div></div>
+        <div class="row gap"><button id="btnTextSizeReset" class="small">Restablecer (100 %)</button></div>
+        <h3 class="subhead">Atajos de teclado</h3>
+        <div id="keymapList" class="keymap"></div>
+        <h4 class="mini">Atajos de botones</h4>
+        <div id="btnHotkeyList" class="keymap"></div>
+        <h4 class="mini">Fijos</h4>
+        <div id="fixedKeyList" class="keymap"></div>
+        <div class="row gap" style="margin-top:8px"><button id="btnKeymapReset">Restablecer los atajos por defecto</button></div>
+      </section>
     </aside>
 
     <main class="workspace">
@@ -684,12 +657,12 @@
           </span>
           <span id="hillBox" class="row" hidden>
             <label class="small">Altura <input type="range" id="hillHeight" min="2" max="150" step="1" style="width:90px"> <span class="val" id="hillHeightVal"></span></label>
-            <select id="hillHard" style="font-size:12px"><option value="soft">Colina suave</option><option value="hard">Pared rocosa</option></select>
+            <select id="hillHard" style="font-size:calc(12px * var(--fs, 1))"><option value="soft">Colina suave</option><option value="hard">Pared rocosa</option></select>
             <label class="small">Cima plana <input type="range" id="hillFlatBar" min="0" max="1" step="0.05" style="width:70px"></label>
             <span class="small muted" title="Sobre un cerro existente: arrastrar pinta un cerro nuevo encima; con Ctrl agranda (o borra) el cerro original. Shift + arrastrar navega">sobre un cerro: nuevo encima · Ctrl = el original</span>
           </span>
           <span id="cutBox" class="row" hidden>
-            <select id="cutWalls" style="font-size:12px" title="Tipo de paredes de la zanja"><option value="art">Paredes artificiales (lisas)</option><option value="nat">Paredes naturales (rocosas)</option></select>
+            <select id="cutWalls" style="font-size:calc(12px * var(--fs, 1))" title="Tipo de paredes de la zanja"><option value="art">Paredes artificiales (lisas)</option><option value="nat">Paredes naturales (rocosas)</option></select>
             <label class="small" title="Subdivisiones extra del terreno en la zanja y sus paredes">Dens. paredes <input type="range" id="cutDensity" min="0" max="6" step="1" value="2" style="width:60px"> <span class="val" id="cutDensityVal"></span></label>
             <button id="btnCutAdd" class="primary" title="Convierte los puntos seleccionados (seguidos, ruta principal) en una sección socavada">Socavar selección</button>
             <span class="small muted">selecciona 2+ puntos seguidos y bájalos: el terreno se abre en una zanja</span>
@@ -703,8 +676,8 @@
               <label class="small">fin <input type="number" id="helixR1" min="5" max="1000" step="1" value="30" style="width:54px"></label>
             </span>
             <label class="small" title="Cuánto sube (o baja) la pista en cada giro: la separación entre giros apilados">Z por giro <input type="range" id="helixPitch" min="2" max="20" step="0.5" value="7" style="width:70px"> <span class="val" id="helixPitchVal"></span></label>
-            <select id="helixDir" style="font-size:12px"><option value="up">Sube</option><option value="down">Baja</option></select>
-            <select id="helixSide" style="font-size:12px" title="Hacia qué lado gira"><option value="auto">Hacia afuera</option><option value="left">Izquierda</option><option value="right">Derecha</option></select>
+            <select id="helixDir" style="font-size:calc(12px * var(--fs, 1))"><option value="up">Sube</option><option value="down">Baja</option></select>
+            <select id="helixSide" style="font-size:calc(12px * var(--fs, 1))" title="Hacia qué lado gira"><option value="auto">Hacia afuera</option><option value="left">Izquierda</option><option value="right">Derecha</option></select>
             <span class="small edit-live" id="helixEditing" hidden>editando el helix seleccionado (en vivo)</span>
             <button id="btnHelixAdd" class="primary" title="Añade el helix en los puntos seleccionados (el resto de la pista no se mueve)">Añadir helix</button>
             <span class="small muted" id="helixInfo"></span>
@@ -730,16 +703,16 @@
             <label class="small" title="Distancia vertical entre la pasada de abajo y la de arriba en el cruce">Separación Z <input type="range" id="loopSep" min="2" max="20" step="0.5" value="7" style="width:80px"> <span class="val" id="loopSepVal"></span></label>
             <label class="small" title="Radio de cada vuelta en metros (0 o vacío = automático, según el tramo elegido y el ancho de la pista)">Radio <input type="range" id="loopRadiusR" min="0" max="150" step="1" value="0" style="width:90px"> <input type="number" id="loopRadius" min="0" max="150" step="1" placeholder="auto" style="width:62px"> m</label>
             <label class="small" title="Tope de la barra del radio (y del número), en metros">máx. <input type="number" id="loopRadiusMax" min="5" max="5000" step="5" value="150" style="width:58px"></label>
-            <select id="loopSide" style="font-size:12px" title="Hacia qué lado sale el rizo"><option value="auto">Hacia afuera</option><option value="left">Izquierda</option><option value="right">Derecha</option></select>
+            <select id="loopSide" style="font-size:calc(12px * var(--fs, 1))" title="Hacia qué lado sale el rizo"><option value="auto">Hacia afuera</option><option value="left">Izquierda</option><option value="right">Derecha</option></select>
             <span class="small edit-live" id="loopEditing" hidden>editando el rizo seleccionado (en vivo)</span>
             <button id="btnLoopAdd" class="primary" title="Añade el rizo en los puntos seleccionados (el resto de la pista no se mueve)">Añadir rizo</button>
             <span class="small muted" id="loopInfo"></span>
           </span>
           <span id="riverBox" class="row" hidden>
-            <select id="riverMode" style="font-size:12px" title="Geometría del río o cascada nuevo"><option value="surface">Posado</option><option value="carved">Socavado</option></select>
+            <select id="riverMode" style="font-size:calc(12px * var(--fs, 1))" title="Geometría del río o cascada nuevo"><option value="surface">Posado</option><option value="carved">Socavado</option></select>
             <span id="riverCarvedBox" class="row" style="gap:6px">
               <label class="small">Prof. <input type="range" id="riverDepth" min="0.2" max="20" step="0.1" style="width:70px"> <span class="val" id="riverDepthVal"></span></label>
-              <select id="riverWalls" style="font-size:12px" title="Paredes del cauce"><option value="smooth">Paredes suaves</option><option value="rock">Paredes de roca</option></select>
+              <select id="riverWalls" style="font-size:calc(12px * var(--fs, 1))" title="Paredes del cauce"><option value="smooth">Paredes suaves</option><option value="rock">Paredes de roca</option></select>
               <label class="small" title="Subdivisiones extra de las paredes socavadas">Dens. paredes <input type="range" id="riverWallSubdiv" min="0" max="6" step="1" style="width:56px"> <span class="val" id="riverWallSubdivVal"></span></label>
             </span>
             <span class="small muted">cerro seleccionado = cascada</span>

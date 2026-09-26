@@ -95,7 +95,7 @@ export function initInstructions() {
     btn.className = 'pbtn instr-btn';
     btn.dataset.noicon = '';
     btn.innerHTML = BOOK;
-    btn.title = 'Instrucciones de esta sección';
+    btn.title = 'Click para abrir instrucciones';
     btn.setAttribute('aria-label', 'Instrucciones');
     h2.appendChild(btn);
     btn.addEventListener('pointerdown', (e) => e.stopPropagation()); // no arrastra la ventana
