@@ -131,11 +131,12 @@ function trackSamples(layout, elev, sp = {}) {
     const e = elev.routes[k];
     for (let i = 0; i < r.n; i++) {
       const low = e.z[i] - Math.abs(Math.sin(e.roll[i])) * r.w[i] / 2;
-      const bridge = !!(r.bridges && r.bridges.some((b) => { const d = r.closed ? (((r.s[i] - b.s0) % r.L) + r.L) % r.L : r.s[i] - b.s0; return d >= 0 && d <= b.s1 - b.s0; }));
+      const bridge = !!(r.bridges && r.bridges.some((b) => { if (b.type === 'track') return false; const d = r.closed ? (((r.s[i] - b.s0) % r.L) + r.L) % r.L : r.s[i] - b.s0; return d >= 0 && d <= b.s1 - b.s0; }));
       const X = XR[k];
       // sección socavada: como un tramo suspendido (el terreno no se adapta), pero además la pista socava el terreno
       const cut = sp.cutRanges && sp.cutRanges.length ? cutZoneAt(layout, k, r.s[i], sp.cutRanges) : null;
-      const susp = !!cut || !!(sp.suspRanges && isCovered(layout, k, r.s[i], sp.suspRanges)); // tramo suspendido: el terreno no se adapta
+      // puente o tramo suspendido: el terreno no se adapta (queda su relieve natural; solo se baja si tocaría la calzada)
+      const susp = !!cut || bridge || !!(sp.suspRanges && isCovered(layout, k, r.s[i], sp.suspRanges));
       const uL = r.w[i] / 2 + X.left, uR = r.w[i] / 2 + X.right; // calzada + camino de tierra + barrera
       // tramo elevado con suelo guardado: el terreno bajo él queda a esa altura (no sigue a la pista al subirla)
       const gz = susp && !cut ? suspGroundAt(layout, k, r.s[i], sp.suspRanges) : null;
@@ -376,7 +377,7 @@ export function buildTrackMesh(layout, elev, spIn = {}) {
         tgt.push(a, d, b, b, d, e2);
       }
     }
-    return { name: r.name, k, alt: r.kind === 'alt', positions: new Float32Array(pos), uvs: new Float32Array(uv), indices: idx, coveredIdx: cIdx, suspIdx: sIdx, bridgeIdx: bIdx, bridgeNo: (r.bridges || []).map((b, k) => (b.idx ?? k) + 1) };
+    return { name: r.name, k, alt: r.kind === 'alt', positions: new Float32Array(pos), uvs: new Float32Array(uv), indices: idx, coveredIdx: cIdx, suspIdx: sIdx, bridgeIdx: bIdx, bridgeNo: (r.bridges || []).map((b, k) => (b.idx ?? k) + 1), bridgeTy: (r.bridges || []).map((b) => b.type || 'bridge') };
   });
   // malla combinada (vista previa), en grupos de material: pista, atajos, tramos cubiertos, tableros de puente
   const nPos = parts.reduce((a, p) => a + p.positions.length, 0);
@@ -384,6 +385,7 @@ export function buildTrackMesh(layout, elev, spIn = {}) {
   const G = { main: [], alt: [], covered: [], bridge: [], susp: [] };
   let vo = 0;
   const altRanges = []; // tramo de cada atajo dentro del grupo de atajos: [{k, start, count}] (relativo al grupo)
+  const bridgeRanges = []; // tablero de cada puente dentro del grupo de puentes (textura propia de cada puente)
   for (const p of parts) {
     positions.set(p.positions, vo * 3);
     uvs.set(p.uvs, vo * 2);
@@ -391,7 +393,7 @@ export function buildTrackMesh(layout, elev, spIn = {}) {
     for (const i of p.indices) G[p.alt ? 'alt' : 'main'].push(i + vo);
     for (const i of p.coveredIdx) G.covered.push(i + vo);
     for (const i of p.suspIdx) G.susp.push(i + vo);
-    for (const bi of p.bridgeIdx) for (const i of bi) G.bridge.push(i + vo);
+    p.bridgeIdx.forEach((bi, kb) => { if (bi.length) bridgeRanges.push({ bridge: p.bridgeNo[kb] - 1, start: G.bridge.length, count: bi.length }); for (const i of bi) G.bridge.push(i + vo); });
     vo += p.positions.length / 3;
   }
   const indices = [...G.main, ...G.alt, ...G.covered, ...G.bridge, ...G.susp];
@@ -404,6 +406,7 @@ export function buildTrackMesh(layout, elev, spIn = {}) {
   ];
   const trackCount = G.main.length + G.alt.length + G.covered.length + G.susp.length;
   const altGroups = altRanges.map((a) => ({ k: a.k, start: G.main.length + a.start, count: a.count }));
+  const bridgeGroups = bridgeRanges.map((b) => ({ bridge: b.bridge, start: G.main.length + G.alt.length + G.covered.length + b.start, count: b.count }));
   // tramos cubiertos como objetos propios (exportación)
   const coveredParts = [];
   for (const p of parts) if (p.coveredIdx.length) coveredParts.push({ name: `${p.name}_cubierto`, alt: p.alt, ...compactMesh(p.positions, p.uvs, p.coveredIdx) });
@@ -413,13 +416,13 @@ export function buildTrackMesh(layout, elev, spIn = {}) {
   // tableros como objetos propios (exportación), con los vértices compactados
   const bridgeParts = [];
   for (const p of parts) {
-    p.bridgeIdx.forEach((bi, k) => { if (bi.length) bridgeParts.push({ name: `puente_${String(p.bridgeNo[k]).padStart(2, '0')}`, bridge: p.bridgeNo[k] - 1, ...compactMesh(p.positions, p.uvs, bi) }); });
+    p.bridgeIdx.forEach((bi, k) => { if (bi.length) bridgeParts.push({ name: `${p.bridgeTy[k] === 'track' ? 'tramo' : 'puente'}_${String(p.bridgeNo[k]).padStart(2, '0')}`, type: p.bridgeTy[k], bridge: p.bridgeNo[k] - 1, ...compactMesh(p.positions, p.uvs, bi) }); });
   }
   for (const p of parts) {
     if (p.bridgeIdx.some((b) => b.length) || p.coveredIdx.length || p.suspIdx.length) Object.assign(p, compactMesh(p.positions, p.uvs, p.indices));
-    delete p.bridgeIdx; delete p.bridgeNo; delete p.coveredIdx; delete p.suspIdx;
+    delete p.bridgeIdx; delete p.bridgeNo; delete p.bridgeTy; delete p.coveredIdx; delete p.suspIdx;
   }
-  return { positions, uvs, indices, groups, altGroups, trackCount, parts, coveredParts, bridgeParts, suspParts, rows: rowLists.map((q) => q.length) };
+  return { positions, uvs, indices, groups, altGroups, bridgeGroups, trackCount, parts, coveredParts, bridgeParts, suspParts, rows: rowLists.map((q) => q.length) };
 }
 
 /** Deja solo los vértices usados por los índices. */
@@ -776,9 +779,9 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
   };
   const heightAt0 = anySusp ? (x, y, rho) => {
     const zone = zoneAt(x, y, rho, null, 1);
-    if (zone < Infinity) return zone - gap;
-    let z = heightNat(x, y, rho);
     const zs = zoneAt(x, y, rho, null, 2);
+    if (zone < Infinity) return Math.min(zone, zs) - gap; // junto al extremo de un puente: tampoco sobre su tablero
+    let z = heightNat(x, y, rho);
     if (zs < Infinity) z = Math.min(z, zs - gap);
     if (anyCut) { const ci = cutInfo(x, y); if (ci.z < z) z = ci.z; }
     return z;
@@ -1806,6 +1809,7 @@ export function bridgePillars(layout, elev, terrain = null, sp = null) {
   const out = [];
   const r = layout.routes[0], e = elev.routes[0];
   (r.bridges || []).forEach((b, bi) => {
+    if (b.type === 'track') return; // los tramos de pista no llevan pilares
     const len = b.s1 - b.s0;
     const n = Math.max(1, Math.round(len / 18));
     for (let q = 1; q < n || (n === 1 && q === 1); q++) {

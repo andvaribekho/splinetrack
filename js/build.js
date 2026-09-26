@@ -144,9 +144,11 @@ export function buildLayout(project, gpIn = {}) {
     };
     let shifted = false;
     const trans = Math.max(4, gp.width * 0.8); // m de transición
-    project.main.bridges.forEach((b, bIndex) => {
-      if (!b || !b.a || !b.b || !(b.w > 0)) return;
-      const ja = nearestUni(b.a), jb = nearestUni(b.b);
+    project.main.bridges.forEach((b0, bIndex) => {
+      if (!b0 || !b0.a || !b0.b || !(b0.w > 0 || b0.sameWidth)) return;
+      const ja = nearestUni(b0.a), jb = nearestUni(b0.b);
+      // «mismo ancho que la pista»: el puente toma el ancho de la pista (sin transiciones ni desplazamiento)
+      const b = b0.sameWidth ? { ...b0, w: base[ja], off: 0 } : b0;
       let f = closed ? (jb - ja + n) % n : jb - ja, j0 = ja;
       if (closed && b.mid) {
         // tramo convertido en puente: el sentido que pasa por su punto intermedio (puede ser el tramo largo)
@@ -176,7 +178,7 @@ export function buildLayout(project, gpIn = {}) {
         }
         mainUni[i] = [px, py, Math.abs(b.w - base[i]) > 1e-6 ? w : mainUni[i][2]];
       }
-      bridges.push({ i0: j0, len: f, w: b.w, off: clamp(+b.off || 0, -1, 1), idx: bIndex, pa: null, pb: null });
+      bridges.push({ i0: j0, len: f, w: b.w, off: clamp(+b.off || 0, -1, 1), idx: bIndex, pa: null, pb: null, type: b.type === 'track' ? 'track' : 'bridge', dirt: b.dirt == null ? (b.type == null ? false : null) : !!b.dirt, barrier: b.barrier == null ? (b.type == null ? true : null) : b.barrier !== false, dirtSide: b.dirtSide || 'both', barrierSide: b.barrierSide || 'both', uid: b.uid || null });
     });
     // con desplazamiento, el eje cambió: se vuelve a muestrear uniforme y se ubica el tramo de cada puente
     if (shifted) {
@@ -208,7 +210,7 @@ export function buildLayout(project, gpIn = {}) {
     const s0 = main.s[ia];
     let s1 = closed ? main.s[ib] : main.s[Math.min(nn - 1, b.i0 + b.len)];
     if (closed && s1 < s0) s1 += main.L;
-    return { s0, s1, w: b.w, off: b.off || 0, idx: b.idx };
+    return { s0, s1, w: b.w, off: b.off || 0, idx: b.idx, type: b.type, dirt: b.dirt, barrier: b.barrier, dirtSide: b.dirtSide, barrierSide: b.barrierSide, uid: b.uid }; // type: 'track' (tramo de pista) | 'bridge' (puente); dirt/barrier null = como la pista // camino de tierra (no por defecto) y barrera (sí) propios
   });
   main.id = 0;
   main.kind = 'main';
