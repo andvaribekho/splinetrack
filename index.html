@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Track Spline Generator v0.3</title>
+  <title>Track Spline Generator</title>
   <link rel="stylesheet" href="styles.css">
   <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.3</span></div>
+    <div class="brand">Track Spline Generator</div>
     <div class="top-actions">
       <select id="sampleSelect" title="Cargar un layout de ejemplo">
         <option value="">Ejemplos…</option>
@@ -146,17 +146,13 @@
           <div class="row gap"><button id="btnFork">Bifurcar selección</button></div>
         </div>
         <div class="meta" id="forkInfo"></div>
-      </section>
-
-      <section class="panel" data-panel="bridges">
-        <h2>Puentes</h2>
-        <p class="hint">Dos formas de crear un puente (con «Editar puntos»): selecciona con Shift varios puntos seguidos de la ruta principal y aprieta «Puente» (barra) o «Crear puente»: ese tramo se vuelve puente, con la misma forma. O abre el circuito borrando un punto con «Abrir» activado, selecciona los dos extremos y crea el puente: los une y cierra el circuito. Si queda en altura, lleva pilares.</p>
-        <p class="hint">Cada puente se edita por separado en su tarjeta (▾ la colapsa): ancho, desplazamiento lateral, material del piso, camino de tierra (desactivado por defecto) y barrera de contención (activada por defecto), cada uno con su propio material. La barrera del puente se une con la de la pista en los extremos. Se exportan en el grupo <code>puentes</code> (<code>puente_NN</code>, material <code>puente_NN</code>) y en <code>bordes</code> (<code>camino_tierra_puente_NN_…</code>, <code>barrera_puente_NN_…</code>).</p>
+        <h3 class="subhead">Puente</h3>
         <div id="bridgeControls">
-          <div class="field"><label>Ancho del puente nuevo <span class="val"><input type="number" id="bridgeWidthNum" min="2" max="80" step="0.5" style="width:60px"> m</span></label><input type="range" id="bridgeWidth" min="3" max="40" step="0.5"></div>
+          <div class="field"><label>Ancho del puente <span class="val"><input type="number" id="bridgeWidthNum" min="2" max="80" step="0.5" style="width:60px"> m</span></label><input type="range" id="bridgeWidth" min="3" max="40" step="0.5"></div>
           <div class="row gap"><button id="btnBridge">Crear puente</button></div>
         </div>
         <div class="meta" id="bridgeInfo"></div>
+        <h3 class="subhead">Puentes</h3>
         <div id="bridgeList" class="list"></div>
       </section>
 
@@ -253,6 +249,14 @@
         </div>
         <input id="fileCoveredTex" type="file" accept="image/*" hidden>
         <p class="hint">Por defecto, la textura de la pista un 20 % más oscura. Se exportan como <code>&lt;ruta&gt;_cubierto</code> con el material <code>pista_cubierta</code>; cada atajo usa <code>pista_atajo</code> o, con textura propia, <code>pista_&lt;atajo&gt;</code>.</p>
+        <h3 id="bridgeTexHead">Textura de los puentes</h3>
+        <div class="row gap">
+          <button id="btnBridgeTex">Cargar textura…</button>
+          <button id="btnBridgeTexRemove" disabled>Por defecto</button>
+          <img id="bridgeTexThumb" class="thumb" hidden alt="">
+        </div>
+        <input id="fileBridgeTex" type="file" accept="image/*" hidden>
+        <p class="hint">El tablero de cada puente (el tramo con el ancho del puente) usa esta textura, café por defecto; las transiciones que se angostan usan la de la pista. Mismo tiling que la pista. Se exporta como <code>puentes/puente_NN</code>.</p>
       </section>
 
       <section class="panel" data-panel="trackmesh">
@@ -428,6 +432,21 @@
         <div class="field"><label>Repetición de la textura <span class="val"><input type="number" id="cutWallTileNum" min="0.5" step="0.5" style="width:56px"> m</span></label><input type="range" id="cutWallTile" min="0.5" max="30" step="0.5"></div>
       </section>
 
+      <section class="panel" data-panel="susp">
+        <h2>Tramos suspendidos</h2>
+        <p class="hint">Selecciona dos o más puntos seguidos de la ruta principal (Editar puntos) y pulsa <b>Terreno elevado</b> en la barra superior. Ahí el terreno no se adapta a la pista (solo se baja si llegaría a tocarla), así que puedes dejarla en el aire subiéndola con el <b>perfil de tramo</b> o las alturas de sus puntos. Cada tramo lleva pilares hasta el suelo y eliges si tiene camino de tierra y barreras. Se exportan como <code>ruta_principal_suspendido</code>, sus bordes como <code>…_suspendido_izq/der</code> y los pilares en el grupo <code>suspendidos</code>.</p>
+        <div class="row gap"><button id="btnSuspTool">Elevar los puntos seleccionados</button></div>
+        <div id="suspZoneList" class="list"></div>
+        <h3 class="subhead">Texturas de los tramos suspendidos</h3>
+        <p class="hint">Por defecto, las mismas de la pista, su barrera y su camino de tierra.</p>
+        <div class="row gap"><span class="small" style="min-width:74px">Pista</span><button id="suspTexBtn">Cargar textura…</button><button id="suspTexRemove" disabled>Como la pista</button><img id="suspTexThumb" class="thumb" hidden alt=""></div>
+        <input id="suspTexFile" type="file" accept="image/*" hidden>
+        <div class="row gap" style="margin-top:6px"><span class="small" style="min-width:74px">Barrera</span><button id="suspBarrierTexBtn">Cargar textura…</button><button id="suspBarrierTexRemove" disabled>Como la pista</button><img id="suspBarrierTexThumb" class="thumb" hidden alt=""></div>
+        <input id="suspBarrierTexFile" type="file" accept="image/*" hidden>
+        <div class="row gap" style="margin-top:6px"><span class="small" style="min-width:74px">Camino tierra</span><button id="suspDirtTexBtn">Cargar textura…</button><button id="suspDirtTexRemove" disabled>Como la pista</button><img id="suspDirtTexThumb" class="thumb" hidden alt=""></div>
+        <input id="suspDirtTexFile" type="file" accept="image/*" hidden>
+      </section>
+
       <section class="panel" data-panel="rivers">
         <h2>Ríos y cascadas <span class="badge" id="riverCount">0</span></h2>
         <p class="hint">Con <b>Ríos y cascadas</b> (barra superior) pintas ríos sobre el terreno; con un cerro seleccionado, lo que pintes sobre él es una cascada de ese cerro. Si empiezas sobre un río, lo extiendes, y si el trazo se abre, se bifurca. <b>Posado</b>: solo el agua sobre la superficie. <b>Socavado</b>: la superficie se hunde (profundidad, paredes suaves o de roca y su densidad de geometría) y el agua queda dentro del cauce. Alt o clic derecho borra.</p>
@@ -594,6 +613,7 @@
           <button data-tool="paint" title="Pinta zonas del terreno (o del cerro seleccionado) que tendrán más polígonos (Alt o clic derecho borra)">Pintar subdivisión</button>
           <button data-tool="sculpt" title="Esculpe el terreno: clic izquierdo eleva, clic derecho hunde (en el mapa o en la vista 3D). [ y ] cambian el pincel">Esculpir relieve</button>
           <button data-tool="river" title="Pinta ríos sobre el terreno; con un cerro seleccionado, lo que pintes sobre él es una cascada. Empezar sobre un río lo extiende (y se bifurca). Alt o clic derecho borra">Ríos y cascadas</button>
+          <button id="btnSusp" title="Terreno elevado: los puntos seleccionados (seguidos, ruta principal) forman un tramo suspendido; el terreno no se adapta a él y lleva pilares hasta el suelo">Terreno elevado</button>
           <button id="btnBankTop" title="Peralte: lleva a sus parámetros en la barra lateral">Peralte</button>
           <button data-tool="flat" title="Arrastra sobre la pista para marcar un tramo plano">Zona plana</button>
           <span class="sep"></span>

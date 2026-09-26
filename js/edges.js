@@ -17,11 +17,10 @@ function inRanges(r, k, sv, ranges) {
   }
   return false;
 }
-/** Puente (de r.bridges) que contiene la posición s, o null. */
-function bridgeAt(r, sv) {
-  if (!r.bridges) return null;
-  for (const b of r.bridges) { const d = r.closed ? (((sv - b.s0) % r.L) + r.L) % r.L : sv - b.s0; if (d >= -1e-6 && d <= b.s1 - b.s0 + 1e-6) return b; }
-  return null;
+function inBridge(r, sv) {
+  if (!r.bridges) return false;
+  for (const b of r.bridges) { const d = r.closed ? (((sv - b.s0) % r.L) + r.L) % r.L : sv - b.s0; if (d >= -1e-6 && d <= b.s1 - b.s0 + 1e-6) return true; }
+  return false;
 }
 
 /**
@@ -37,8 +36,7 @@ export function buildEdgeMeshes(layout, elev, spIn = {}, opts = {}) {
   const wants = (P) => ({ dirt: P.dirtSide !== 'none' && P.dirtWidth > 0, bar: P.barrierSide !== 'none' && P.barrierHeight > 0 });
   const PR = layout.routes.map((r) => edgeParams(sp, r)); // cada atajo con sus propios parámetros
   const WR = PR.map(wants);
-  const bridgeEdges = (r) => (r.bridges || []).some((b) => b.dirt || b.barrier !== false);
-  if (!WR.some((w) => w.dirt || w.bar) && !(sp.suspRanges || []).some((z) => z.dirt || z.barrier) && !layout.routes.some(bridgeEdges)) return res;
+  if (!WR.some((w) => w.dirt || w.bar) && !(sp.suspRanges || []).some((z) => z.dirt || z.barrier)) return res;
   const skip = opts.skip || [];
   const rowsAll = trackRows(layout, elev, sp);
   const skirt = sp.skirts && sp.terrain ? sp.terrainGap + 0.8 : 0;
@@ -81,7 +79,7 @@ export function buildEdgeMeshes(layout, elev, spIn = {}, opts = {}) {
     const isAlt = r.kind === 'alt';
     const P = PR[k], Wt = WR[k];
     const hasSusp = susp.some((z) => z.k === k && (z.dirt || z.barrier));
-    if (!Wt.dirt && !Wt.bar && !hasSusp && !bridgeEdges(r)) return;
+    if (!Wt.dirt && !Wt.bar && !hasSusp) return;
     const dw = Math.max(0, P.dirtWidth || 3), bh = P.barrierHeight > 0 ? P.barrierHeight : 0.8;
     const bt = Math.max(0, P.barrierThick ?? 0.25), plane = bt < 0.01; // grosor 0: plano de una cara (mira a la calzada)
     const dTile = Math.max(0.5, P.dirtTile || 4), bTile = Math.max(0.5, P.barrierTile || 4);
@@ -98,7 +96,6 @@ export function buildEdgeMeshes(layout, elev, spIn = {}, opts = {}) {
     const at = (F, u, v = 0) => [F.x + F.L[0] * u, F.y + F.L[1] * u, F.z + F.L[2] * u + v];
     const tunnelAt = frames.map((F) => inRanges(r, k, F.s, skip));
     const suspF = frames.map((F) => suspAt(r, k, F.s));
-    const brF = frames.map((F) => bridgeAt(r, F.s)); // puentes: camino de tierra y barrera propios (a ambos lados)
     for (const side of [1, -1]) {
       const sideName = side > 0 ? 'izq' : 'der';
       const sideKey = side > 0 ? 'left' : 'right';
@@ -106,9 +103,8 @@ export function buildEdgeMeshes(layout, elev, spIn = {}, opts = {}) {
       // tiene de ese lado, van a ambos lados con las medidas de la ruta)
       const routeDirt = Wt.dirt && has(P.dirtSide, sideKey), routeBar = Wt.bar && has(P.barrierSide, sideKey);
       const onFor = (z, want, routeHas, routeSide) => (z ? !!want && (routeHas || routeSide === 'none' || !routeSide) : routeHas);
-      // en un puente: su camino de tierra y su barrera, del lado elegido (ambos, izquierda o derecha)
-      const dOn = frames.map((F, a) => (brF[a] ? !!brF[a].dirt && has(brF[a].dirtSide || 'both', sideKey) : onFor(suspF[a], suspF[a] && suspF[a].dirt, routeDirt, P.dirtSide)));
-      const bOn = frames.map((F, a) => (brF[a] ? brF[a].barrier !== false && has(brF[a].barrierSide || 'both', sideKey) : onFor(suspF[a], suspF[a] && suspF[a].barrier, routeBar, P.barrierSide)));
+      const dOn = frames.map((F, a) => onFor(suspF[a], suspF[a] && suspF[a].dirt, routeDirt, P.dirtSide));
+      const bOn = frames.map((F, a) => onFor(suspF[a], suspF[a] && suspF[a].barrier, routeBar, P.barrierSide));
       if (!dOn.some(Boolean) && !bOn.some(Boolean)) continue;
       // tramo a tramo: ¿se dibuja?
       const segOk = (a, b, wOut) => {
@@ -123,14 +119,10 @@ export function buildEdgeMeshes(layout, elev, spIn = {}, opts = {}) {
       };
       // un tramo es «suspendido» si su punto medio cae en un tramo suspendido (texturas propias)
       const segSusp = (a) => !!suspAt(r, k, (frames[a].s + frames[a + 1].s) / 2);
-      // tramo de puente: su punto medio cae en un puente (malla y material propios del puente)
-      const segBridge = (a) => bridgeAt(r, (frames[a].s + frames[a + 1].s) / 2);
-      // ancho del camino de tierra en cada fila (en un puente, solo si el puente lo lleva)
-      const dAt = frames.map((F, a) => (dOn[a] ? dw : 0));
-      // índices por grupo: pista, tramos suspendidos y cada puente
-      const groupOf = (a) => { const b = segBridge(a); return b ? `b${b.idx}` : segSusp(a) ? 's' : 'n'; };
+      // ancho del camino de tierra en cada fila (0 sobre los tableros de puente)
+      const dAt = frames.map((F, a) => (dOn[a] && !inBridge(r, F.s) ? dw : 0));
       if (dAt.some((w) => w > 0)) {
-        const pos = [], uv = [], G = {};
+        const pos = [], uv = [], idxN = [], idxS = [];
         frames.forEach((F, a) => {
           const w = dAt[a];
           const p0 = at(F, side * F.hw), p1 = at(F, side * (F.hw + w));
@@ -140,11 +132,11 @@ export function buildEdgeMeshes(layout, elev, spIn = {}, opts = {}) {
           if (skirt) { pos.push(p1[0] + F.lx * side * 0.2, p1[1] + F.ly * side * 0.2, p1[2] - skirt); uv.push(1.05, v); }
         });
         const per = skirt ? 3 : 2;
+        const segs = [], segsS = [];
         for (let a = 0; a < frames.length - 1; a++) {
           if (dAt[a] <= 0 || dAt[a + 1] <= 0 || !segOk(a, a + 1, (dAt[a] + dAt[a + 1]) / 2)) continue;
-          const gk = groupOf(a), sus = gk !== 'n'; // (sin faldón en tramos suspendidos ni en puentes)
-          const grp = G[gk] || (G[gk] = { idx: [], segs: [] }), idx = grp.idx;
-          grp.segs.push(a);
+          const sus = segSusp(a), idx = sus ? idxS : idxN;
+          (sus ? segsS : segs).push(a);
           const i0 = a * per, j0 = (a + 1) * per;
           // normales hacia arriba
           if (side < 0) idx.push(i0, i0 + 1, j0, i0 + 1, j0 + 1, j0);
@@ -155,18 +147,13 @@ export function buildEdgeMeshes(layout, elev, spIn = {}, opts = {}) {
           }
         }
         const P32 = new Float32Array(pos), U32 = new Float32Array(uv);
-        for (const [gk, grp] of Object.entries(G)) {
-          if (!grp.idx.length) continue;
-          const bi = gk[0] === 'b' ? +gk.slice(1) : null;
-          const name = bi != null ? `camino_tierra_puente_${String(bi + 1).padStart(2, '0')}_${sideName}` : gk === 's' ? `camino_tierra_${r.name}_suspendido_${sideName}` : `camino_tierra_${r.name}_${sideName}`;
-          res.dirt.push({ name, k, side, alt: isAlt, susp: gk === 's', bridge: bi, positions: P32, uvs: U32, indices: grp.idx, segs: grp.segs, per });
-          res.dirtTris += grp.idx.length / 3;
-        }
+        if (idxN.length) { res.dirt.push({ name: `camino_tierra_${r.name}_${sideName}`, k, side, alt: isAlt, positions: P32, uvs: U32, indices: idxN, segs, per }); res.dirtTris += idxN.length / 3; }
+        if (idxS.length) { res.dirt.push({ name: `camino_tierra_${r.name}_suspendido_${sideName}`, k, side, alt: isAlt, susp: true, positions: P32, uvs: U32, indices: idxS, segs: segsS, per }); res.dirtTris += idxS.length / 3; }
       }
       if (bOn.some(Boolean)) {
         // barrera: cara interior, tapa y cara exterior; nace donde termina la calzada o el camino de tierra.
         // Con grosor 0 es solo la cara interior (plano de una cara, con la normal hacia la calzada).
-        const pos = [], uv = [], G = {};
+        const pos = [], uv = [], idxN = [], idxS = [];
         const vTop = bt / Math.max(0.1, bh + bt * 2); // la tapa ocupa una franja fina de la textura
         frames.forEach((F, a) => {
           const off = F.hw + dAt[a] + 0.03;
@@ -174,20 +161,20 @@ export function buildEdgeMeshes(layout, elev, spIn = {}, opts = {}) {
           const ox = F.lx * side * bt, oy = F.ly * side * bt; // grosor horizontal hacia afuera
           const u = F.s / bTile;
           const zb = b0[2], zt = b0[2] + bh;
-          const sk = suspF[a] || brF[a] ? 0 : skirt;
+          const sk = suspF[a] ? 0 : skirt;
           // 0,1: cara interior (abajo, arriba) · 2,3: tapa (interior, exterior) · 4,5: cara exterior (arriba, abajo)
           pos.push(b0[0], b0[1], zb, b0[0], b0[1], zt,
             b0[0], b0[1], zt, b0[0] + ox, b0[1] + oy, zt,
             b0[0] + ox, b0[1] + oy, zt, b0[0] + ox, b0[1] + oy, zb - sk);
           uv.push(u, 0, u, 1, u, 1, u, 1 - vTop, u, 1, u, -sk / Math.max(0.1, bh));
         });
+        const segs = [], segsS = [];
         for (let a = 0; a < frames.length - 1; a++) {
           if (!bOn[a] || !bOn[a + 1]) continue;
           const wOut = (dAt[a] + dAt[a + 1]) / 2 + bt;
           if (!segOk(a, a + 1, wOut)) continue;
-          const gk = groupOf(a);
-          const grp = G[gk] || (G[gk] = { idx: [], segs: [] }), idx = grp.idx;
-          grp.segs.push(a);
+          const sus = segSusp(a), idx = sus ? idxS : idxN;
+          (sus ? segsS : segs).push(a);
           const A = a * 6, B = (a + 1) * 6;
           const face = (p, q) => { // p, q: índices (dentro de la fila) de los dos vértices de la cara
             if (side > 0) idx.push(A + p, B + p, A + q, A + q, B + p, B + q);
@@ -197,13 +184,8 @@ export function buildEdgeMeshes(layout, elev, spIn = {}, opts = {}) {
           if (!plane) { face(2, 3); face(4, 5); }
         }
         const P32 = new Float32Array(pos), U32 = new Float32Array(uv), sArr = frames.map((F) => F.s);
-        for (const [gk, grp] of Object.entries(G)) {
-          if (!grp.idx.length) continue;
-          const bi = gk[0] === 'b' ? +gk.slice(1) : null;
-          const name = bi != null ? `barrera_puente_${String(bi + 1).padStart(2, '0')}_${sideName}` : gk === 's' ? `barrera_${r.name}_suspendido_${sideName}` : `barrera_${r.name}_${sideName}`;
-          res.barriers.push({ name, k, side, alt: isAlt, plane, susp: gk === 's', bridge: bi, positions: P32, uvs: U32, indices: grp.idx, segs: grp.segs, per: 6, s: sArr });
-          res.barrierTris += grp.idx.length / 3;
-        }
+        if (idxN.length) { res.barriers.push({ name: `barrera_${r.name}_${sideName}`, k, side, alt: isAlt, plane, positions: P32, uvs: U32, indices: idxN, segs, per: 6, s: sArr }); res.barrierTris += idxN.length / 3; }
+        if (idxS.length) { res.barriers.push({ name: `barrera_${r.name}_suspendido_${sideName}`, k, side, alt: isAlt, plane, susp: true, positions: P32, uvs: U32, indices: idxS, segs: segsS, per: 6, s: sArr }); res.barrierTris += idxS.length / 3; }
       }
     }
   });

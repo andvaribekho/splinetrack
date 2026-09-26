@@ -421,14 +421,6 @@ export class Preview3D {
       const mats = [ovMat(tex), ovMat(atex), ovMat(ctex), ovMat(btex), ovMat(stex)];
       for (const gr of tm.groups) {
         if (!gr.count) continue;
-        if (gr.mat === 3 && tm.bridgeGroups && this.app.bridgeDeckCanvas) { // cada puente con su material de piso
-          for (const bg of tm.bridgeGroups) {
-            if (!bg.count) continue;
-            mats.push(ovMat(this.texture(this.app.bridgeDeckCanvas(bg.bridge))));
-            g.addGroup(bg.start, bg.count, mats.length - 1);
-          }
-          continue;
-        }
         if (gr.mat !== 1 || !tm.altGroups) { g.addGroup(gr.start, gr.count, gr.mat); continue; }
         for (const ag of tm.altGroups) {
           if (!ag.count) continue;
@@ -1090,14 +1082,13 @@ export class Preview3D {
       mesh.userData.edge = kind;
       mesh.userData.alt = !!m.alt;
       mesh.userData.k = m.k;
-      if (m.bridge != null) mesh.userData.bridge = m.bridge; // borde de un puente: clic abre su tarjeta
       mesh.name = m.name;
       this.edgeGroup.add(mesh);
     };
     // material por textura: la pista y los atajos sin textura propia comparten el suyo
     const cache = new Map();
     const matFor = (fn, m, make) => {
-      const cv = this.app[fn] ? this.app[fn](m.alt ? L.routes[m.k] : null, !!m.susp, m.bridge ?? null) : null;
+      const cv = this.app[fn] ? this.app[fn](m.alt ? L.routes[m.k] : null, !!m.susp) : null;
       const key = fn + ':' + (cv ? (cv.__mid || (cv.__mid = Math.random().toString(36).slice(2))) : 'none');
       if (!cache.has(key)) cache.set(key, make(this.texture(cv)));
       return cache.get(key);
@@ -1177,7 +1168,6 @@ export class Preview3D {
       if (this.app.selectDecoSet) this.app.selectDecoSet(ud.decoSet);
       return;
     }
-    if (ud.edge && ud.bridge != null && this.app.selectBridge) { this.app.selectHill(null); this.app.selectBridge(ud.bridge); return; } // borde de un puente: su tarjeta
     if (ud.edge) { // barrera o camino de tierra: sus parámetros
       if (this.app.state.ref3d && this.app.state.ref3d.sel) this.app.selectRef3d(false);
       this.app.selectHill(null);
