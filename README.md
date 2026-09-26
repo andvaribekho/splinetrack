@@ -1,6 +1,6 @@
 # Track Spline Generator
 
-**Versión 0.59** (se muestra en la barra superior, junto al nombre, y se guarda en cada proyecto como `appVersion`).
+**Versión 0.60** (se muestra en la barra superior, junto al nombre, y se guarda en cada proyecto como `appVersion`).
 
 Aplicación local con interfaz web que convierte un layout 2D de pista (minimapa o trazo a mano) en un spline 3D. Los cruces del layout se resuelven como pasos sobre/bajo nivel. El resto de la pista recibe colinas suaves controladas por un slider. Se exporta como curvas para **Blender** y **3ds Max**, donde se genera la geometría.
 
@@ -15,6 +15,8 @@ Aplicación local con interfaz web que convierte un layout 2D de pista (minimapa
 
 
 **Pinceles del terreno (0.52):** *Pintar subdivisión* tiene *Aumentar subd.* (por defecto: la pincelada tiene (n + 1)² veces más polígonos) o *Disminuir subd.* (la pincelada tiene (n + 1)² veces menos: el terreno queda más simple en esa zona); también vale para la subdivisión de un cerro seleccionado. *Esculpir relieve* tiene los botones *Elevar / hundir* (clic izquierdo eleva, derecho hunde) y **Suavizar**: el pincel no eleva ni hunde, reparte el relieve esculpido bajo él (baja las cimas y rellena los bordes, conservando el volumen); la *Fuerza* marca cuánto suaviza cada toque. Suaviza el relieve esculpido, no el terreno natural.
+**Novedades 0.60:** todo modelo 3D cargado (auto 3D, biblioteca de decoración —árboles, hierba y sets— y modelo de referencia) queda con **materiales unlit**: color y textura tal cual, sin luces ni sombras. Si su textura tiene transparencia (algún píxel con alfa), se recorta como la hierba (corte al 50 %, a dos caras); un material semitransparente sin textura con alfa (vidrio) conserva su opacidad. En la escena .glb se exportan como unlit (`KHR_materials_unlit`, con `alphaMode: MASK` si tienen recorte); FBX no tiene un material unlit estándar, así que ahí van como materiales normales con su textura (el motor decide el shader).
+
 **Novedades 0.59:**
 - **Pincel «Suavizar pista»** (barra superior): pintas sobre la pista (mapa o vista 3D) y los puntos de control bajo el pincel se suavizan, más en el centro que en el borde, sin entrar a *Editar puntos* ni seleccionar nada. Cada pasada suaviza más (suaviza sin encoger la curva); los puntos fuera del pincel no se mueven, y los extremos de los atajos (donde se unen a la pista) tampoco. En su barra: *Pincel* (o [ y ]), *Fuerza* y *También alturas*. Funciona en la ruta principal y en los atajos; Ctrl+Z deshace el trazo completo. Si la ruta aún no tenía puntos de control, los crea al primer toque.
 - **Nombre del proyecto** (junto al nombre de la app): *Guardar* descarga `<nombre>.tsg.json` y va dentro del archivo; al abrir un proyecto se toma su nombre (o el del archivo).
@@ -34,7 +36,7 @@ Aplicación local con interfaz web que convierte un layout 2D de pista (minimapa
 - **Arreglo:** *Suavizar alturas* (perfil) no hacía nada: la barra compartía el identificador con la casilla «También alturas» de *Suavizar tramo*. Las pruebas de interfaz ahora revisan que no haya identificadores repetidos.
 - Los mensajes de error o instrucción duran 3,3 s (el 60 % de antes).
 
-**Novedades 0.56 (pruebas):** nuevas pruebas de interfaz en un solo archivo, `test/ui-tests.cjs`: abren la app una sola vez en Chromium sin ventana y recorren 27 funciones (herramientas y Esc, menús, mensajes, avisos, perfil —Aplanar, escalar, suavizar—, tramos, puentes con pilares, pinceles, cerros y túneles —Quitar cerro—, cavernas, árboles y decoración con Single mesh, guardar/abrir, exportaciones y cámara de juego). En vez de esperas fijas esperan a que la app quede quieta, así toman alrededor de un minuto. Cada prueba verifica el resultado; si falla, deja una captura de la pantalla. Para correrlas: `npm install`, `npx playwright install chromium` (la primera vez) y `npm run test:ui`; con palabras (`npm run test:ui -- arbol tunel`) corre solo esas. `npm run test:all` corre todo.
+**Novedades 0.56 (pruebas):** nuevas pruebas de interfaz en un solo archivo, `test/ui-tests.cjs`: abren la app una sola vez en Chromium sin ventana y recorren 28 funciones (herramientas y Esc, menús, mensajes, avisos, perfil —Aplanar, escalar, suavizar—, tramos, puentes con pilares, pinceles, cerros y túneles —Quitar cerro—, cavernas, árboles y decoración con Single mesh, guardar/abrir, exportaciones y cámara de juego). En vez de esperas fijas esperan a que la app quede quieta, así toman alrededor de un minuto. Cada prueba verifica el resultado; si falla, deja una captura de la pantalla. Para correrlas: `npm install`, `npx playwright install chromium` (la primera vez) y `npm run test:ui`; con palabras (`npm run test:ui -- arbol tunel`) corre solo esas. `npm run test:all` corre todo.
 
 **Novedades 0.55:** *Aumentar / Disminuir subd.* aparece solo con *Pintar subdivisión* (antes se veía también en Esculpir relieve, Cerros y Ríos, aunque ahí no hacía nada). En *Esculpir relieve*, **Elevar / hundir** y **Suavizar** son dos botones en vez de un menú.
 

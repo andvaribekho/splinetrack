@@ -57,7 +57,68 @@ export async function parseReference(buffer, name, { upAxis = 'auto', unitScale 
     tris += (g.index ? g.index.count : g.getAttribute('position').count) / 3;
   });
   if (!meshes.length) throw new Error('El archivo no tiene mallas');
+  await makeUnlit(meshes); // todo modelo cargado queda con materiales sin iluminación (unlit), con su transparencia
   return { inner, upAxis: up, unitScale: scale0, fileUnit, tris: Math.round(tris), meshes, format };
+}
+
+/** Espera a que la imagen de una textura termine de cargar (las de FBX se decodifican después de leer el archivo). */
+function imageReady(img, ms = 4000) {
+  if (!img) return Promise.resolve(null);
+  if (typeof HTMLImageElement !== 'undefined' && img instanceof HTMLImageElement && !img.complete) {
+    return new Promise((res) => { const t = setTimeout(() => res(img), ms); img.addEventListener('load', () => { clearTimeout(t); res(img); }, { once: true }); img.addEventListener('error', () => { clearTimeout(t); res(null); }, { once: true }); });
+  }
+  return Promise.resolve(img);
+}
+/** ¿La imagen tiene transparencia (algún píxel con alfa < 250)? Se revisa en una copia chica. */
+const alphaCache = new WeakMap();
+async function imageHasAlpha(img) {
+  img = await imageReady(img);
+  if (!img || typeof document === 'undefined') return false;
+  if (alphaCache.has(img)) return alphaCache.get(img);
+  let res = false;
+  try {
+    const w = img.width || img.videoWidth || 0, h = img.height || img.videoHeight || 0;
+    if (w && h) {
+      const S = 64, cv = document.createElement('canvas');
+      cv.width = S; cv.height = S;
+      const g = cv.getContext('2d', { willReadFrequently: true });
+      g.drawImage(img, 0, 0, S, S);
+      const d = g.getImageData(0, 0, S, S).data;
+      for (let i = 3; i < d.length; i += 4) if (d[i] < 250) { res = true; break; }
+    }
+  } catch { res = false; }
+  alphaCache.set(img, res);
+  return res;
+}
+/**
+ * Materiales unlit (MeshBasicMaterial: color y textura tal cual, sin luces ni sombras). Si la textura tiene
+ * transparencia se recorta como la hierba (alphaTest 0.5, a dos caras); un material semitransparente sin textura con
+ * alfa (vidrio) conserva su opacidad. Se exportan como unlit (KHR_materials_unlit en glTF).
+ */
+export async function makeUnlit(meshes) {
+  const done = new Map();
+  const conv = async (m) => {
+    if (!m || m.isMeshBasicMaterial) return m;
+    if (done.has(m)) return done.get(m);
+    const map = m.map || null;
+    const alpha = !!(map && map.image && (await imageHasAlpha(map.image))) || (m.alphaTest > 0 && !!map);
+    const u = new THREE.MeshBasicMaterial({
+      name: m.name || '', color: m.color ? m.color.clone() : 0xffffff, map, vertexColors: !!m.vertexColors,
+      side: alpha ? THREE.DoubleSide : m.side ?? THREE.FrontSide,
+      alphaTest: alpha ? 0.5 : 0,
+      transparent: !alpha && !!m.transparent && (m.opacity ?? 1) < 0.999,
+      opacity: !alpha && m.transparent ? m.opacity ?? 1 : 1,
+      alphaMap: m.alphaMap || null,
+    });
+    if (u.alphaMap) { u.alphaTest = 0.5; u.side = THREE.DoubleSide; }
+    u.userData.unlit = true;
+    done.set(m, u);
+    return u;
+  };
+  for (const o of meshes) {
+    if (Array.isArray(o.material)) o.material = await Promise.all(o.material.map(conv));
+    else o.material = await conv(o.material);
+  }
 }
 
 /** UnitScaleFactor de GlobalSettings de un FBX (binario o ASCII), o null. */

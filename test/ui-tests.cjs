@@ -472,6 +472,8 @@ test('auto 3D: se carga, se escala al tamaño del auto por defecto y se ajusta',
   const inBox = fit[0] <= fit[3] + 1e-3 && fit[1] <= fit[4] + 1e-3 && fit[2] <= fit[5] + 1e-3;
   const touches = Math.abs(fit[0] - fit[3]) < 1e-3 || Math.abs(fit[1] - fit[4]) < 1e-3 || Math.abs(fit[2] - fit[5]) < 1e-3;
   expect(inBox && touches && Math.abs(fit[6]) < 1e-3, `escala automática: ${fit.map((v) => v.toFixed(2))}`);
+  const unlit = await ev(() => { const out = []; window.__tsg.preview.game.customCar.traverse((o) => { if (o.isMesh) out.push(o.material.type); }); return out; });
+  expect(unlit.length && unlit.every((t) => t === 'MeshBasicMaterial'), `auto con materiales unlit: ${unlit}`);
   if (await ev(() => document.getElementById('carAdjBox').hidden)) await page.click('#btnCarAdj'); // se abre sola al cargar
   await page.locator('#carDz').fill('0.5');
   await page.locator('#carSz').fill('2');
@@ -548,6 +550,16 @@ test('nombre del proyecto y guardado automático en disco (carpeta, archivos por
   const code = (await fetch(new (require('url').URL)('/api/autosave/save?name=x', page.url()), { method: 'POST', body: '{}' })).status;
   expect(code === 403, `pedido sin encabezado: ${code}`);
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('modelos cargados: materiales unlit; la textura con transparencia se recorta como la hierba', async () => {
+  await reset();
+  await page.setInputFiles('#fileAssets', path.join(ROOT, 'test', 'assets', 'planta_alfa.glb'));
+  await page.waitForFunction(() => window.__tsg.state.assets.length === 1, null, { timeout: 15000 });
+  const m = await ev(() => { const A = window.__tsg.state.assets[0], mt = A.parts[0].material; return [mt.type, mt.alphaTest, mt.side, mt.transparent, !!mt.map]; });
+  expect(m[0] === 'MeshBasicMaterial' && m[1] === 0.5 && m[2] === 2 && m[3] === false && m[4], `material: ${m}`);
+  const ex = await ev(async () => { const t = window.__tsg, A = t.state.assets[0]; const { GLTFExporter } = await import('/vendor/exporters/GLTFExporter.js'); const THREE = await import('three'); const sc = new THREE.Scene(); sc.add(new THREE.Mesh(A.parts[0].geometry, A.parts[0].material)); const j = await new GLTFExporter().parseAsync(sc, { binary: false }); return [(j.extensionsUsed || []).join(), j.materials[0].alphaMode]; });
+  expect(ex[0].includes('KHR_materials_unlit') && ex[1] === 'MASK', `exportación unlit con recorte: ${ex}`);
 });
 
 test('guardar y abrir: el proyecto conserva tramos, cerros y listas fijas', async () => {
