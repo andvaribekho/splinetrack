@@ -96,7 +96,7 @@ const server = http.createServer(async (req, res) => {
     const st = await stat(file);
     if (!st.isFile()) { res.writeHead(404).end(); return; }
     const body = await readFile(file);
-    res.writeHead(200, { 'Content-Type': TYPES[extname(file).toLowerCase()] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
+    res.writeHead(200, { 'Content-Type': TYPES[extname(file).toLowerCase()] || 'application/octet-stream', 'Cache-Control': 'no-cache', 'X-TSG-Server': '1' }); // la app sabe que hay servidor local (guardado automático en carpeta)
     res.end(body);
   } catch {
     res.writeHead(404, { 'Content-Type': 'text/plain' }).end('No encontrado');

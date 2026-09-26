@@ -24,7 +24,9 @@ export const DEFAULT_SCENE = {
   triggerHeight: 6, // m de alto (triggers de túnel)
   showTriggers: true, // se ven en la vista 3D (semitransparentes); en la exportación son invisibles
   transSubdiv: true, // «Subdividir transiciones»: divisiones a lo largo donde la pista cambia de ancho (la textura no se tuerce)
-  transDivs: [0.07, 0.47, 0.53, 0.93], // posiciones de esas divisiones (fracción del ancho desde el borde izquierdo)
+  transDivs: [0.07, 0.47, 0.53, 0.93],
+  transStep: 3, // m entre secciones agregadas en las transiciones
+  transKeepLines: false, // «Mantener el ancho de las líneas»: las franjas angostas conservan su ancho en metros en todo el tramo con otro ancho // posiciones de esas divisiones (fracción del ancho desde el borde izquierdo)
   tsmoothBrush: 25, // pincel «Suavizar pista»: radio (m), fuerza por toque (0..1) y si suaviza también las alturas
   tsmoothStrength: 0.5,
   tsmoothZ: false,
@@ -335,9 +337,9 @@ export function trackRows(layout, elev, spIn = {}) {
       // así la proporción entre rectas y curvas se respeta y el total nunca supera al uniforme
       rowsSet = pick(N);
     }
-    // «Subdividir transiciones»: más secciones donde cambia el ancho (una cada ~1 m), así los trapecios son chicos
+    // «Subdividir transiciones»: más secciones donde cambia el ancho (una cada transStep m), así los trapecios son chicos
     if (transDivsOf(sp).length) {
-      const step = Math.max(1, Math.round(1 / r.ds));
+      const step = Math.max(1, Math.round(clamp(sp.transStep ?? 3, 0.5, 20) / r.ds));
       let inT = false, last = -1e9;
       for (let q = 0; q < nq; q++) {
         const ch = widthChanges(r, q);
@@ -369,8 +371,28 @@ export function buildTrackMesh(layout, elev, spIn = {}) {
     const baseT = Array.from({ length: divs + 2 }, (_, c2) => c2 / (divs + 1));
     // filas que tocan una transición de ancho: llevan además las divisiones de «Subdividir transiciones»
     const segChanges = (qa, qb) => { for (let q2 = qa; q2 < qb; q2++) if (widthChanges(r, q2)) return true; return false; };
-    const inTrans = tdivs.length ? qList.map((qq, j) => (j > 0 && segChanges(qList[j - 1], qq)) || (j < qList.length - 1 && segChanges(qq, qList[j + 1]))) : null;
+    // ancho «normal» de la ruta (el más común): con «Mantener el ancho de las líneas», toda fila con otro ancho lleva
+    // las divisiones (no solo las de la transición), así las líneas conservan su ancho en metros de punta a punta
+    const keep = tdivs.length && sp.transKeepLines;
+    let W0 = 0;
+    if (keep) { const cnt = new Map(); for (let i2 = 0; i2 < n; i2++) { const k2 = r.w[i2].toFixed(2); cnt.set(k2, (cnt.get(k2) || 0) + 1); } let best = 0; for (const [k2, c2] of cnt) if (c2 > best) { best = c2; W0 = +k2; } }
+    const inTrans = tdivs.length ? qList.map((qq, j) => (keep && Math.abs(r.w[qq % n] - W0) > 1e-3) || (j > 0 && segChanges(qList[j - 1], qq)) || (j < qList.length - 1 && segChanges(qq, qList[j + 1]))) : null;
     const tsAll = tdivs.length ? [...new Set([...baseT, ...tdivs])].sort((a, b) => a - b) : baseT;
+    // posición geométrica de cada división (fracción del ancho actual) para que las franjas angostas (< 15 % del ancho:
+    // líneas) midan en metros lo mismo que con el ancho normal y las anchas (carriles) absorban el cambio
+    const bandsU = keep ? [0, ...tdivs, 1] : null;
+    const geomOf = (w) => {
+      if (!keep || Math.abs(w - W0) < 1e-3) return null;
+      const bw = bandsU.slice(1).map((u, k2) => u - bandsU[k2]);
+      const fixed = bw.map((b) => b < 0.15);
+      const fixedM = bw.reduce((a, b, k2) => a + (fixed[k2] ? b * W0 : 0), 0);
+      const stretchU = bw.reduce((a, b, k2) => a + (fixed[k2] ? 0 : b), 0);
+      if (fixedM >= w * 0.98 || stretchU <= 0) return null; // no caben: todo proporcional
+      const out = new Map();
+      let acc = 0;
+      for (let k2 = 0; k2 < bw.length - 1; k2++) { acc += fixed[k2] ? (bw[k2] * W0) / w : ((w - fixedM) * (bw[k2] / stretchU)) / w; out.set(bandsU[k2 + 1], acc); }
+      return out;
+    };
     const rowV = []; // por fila: {surf: [[t, índice]] de izquierda a derecha, skL, skR}
     for (let j = 0; j < qList.length; j++) {
       const q = qList[j];
@@ -383,7 +405,8 @@ export function buildTrackMesh(layout, elev, spIn = {}) {
       const ox = lx * c * hw, oy = ly * c * hw, oz = sn * hw;
       const put = (x, y, z, t) => { pos.push(x, y, z); if (sp.trackTexDir === 'horizontal') uv.push(along, t); else uv.push(t, along); return pos.length / 3 - 1; };
       const ts = inTrans && inTrans[j] ? tsAll : baseT;
-      const surf = ts.map((t) => { const f = 1 - 2 * t; return [t, put(r.x[i] + ox * f, r.y[i] + oy * f, e.z[i] + oz * f, t)]; }); // la sección es una recta (el peralte es rígido)
+      const G = inTrans && inTrans[j] ? geomOf(r.w[i]) : null; // con «Mantener el ancho de las líneas»: dónde va cada división
+      const surf = ts.map((t) => { const g = G && G.has(t) ? G.get(t) : t, f = 1 - 2 * g; return [g, put(r.x[i] + ox * f, r.y[i] + oy * f, e.z[i] + oz * f, t)]; }).sort((a, b) => a[0] - b[0]); // la sección es una recta (el peralte es rígido)
       const row = { surf, skL: -1, skR: -1 };
       if (sp.skirts) {
         const a = surf[0][1], b = surf[surf.length - 1][1];

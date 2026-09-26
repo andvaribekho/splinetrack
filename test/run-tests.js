@@ -1310,6 +1310,20 @@ for (const [key, s] of Object.entries(SAMPLES)) {
   // aristas de borde: solo a lo largo de los bordes de la pista (su número ≈ 2 por sección), no en las uniones
   const border = [...cnt.values()].filter((v) => v === 1).length;
   check(bad === 0 && border <= 2 * M1.rows[0] + 8, `transiciones: malla cerrada en las uniones (aristas de borde ${border}, filas ${M1.rows[0]})`);
+  // secciones de la transición configurables: con más separación, menos triángulos
+  const Ms = buildTrackMesh(L, E, { transSubdiv: true, transDivs: [0.07, 0.47, 0.53, 0.93], transStep: 1, trackDensity: 30 }), Mb = buildTrackMesh(L, E, { transSubdiv: true, transDivs: [0.07, 0.47, 0.53, 0.93], transStep: 8, trackDensity: 30 });
+  check(Mb.indices.length < Ms.indices.length, `secciones de la transición: cada 1 m ${Ms.indices.length / 3} tri. → cada 8 m ${Mb.indices.length / 3} tri.`);
+  // «Mantener el ancho de las líneas»: en la parte ancha la franja central mide lo mismo que con el ancho normal
+  const Mk = buildTrackMesh(L, E, { transSubdiv: true, transDivs: [0.07, 0.47, 0.53, 0.93], transKeepLines: true });
+  const r0 = L.routes[0], bb = r0.bridges[0], W0 = 14;
+  const iMid = Math.round(((bb.s0 + bb.s1) / 2) / r0.ds) % r0.n, cx = r0.x[iMid], cy = r0.y[iMid];
+  const PU = Mk.positions, UU = Mk.uvs;
+  const near = [];
+  for (let v = 0; v < PU.length / 3; v++) { const d = Math.hypot(PU[v * 3] - cx, PU[v * 3 + 1] - cy); if (d < 13) near.push({ v, d, u: UU[v * 2] }); }
+  const byU = (u) => near.filter((q) => Math.abs(q.u - u) < 1e-4).sort((a, b) => a.d - b.d)[0];
+  const a47 = byU(0.47), a53 = byU(0.53), a07 = byU(0.07), a0 = byU(0);
+  const dist = (p1, p2) => Math.hypot(PU[p1.v * 3] - PU[p2.v * 3], PU[p1.v * 3 + 1] - PU[p2.v * 3 + 1]);
+  check(a47 && a53 && Math.abs(dist(a47, a53) - 0.06 * W0) < 0.05 && a07 && a0 && Math.abs(dist(a0, a07) - 0.07 * W0) < 0.05, `mantener líneas: franja central ${a47 && a53 ? dist(a47, a53).toFixed(2) : '?'} m (≈ ${(0.06 * W0).toFixed(2)}), borde ${a0 && a07 ? dist(a0, a07).toFixed(2) : '?'} m`);
   const Mn = buildTrackMesh(L, E, { transSubdiv: true, transDivs: [] });
   check(Mn.indices.length === M0.indices.length || Mn.rows[0] >= M0.rows[0], 'sin divisiones no cambia la calzada');
 }

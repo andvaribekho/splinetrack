@@ -5535,7 +5535,46 @@ const AS_KEY = 'tsg.autosave';
 const AS_DEF = { on: true, min: 2, dir: 'autoguardado', keep: 3 };
 let asCfg = (() => { try { return { ...AS_DEF, ...(JSON.parse(localStorage.getItem(AS_KEY) || '{}') || {}) }; } catch { return { ...AS_DEF }; } })();
 let asLastSig = null, asLastTime = 0, asBusy = false, asLast = null, asErr = null;
+let asServer = false; // ¿hay servidor local con /api/autosave? (en Vercel no)
+let asFolder = null, asFolderPerm = null; // carpeta elegida (File System Access) y su permiso: 'granted' | 'prompt' | 'denied'
 const saveAsCfg = () => { try { localStorage.setItem(AS_KEY, JSON.stringify(asCfg)); } catch { /* sin almacenamiento */ } };
+/** Base de datos del navegador (IndexedDB): copias del autoguardado y la carpeta elegida. */
+let idbP = null;
+function idb() {
+  if (!idbP) idbP = new Promise((res, rej) => {
+    const rq = indexedDB.open('tsg', 1);
+    rq.onupgradeneeded = () => { const db = rq.result; if (!db.objectStoreNames.contains('autosaves')) db.createObjectStore('autosaves', { keyPath: 'id', autoIncrement: true }).createIndex('name', 'name'); if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv'); };
+    rq.onsuccess = () => res(rq.result);
+    rq.onerror = () => rej(rq.error);
+  });
+  return idbP;
+}
+const idbReq = (rq) => new Promise((res, rej) => { rq.onsuccess = () => res(rq.result); rq.onerror = () => rej(rq.error); });
+async function idbAll() { const db = await idb(); return idbReq(db.transaction('autosaves').objectStore('autosaves').getAll()); }
+/** Guarda una copia en el navegador y deja solo las «keep» más recientes de ese proyecto. */
+async function idbSave(name, file, data, keep) {
+  const db = await idb();
+  await idbReq(db.transaction('autosaves', 'readwrite').objectStore('autosaves').add({ name, file, time: Date.now(), data }));
+  const mine = (await idbAll()).filter((q) => q.name === name).sort((x, y) => y.time - x.time);
+  if (mine.length > keep) { const st = db.transaction('autosaves', 'readwrite').objectStore('autosaves'); for (const q of mine.slice(keep)) st.delete(q.id); }
+}
+async function kvGet(k) { const db = await idb(); return idbReq(db.transaction('kv').objectStore('kv').get(k)); }
+async function kvSet(k, v) { const db = await idb(); return idbReq(db.transaction('kv', 'readwrite').objectStore('kv').put(v, k)); }
+/** Carpeta elegida: escribe el archivo y borra los más viejos del proyecto. */
+async function folderSave(name, file, data, keep) {
+  const fh = await asFolder.getFileHandle(file, { create: true });
+  const w = await fh.createWritable();
+  await w.write(data);
+  await w.close();
+  const mine = [];
+  for await (const [fn, h] of asFolder.entries()) if (h.kind === 'file' && fn.startsWith(name + '_auto_') && /_auto_\d{8}-\d{6}\.tsg\.json$/.test(fn)) mine.push(fn);
+  mine.sort().reverse(); // el nombre lleva la fecha: orden alfabético = orden cronológico
+  for (const fn of mine.slice(keep)) { try { await asFolder.removeEntry(fn); } catch { /* ya no está */ } }
+}
+async function refreshFolderPerm() {
+  if (!asFolder) { asFolderPerm = null; return; }
+  try { asFolderPerm = await asFolder.queryPermission({ mode: 'readwrite' }); } catch { asFolderPerm = 'denied'; }
+}
 /** Firma barata del proyecto (para guardar solo si hubo cambios). */
 function projectSig() {
   const str = snapshot() + JSON.stringify(state.scene) + JSON.stringify(state.game) + state.projectName + JSON.stringify(state.decoSets.map((d) => d.assets));
@@ -5545,45 +5584,88 @@ function projectSig() {
 }
 /** Tras guardar a mano, el autoguardado no repite una copia igual. */
 function markSaved() { asLastSig = projectSig(); asLastTime = Date.now(); }
+const asStamp = () => { const d = new Date(), p = (x) => String(x).padStart(2, '0'); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`; };
+/** Una copia: siempre en el navegador; además en la carpeta del servidor local o en la carpeta elegida. */
 async function autosaveNow(force = false) {
   if (asBusy || !state.project.main) return false;
   const sig = projectSig();
   if (!force && sig === asLastSig) return false;
   asBusy = true;
+  const name = projectFileName(), file = `${name}_auto_${asStamp()}.tsg.json`, keep = Math.max(1, asCfg.keep || 3);
+  const where = [], errs = [];
   try {
-    const q = new URLSearchParams({ dir: asCfg.dir || 'autoguardado', name: projectFileName(), keep: String(asCfg.keep || 3) });
-    const r = await fetch(`/api/autosave/save?${q}`, { method: 'POST', headers: { 'X-TSG': '1', 'Content-Type': 'text/plain' }, body: JSON.stringify(projectData()) });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok || !j.ok) throw new Error(j.error || `el servidor respondió ${r.status}`);
-    asLastSig = sig; asLastTime = Date.now(); asLast = { file: j.file, dir: j.dir, at: new Date() }; asErr = null;
-    return true;
+    const data = JSON.stringify(projectData());
+    try { await idbSave(name, file, data, keep); where.push('navegador'); } catch (err) { errs.push(`navegador: ${err.message || err}`); }
+    if (asServer) {
+      try {
+        const q = new URLSearchParams({ dir: asCfg.dir || 'autoguardado', name, keep: String(keep) });
+        const r = await fetch(`/api/autosave/save?${q}`, { method: 'POST', headers: { 'X-TSG': '1', 'Content-Type': 'text/plain' }, body: data });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j.ok) throw new Error(j.error || `el servidor respondió ${r.status}`);
+        where.push(j.dir);
+      } catch (err) { errs.push(`carpeta: ${err.message}`); }
+    } else if (asFolder) {
+      await refreshFolderPerm();
+      if (asFolderPerm === 'granted') { try { await folderSave(name, file, data, keep); where.push(`carpeta «${asFolder.name}»`); } catch (err) { errs.push(`carpeta: ${err.message}`); } }
+      else errs.push(`carpeta «${asFolder.name}»: falta permiso`);
+    }
+    asLastSig = sig; asLastTime = Date.now();
+    asLast = where.length ? { file, where, at: new Date() } : asLast;
+    asErr = errs.length ? errs.join(' · ') : null;
+    return where.length > 0;
   } catch (err) {
     asErr = err.message || String(err);
-    asLastTime = Date.now(); // reintenta en el próximo intervalo
+    asLastTime = Date.now();
     return false;
   } finally { asBusy = false; refreshAutosaveInfo(); }
 }
 function refreshAutosaveInfo() {
   const hm = (d) => d.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' });
-  if ($('autosaveState')) $('autosaveState').textContent = !asCfg.on ? '' : asErr ? 'autoguardado: error' : asLast ? `autoguardado ${hm(asLast.at)}` : '';
-  if ($('autosaveState')) $('autosaveState').title = asErr ? `No se pudo guardar: ${asErr}` : asLast ? `${asLast.dir} · ${asLast.file}` : '';
-  if ($('asInfo')) $('asInfo').textContent = asErr ? `No se pudo guardar: ${asErr}. ¿Abriste la app con node server.js (o iniciar)?` : asLast ? `Último: ${hm(asLast.at)} · ${asLast.file} en ${asLast.dir}` : asCfg.on ? `Cada ${asCfg.min} min si hay cambios, en «${asCfg.dir}».` : 'Desactivado.';
+  const st = $('autosaveState');
+  if (st) {
+    st.textContent = !asCfg.on ? '' : asLast ? `autoguardado ${hm(asLast.at)}${asErr ? ' (con avisos)' : ''}` : asErr ? 'autoguardado: error' : '';
+    st.title = [asLast ? `${asLast.file} → ${asLast.where.join(', ')}` : '', asErr ? `Avisos: ${asErr}` : ''].filter(Boolean).join('\n');
+  }
+  if ($('asInfo')) $('asInfo').textContent = [asLast ? `Último: ${hm(asLast.at)} · ${asLast.file} (${asLast.where.join(', ')})` : asCfg.on ? `Cada ${asCfg.min} min si hay cambios.` : 'Desactivado.', asErr ? `Avisos: ${asErr}` : ''].filter(Boolean).join(' · ');
+  if ($('asFolderRow')) {
+    $('asServerRow').hidden = !asServer;
+    $('asFolderRow').hidden = asServer || !window.showDirectoryPicker;
+    $('asNoFolder').hidden = asServer || !!window.showDirectoryPicker;
+    $('asFolderName').textContent = asFolder ? `«${asFolder.name}»${asFolderPerm === 'granted' ? '' : ' (sin permiso)'}` : 'ninguna';
+    $('btnAsPerm').hidden = !asFolder || asFolderPerm === 'granted';
+    $('btnAsFolderClear').hidden = !asFolder;
+  }
 }
-/** Autoguardados de la carpeta, en la ventana «Abrir proyecto» (con miniatura y fecha). */
+/** Autoguardados (navegador, carpeta del servidor o carpeta elegida) en la ventana «Abrir proyecto». */
 async function openAutosaves() {
+  const byName = new Map(); // mismo archivo en varios lugares: se muestra una vez
+  const where = [];
   try {
-    const q = new URLSearchParams({ dir: asCfg.dir || 'autoguardado' });
-    const r = await fetch(`/api/autosave/list?${q}`, { headers: { 'X-TSG': '1' } });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || r.status);
-    if (!j.files.length) { toastErr(`No hay autoguardados en «${j.dir}».`); return; }
-    const files = [];
-    for (const f of j.files.slice(0, 40)) {
-      const rr = await fetch(`/api/autosave/file?${new URLSearchParams({ dir: asCfg.dir || 'autoguardado', file: f.file })}`, { headers: { 'X-TSG': '1' } });
-      if (rr.ok) files.push(new File([await rr.text()], f.file, { lastModified: f.mtime }));
+    for (const q of await idbAll()) byName.set(q.file, new File([q.data], q.file, { lastModified: q.time }));
+    where.push('navegador');
+  } catch { /* sin IndexedDB */ }
+  if (asServer) {
+    try {
+      const q = new URLSearchParams({ dir: asCfg.dir || 'autoguardado' });
+      const r = await fetch(`/api/autosave/list?${q}`, { headers: { 'X-TSG': '1' } });
+      const j = await r.json();
+      for (const f of (j.files || []).slice(0, 40)) {
+        if (byName.has(f.file)) continue;
+        const rr = await fetch(`/api/autosave/file?${new URLSearchParams({ dir: asCfg.dir || 'autoguardado', file: f.file })}`, { headers: { 'X-TSG': '1' } });
+        if (rr.ok) byName.set(f.file, new File([await rr.text()], f.file, { lastModified: f.mtime }));
+      }
+      where.push(j.dir);
+    } catch { /* servidor sin respuesta */ }
+  } else if (asFolder) {
+    await refreshFolderPerm();
+    if (asFolderPerm === 'granted') {
+      for await (const [fn, h] of asFolder.entries()) if (h.kind === 'file' && /_auto_\d{8}-\d{6}\.tsg\.json$/.test(fn) && !byName.has(fn)) byName.set(fn, await h.getFile());
+      where.push(`carpeta «${asFolder.name}»`);
     }
-    showOpenDialog(files, j.dir);
-  } catch (err) { toastErr(`No se pudieron leer los autoguardados: ${err.message}. ¿Abriste la app con node server.js (o iniciar)?`); }
+  }
+  const files = [...byName.values()].sort((x, y) => y.lastModified - x.lastModified).slice(0, 60);
+  if (!files.length) { toastErr('No hay autoguardados todavía.'); return; }
+  showOpenDialog(files, `autoguardados (${where.join(', ')})`);
 }
 function bindAutosave() {
   setProjectName(state.projectName);
@@ -5598,9 +5680,22 @@ function bindAutosave() {
   $('asMin').addEventListener('change', (e) => { const v = parseFloat(e.target.value); if (v > 0) asCfg.min = Math.max(0.5, Math.min(120, v)); saveAsCfg(); sync(); });
   $('asDir').addEventListener('change', (e) => { asCfg.dir = e.target.value.trim() || 'autoguardado'; saveAsCfg(); sync(); });
   $('asKeep').addEventListener('change', (e) => { const v = parseInt(e.target.value, 10); if (v > 0) asCfg.keep = Math.max(1, Math.min(50, v)); saveAsCfg(); sync(); });
-  $('btnAsNow').addEventListener('click', async () => { if (!state.project.main) { toastErr('No hay pista que guardar.'); return; } if (await autosaveNow(true)) toast(`Copia guardada: ${asLast.file}`); else if (asErr) toastErr(`No se pudo guardar: ${asErr}`); });
+  $('btnAsNow').addEventListener('click', async () => { if (!state.project.main) { toastErr('No hay pista que guardar.'); return; } if (await autosaveNow(true)) toast(`Copia guardada: ${asLast.file} (${asLast.where.join(', ')})`); else toastErr(`No se pudo guardar: ${asErr}`); });
   $('btnAsOpen').addEventListener('click', () => openAutosaves());
+  $('btnAsFolder').addEventListener('click', async () => {
+    try {
+      const h = await window.showDirectoryPicker({ id: 'tsg-autosave', mode: 'readwrite' });
+      asFolder = h; await kvSet('autosaveFolder', h); await refreshFolderPerm();
+      toast(`Los autoguardados también se escriben en «${h.name}».`);
+    } catch (err) { if (err.name !== 'AbortError') toastErr(`No se pudo usar la carpeta: ${err.message}`); }
+    sync();
+  });
+  $('btnAsPerm').addEventListener('click', async () => { if (!asFolder) return; try { asFolderPerm = await asFolder.requestPermission({ mode: 'readwrite' }); } catch { asFolderPerm = 'denied'; } sync(); });
+  $('btnAsFolderClear').addEventListener('click', async () => { asFolder = null; asFolderPerm = null; try { await kvSet('autosaveFolder', null); } catch { /* */ } sync(); });
   sync();
+  // ¿servidor local? (en Vercel u otro hosting estático no hay) · carpeta elegida en otra sesión (pide permiso de nuevo)
+  fetch('./', { method: 'HEAD', cache: 'no-store' }).then((r) => { asServer = r.headers.get('X-TSG-Server') === '1'; sync(); }).catch(() => { asServer = false; sync(); }); // sin pedidos que fallen en un hosting estático
+  if (window.showDirectoryPicker) kvGet('autosaveFolder').then(async (h) => { if (h) { asFolder = h; await refreshFolderPerm(); sync(); } }).catch(() => {});
   asLastTime = Date.now();
   setInterval(() => { if (asCfg.on && Date.now() - asLastTime >= asCfg.min * 60000) autosaveNow(false); }, 10000);
 }
@@ -5613,6 +5708,9 @@ function renderTransDivs() {
   const sc = state.scene, bar = $('transDivBar');
   if (!bar) return;
   $('transSubdiv').checked = sc.transSubdiv !== false;
+  $('transKeepLines').checked = !!sc.transKeepLines;
+  if ($('transStep') !== rangeDrag) $('transStep').value = sc.transStep ?? 3;
+  if (document.activeElement !== $('transStepNum')) $('transStepNum').value = sc.transStep ?? 3;
   $('transDivBox').classList.toggle('disabled', sc.transSubdiv === false);
   if (!Array.isArray(sc.transDivs)) sc.transDivs = TRANS_DIVS_DEFAULT.slice();
   // textura: a lo ancho de la pista es la X de la imagen (orientación vertical) o su Y (horizontal)
@@ -5675,6 +5773,10 @@ function showTransDivEdit() {
 function bindTransDivs() {
   const sc = state.scene;
   $('transSubdiv').addEventListener('change', (e) => { sc.transSubdiv = e.target.checked; renderTransDivs(); sceneChanged(); });
+  $('transKeepLines').addEventListener('change', (e) => { sc.transKeepLines = e.target.checked; sceneChanged(); });
+  const setStep = (v) => { if (!Number.isFinite(v)) return; sc.transStep = Math.max(0.5, Math.min(20, v)); $('transStep').value = sc.transStep; $('transStepNum').value = sc.transStep; sceneChanged(); };
+  $('transStep').addEventListener('input', (e) => setStep(parseFloat(e.target.value)));
+  $('transStepNum').addEventListener('change', (e) => setStep(parseFloat(e.target.value)));
   $('btnTransDivAdd').addEventListener('click', () => {
     const d = (sc.transDivs || []).slice().sort((a, b) => a - b);
     if (d.length >= 12) { toastErr('Hasta 12 divisiones.'); return; }
@@ -6994,4 +7096,4 @@ function idle(timeout = 30000) {
     step();
   });
 }
-window.__tsg = { state, app, editor, preview, profile, openProject, scheduleBuild, refreshBridgeList, refreshPanels, projectData, busy, idle, autosaveNow, openAutosaves, asCfg: () => asCfg }; // para depuración y pruebas // para depuración
+window.__tsg = { state, app, editor, preview, profile, openProject, scheduleBuild, refreshBridgeList, refreshPanels, projectData, busy, idle, autosaveNow, openAutosaves, asCfg: () => asCfg, idbAll, asServer: () => asServer, setAsServer: (v) => { asServer = !!v; refreshAutosaveInfo(); }, setAsFolder: async (h) => { asFolder = h; await refreshFolderPerm(); refreshAutosaveInfo(); } }; // para depuración y pruebas // para depuración

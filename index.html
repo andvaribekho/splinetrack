@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Track Spline Generator v0.60</title>
+  <title>Track Spline Generator v0.61</title>
   <link rel="stylesheet" href="styles.css">
   <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.60</span></div>
+    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.61</span></div>
     <label class="proj-name-wrap" title="Nombre del proyecto: se usa al guardar (<nombre>.tsg.json) y en los autoguardados (<nombre>_auto_…)"><input id="projectName" class="proj-name" value="pista" spellcheck="false" maxlength="80"><span class="small muted" id="autosaveState"></span></label>
     <div class="top-actions">
       <button id="btnNew" title="Empezar de cero">Nuevo</button>
@@ -267,6 +267,8 @@
           <div class="tdiv-bar" id="transDivBar"><canvas id="transDivCanvas" height="44"></canvas></div>
           <div class="row gap wrap"><button id="btnTransDivAdd" class="small" title="Agrega una división en el espacio más ancho">+ División</button><button id="btnTransDivDel" class="small" title="Quita la división seleccionada (o la última)">− División</button><button id="btnTransDivReset" class="small" title="Las 4 divisiones por defecto (calzan con la textura de asfalto por defecto)">Por defecto</button></div>
           <div class="row gap" id="transDivEdit"><span class="small muted" id="transDivInfo"></span></div>
+          <div class="field"><label>Secciones en la transición: cada <span class="val"><input type="number" id="transStepNum" min="0.5" max="20" step="0.5" style="width:56px"> m</span></label><input type="range" id="transStep" min="0.5" max="20" step="0.5" title="Distancia entre las secciones que se agregan en la transición: más distancia, menos triángulos (y algo más de torcedura)"></div>
+          <label class="check" title="Las franjas angostas (menos del 15 % del ancho: las líneas pintadas) conservan su ancho en metros y los carriles absorben el ensanche o el angostamiento. Para eso las divisiones siguen en todo el tramo con otro ancho, no solo en la transición (más triángulos ahí)"><input type="checkbox" id="transKeepLines"> Mantener el ancho de las líneas</label>
         </div>
         <h3 class="subhead">Faldones laterales</h3>
         <label class="check" title="Paredes que bajan desde los bordes de la pista hacia el terreno, para que no se vea el espacio entre ambos. Del lado donde hay camino de tierra no se ponen: el camino tiene su propio faldón"><input type="checkbox" id="skirts"> Faldones laterales en la pista</label>
@@ -830,13 +832,19 @@
       <div id="fixedKeyList" class="keymap"></div>
       <div class="row gap" style="margin-top:8px"><button id="btnKeymapReset">Restablecer los atajos por defecto</button></div>
       <h3 class="subhead">Guardado automático</h3>
-      <p class="meta">El servidor local (node server.js / iniciar) escribe copias del proyecto en una carpeta de tu computador, solo si hubo cambios. Se conservan las más recientes de cada proyecto (según su nombre) y las más viejas se borran.</p>
+      <p class="meta">Guarda copias del proyecto cada cierto tiempo, solo si hubo cambios. Se conservan las más recientes de cada proyecto (según su nombre) y las más viejas se borran.</p>
       <label class="check"><input type="checkbox" id="asOn"> Guardar automáticamente</label>
       <div id="asBox">
         <div class="field"><label>Cada <span class="val"><input type="number" id="asMin" min="0.5" max="120" step="0.5" style="width:60px"> min</span></label></div>
-        <div class="field"><label>Carpeta</label><input type="text" id="asDir" spellcheck="false" placeholder="autoguardado" title="Ruta de una carpeta de tu computador (por ejemplo C:\Users\Bruno\Documents\pistas\autoguardado) o relativa a la carpeta de la app. Se crea si no existe"></div>
-        <div class="field"><label>Archivos por proyecto <span class="val"><input type="number" id="asKeep" min="1" max="50" step="1" style="width:60px"></span></label></div>
-        <div class="row gap wrap"><button id="btnAsNow" title="Guarda una copia ahora">Guardar copia ahora</button><button id="btnAsOpen" title="Lista los autoguardados de la carpeta (con miniatura y fecha) para abrir uno">Abrir autoguardado…</button></div>
+        <div class="field"><label>Copias por proyecto <span class="val"><input type="number" id="asKeep" min="1" max="50" step="1" style="width:60px"></span></label></div>
+        <h4 class="mini">Dónde</h4>
+        <p class="meta">• En este navegador (siempre): quedan en este computador y este navegador.</p>
+        <div id="asServerRow" hidden><p class="meta">• En una carpeta, con el servidor local (node server.js / iniciar):</p>
+          <div class="field"><input type="text" id="asDir" spellcheck="false" placeholder="autoguardado" title="Ruta de una carpeta de tu computador o relativa a la carpeta de la app. Se crea si no existe"></div></div>
+        <div id="asFolderRow" hidden><p class="meta">• Además, en una carpeta de tu computador (Chrome o Edge):</p>
+          <div class="row gap wrap"><button id="btnAsFolder" title="Elige la carpeta donde se escriben las copias (.tsg.json)">Elegir carpeta…</button><span class="small" id="asFolderName"></span><button id="btnAsPerm" class="small primary" hidden title="El navegador pide permiso otra vez para escribir en la carpeta cada vez que abres la app">Dar permiso</button><button id="btnAsFolderClear" class="small" hidden>Quitar carpeta</button></div></div>
+        <p class="meta" id="asNoFolder" hidden>• Este navegador no permite elegir una carpeta (Chrome y Edge sí): las copias quedan en el navegador y se pueden descargar desde «Abrir autoguardado».</p>
+        <div class="row gap wrap" style="margin-top:6px"><button id="btnAsNow" title="Guarda una copia ahora">Guardar copia ahora</button><button id="btnAsOpen" title="Lista los autoguardados (con miniatura y fecha) para abrir uno">Abrir autoguardado…</button></div>
         <p class="meta" id="asInfo"></p>
       </div>
       <h3 class="subhead">Ventanas</h3>

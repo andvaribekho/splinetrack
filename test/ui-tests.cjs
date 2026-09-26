@@ -540,6 +540,9 @@ test('nombre del proyecto y guardado automático en disco (carpeta, archivos por
   expect(files.length === 2, `se conservan 2 archivos: ${files}`);
   const d = JSON.parse(fs.readFileSync(path.join(dir, files[0]), 'utf8'));
   expect(d.format === 'track-spline-generator' && d.projectName === 'Prueba Auto', 'el autoguardado no es un proyecto válido');
+  // también quedan en el navegador (IndexedDB), con el mismo límite por proyecto (así funciona en Vercel, sin servidor)
+  const idbN = await ev(async () => (await window.__tsg.idbAll()).filter((q) => q.name === 'Prueba_Auto').length);
+  expect(idbN === 2 && (await ev(() => window.__tsg.asServer())), `copias en el navegador: ${idbN}`);
   // abrir autoguardado: la ventana de abrir lista las copias
   await ev(() => window.__tsg.openAutosaves());
   await page.waitForSelector('.open-dialog .od-card');
@@ -560,6 +563,25 @@ test('modelos cargados: materiales unlit; la textura con transparencia se recort
   expect(m[0] === 'MeshBasicMaterial' && m[1] === 0.5 && m[2] === 2 && m[3] === false && m[4], `material: ${m}`);
   const ex = await ev(async () => { const t = window.__tsg, A = t.state.assets[0]; const { GLTFExporter } = await import('/vendor/exporters/GLTFExporter.js'); const THREE = await import('three'); const sc = new THREE.Scene(); sc.add(new THREE.Mesh(A.parts[0].geometry, A.parts[0].material)); const j = await new GLTFExporter().parseAsync(sc, { binary: false }); return [(j.extensionsUsed || []).join(), j.materials[0].alphaMode]; });
   expect(ex[0].includes('KHR_materials_unlit') && ex[1] === 'MASK', `exportación unlit con recorte: ${ex}`);
+});
+
+test('guardado automático sin servidor (Vercel): en el navegador y en una carpeta elegida', async () => {
+  await reset();
+  await page.locator('#projectName').fill('Sin Servidor'); await page.locator('#projectName').press('Enter');
+  const r = await ev(async () => {
+    const t = window.__tsg;
+    t.setAsServer(false); // como en un hosting estático
+    const root = await navigator.storage.getDirectory(), dir = await root.getDirectoryHandle('auto-prueba', { create: true });
+    for await (const [n] of dir.entries()) await dir.removeEntry(n);
+    await t.setAsFolder(dir); // la carpeta elegida (aquí, una del propio navegador con la misma API)
+    t.asCfg().keep = 2;
+    for (let k = 0; k < 3; k++) { t.state.project.main.pts[2][0] += 1; await t.autosaveNow(false); await new Promise((res) => setTimeout(res, 1100)); }
+    const names = []; for await (const [n] of dir.entries()) names.push(n);
+    const idb = (await t.idbAll()).filter((q) => q.name === 'Sin_Servidor').length;
+    return [names.length, names.every((n) => /^Sin_Servidor_auto_\d{8}-\d{6}\.tsg\.json$/.test(n)), idb, !document.getElementById('asFolderRow').hidden, document.getElementById('asServerRow').hidden];
+  });
+  expect(r[0] === 2 && r[1] && r[2] === 2 && r[3] && r[4], `sin servidor: ${r}`);
+  await ev(() => window.__tsg.setAsServer(true));
 });
 
 test('guardar y abrir: el proyecto conserva tramos, cerros y listas fijas', async () => {
