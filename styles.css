@@ -419,3 +419,21 @@ button.km-keys:hover { border-color: var(--accent); background: rgba(242,169,59,
 .bridge-card [hidden] { display: none !important; }
 .bridge-card .thumb.inherited { opacity: 0.55; }
 .brand .ver { font-weight: 500; font-size: calc(10.5px * var(--fs, 1)); color: var(--muted); letter-spacing: 0; margin-left: 4px; }
+
+/* barra lateral en grupos: el título del grupo va sobre su primera sección (solo anclada a la izquierda) */
+.sidebar#sidebar > section.panel[data-group]:not(.floating)::before {
+  content: attr(data-group); display: block; padding: 10px 12px 4px; margin: 0 -1px;
+  font-size: calc(10px * var(--fs, 1)); font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--accent); background: var(--bg); border-bottom: 1px solid var(--line); opacity: 0.85;
+}
+.sidebar#sidebar > section.panel[data-group]:first-child::before { padding-top: 6px; }
+/* sub-barra de Editar: rótulos de grupo */
+#editBox .edit-grp { font-size: calc(10px * var(--fs, 1)); margin: 0 2px 0 4px; }
+/* menú «Exportar ▾» */
+.menu-wrap { position: relative; display: inline-block; }
+.menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 60; min-width: 210px; background: var(--panel); border: 1px solid #3a4458; border-radius: 8px; box-shadow: 0 12px 30px rgba(0,0,0,0.5); padding: 6px; display: flex; flex-direction: column; gap: 2px; }
+.menu[hidden] { display: none; }
+.menu button { text-align: left; width: 100%; }
+.menu .menu-label { font-size: calc(10px * var(--fs, 1)); color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; padding: 6px 6px 2px; }
+#btnExportMenu.on { border-color: var(--accent); }
+.side-tool.active { border-color: var(--accent); color: var(--accent); background: rgba(242,169,59,0.12); }

@@ -1168,7 +1168,7 @@ export class Preview3D {
     if (this.app.state.selBridge != null && !(onTrack && this.app.bridgeAtWorld(h[0].point.x, h[0].point.y) === this.app.state.selBridge)) this.app.selectBridge(null);
     if (h.length && (h[0].object === this.terrainMesh || h[0].object.userData.water) && this.app.focusPanel) this.app.focusPanel('terrain'); // clic en el terreno o el agua: sus parámetros
     if (ud.ref3d) { this.app.selectRef3d(true); return; } // modelo de referencia: se selecciona entero
-    if (ud.cutWall) { this.app.selectHill(null); if (this.app.focusPanel) this.app.focusPanel('cut'); return; } // paredes de una sección socavada
+    if (ud.cutWall) { this.app.selectHill(null); if (this.app.focusPanel) this.app.focusPanel('bridges'); return; } // paredes de un tramo socavado
     if (ud.riverWall) { this.app.selectHill(null); if (this.app.focusPanel) this.app.focusPanel('rivers', document.getElementById('riverWallHead')); return; } // paredes de un cauce: su material
     if (ud.riverId != null) { this.app.selectHill(null); if (this.app.selectRiver) this.app.selectRiver(ud.riverId); return; } // río o cascada: su tarjeta
     if (ud.decoSet != null) { // elemento decorativo: su set

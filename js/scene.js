@@ -131,7 +131,7 @@ function trackSamples(layout, elev, sp = {}) {
     const e = elev.routes[k];
     for (let i = 0; i < r.n; i++) {
       const low = e.z[i] - Math.abs(Math.sin(e.roll[i])) * r.w[i] / 2;
-      const bridge = !!(r.bridges && r.bridges.some((b) => { if (b.type === 'track') return false; const d = r.closed ? (((r.s[i] - b.s0) % r.L) + r.L) % r.L : r.s[i] - b.s0; return d >= 0 && d <= b.s1 - b.s0; }));
+      const bridge = !!(r.bridges && r.bridges.some((b) => { if (b.type === 'track' || b.type === 'cut') return false; const d = r.closed ? (((r.s[i] - b.s0) % r.L) + r.L) % r.L : r.s[i] - b.s0; return d >= 0 && d <= b.s1 - b.s0; }));
       const X = XR[k];
       // sección socavada: como un tramo suspendido (el terreno no se adapta), pero además la pista socava el terreno
       const cut = sp.cutRanges && sp.cutRanges.length ? cutZoneAt(layout, k, r.s[i], sp.cutRanges) : null;
@@ -416,7 +416,7 @@ export function buildTrackMesh(layout, elev, spIn = {}) {
   // tableros como objetos propios (exportación), con los vértices compactados
   const bridgeParts = [];
   for (const p of parts) {
-    p.bridgeIdx.forEach((bi, k) => { if (bi.length) bridgeParts.push({ name: `${p.bridgeTy[k] === 'track' ? 'tramo' : 'puente'}_${String(p.bridgeNo[k]).padStart(2, '0')}`, type: p.bridgeTy[k], bridge: p.bridgeNo[k] - 1, ...compactMesh(p.positions, p.uvs, bi) }); });
+    p.bridgeIdx.forEach((bi, k) => { if (bi.length) bridgeParts.push({ name: `${p.bridgeTy[k] === 'track' ? 'tramo' : p.bridgeTy[k] === 'cut' ? 'socavado' : 'puente'}_${String(p.bridgeNo[k]).padStart(2, '0')}`, type: p.bridgeTy[k], bridge: p.bridgeNo[k] - 1, ...compactMesh(p.positions, p.uvs, bi) }); });
   }
   for (const p of parts) {
     if (p.bridgeIdx.some((b) => b.length) || p.coveredIdx.length || p.suspIdx.length) Object.assign(p, compactMesh(p.positions, p.uvs, p.indices));
@@ -1809,7 +1809,7 @@ export function bridgePillars(layout, elev, terrain = null, sp = null) {
   const out = [];
   const r = layout.routes[0], e = elev.routes[0];
   (r.bridges || []).forEach((b, bi) => {
-    if (b.type === 'track') return; // los tramos de pista no llevan pilares
+    if (b.type === 'track' || b.type === 'cut') return; // solo los puentes llevan pilares
     const len = b.s1 - b.s0;
     const n = Math.max(1, Math.round(len / 18));
     for (let q = 1; q < n || (n === 1 && q === 1); q++) {

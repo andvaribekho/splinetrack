@@ -47,7 +47,7 @@ const state = {
   image: null, // {canvas, w, h}
   imageOpacity: 0.5,
   tool: 'pan',
-  feature: null, // herramienta de la barra sobre la selección: 'cut' | 'helix' | 'loop' | 'smooth' | 'line'
+  feature: null, // herramienta sobre la selección: 'helix' | 'loop' | 'smooth' | 'line'
   layout: null,
   result: null,
   hover: null,
@@ -680,36 +680,11 @@ const app = {
       return { idx, s0: Math.min(s0, s1), s1: Math.max(s0, s1), pts: flip ? Z.pts.map(([t, z]) => [1 - t, z]).reverse() : Z.pts };
     }).filter((Z) => Z && Z.s1 - Z.s0 > 2);
   },
-  /** Secciones socavadas en s de la ruta principal: [{k: 0, s0, s1, walls, wallSubdiv, idx}]. */
+  /** Tramos socavados en s de la ruta principal: [{k: 0, s0, s1, walls, wallSubdiv, idx}] (desde los tramos de tipo «Socavado»). */
   cutZonesS() {
     const L = state.layout;
-    if (!L) return [];
-    return state.cutZones.map((Z, idx) => {
-      const s0 = app.nearestMainS(Z.a, Infinity), s1 = app.nearestMainS(Z.b, Infinity);
-      if (s0 === null || s1 === null) return null;
-      return { k: 0, idx, s0: Math.min(s0, s1), s1: Math.max(s0, s1), walls: Z.walls === 'nat' ? 'nat' : 'art', wallSubdiv: Z.wallSubdiv ?? 2 };
-    }).filter((Z) => Z && Z.s1 - Z.s0 > 2);
-  },
-  /** Convierte los puntos seleccionados (ruta principal, seguidos) en una sección socavada. */
-  addCutFromSelection(walls = 'art', wallSubdiv = 2) {
-    const L = state.layout;
-    if (!L) return false;
-    const sel = state.selSet && state.selSet.idxs.size ? state.selSet : null;
-    if (!sel || sel.idxs.size < 2) { toast('Selecciona dos o más puntos seguidos de la ruta principal (Editar puntos, Shift + clic o caja).'); return false; }
-    if (sel.key !== 'main') { toast('Las secciones socavadas van en la ruta principal.'); return false; }
-    const run = contiguousRun('main');
-    if (!run || run.length !== sel.idxs.size) { toast('Los puntos de la sección socavada deben ser seguidos.'); return false; }
-    const cp = app.ctrlPoints().filter((q) => q.key === 'main');
-    const sA = cp.find((c) => c.idx === run[0]).s, sB = cp.find((c) => c.idx === run[run.length - 1]).s;
-    const lo = Math.min(sA, sB), hi = Math.max(sA, sB);
-    if (hi - lo < 5) { toast('El tramo es demasiado corto.'); return false; }
-    pushUndo();
-    const cur = app.cutZonesS();
-    state.cutZones = state.cutZones.filter((Z, i) => { const c = cur.find((q) => q.idx === i); return !c || c.s1 < lo || c.s0 > hi; }); // reemplaza las que se superponen
-    state.cutZones.push({ a: app.mainLayoutAt(lo), b: app.mainLayoutAt(hi), walls, wallSubdiv });
-    scheduleElev();
-    toast(`Sección socavada entre s=${lo.toFixed(0)} y ${hi.toFixed(0)} m: baja sus puntos y el terreno se abre en una zanja con paredes ${walls === 'nat' ? 'de roca' : 'artificiales'}.`);
-    return true;
+    if (!L || !L.routes[0]) return [];
+    return (L.routes[0].bridges || []).filter((b) => b.type === 'cut' && b.s1 - b.s0 > 2).map((b) => ({ k: 0, idx: b.idx, s0: b.s0, s1: b.s1, walls: b.walls === 'nat' ? 'nat' : 'art', wallSubdiv: b.wallSubdiv ?? 2 }));
   },
   /** Tramos suspendidos en s de la ruta principal: [{k: 0, s0, s1, pillars, dirt, barrier, idx}]. */
   suspZonesS() {
@@ -1570,7 +1545,7 @@ const app = {
     const own = this.bridgeOwnTex(i, 'deck');
     if (own) return own;
     const b = ((state.project.main && state.project.main.bridges) || [])[i];
-    const def = b ? b.deckDefault || (b.type === 'track' ? 'track' : 'wood') : 'wood';
+    const def = b ? b.deckDefault || (b.type === 'bridge' ? 'wood' : 'track') : 'wood';
     return def === 'track' ? (state.trackTex || defaultTrackCanvas()) : defaultBridgeCanvas();
   },
   bridgeTexturesFor(i) { return { deck: this.bridgeDeckCanvas(i), dirt: this.bridgeOwnTex(i, 'dirt'), barrier: this.bridgeOwnTex(i, 'barrier') }; },
@@ -2432,9 +2407,30 @@ function normalizeTramo(b) {
 }
 /** Valores por defecto de un tramo nuevo según su tipo: la pista hereda todo de la pista principal. */
 function tramoDefaults(type, w) {
+  if (type === 'cut') return { type: 'cut', w, sameWidth: true, deckDefault: 'track', dirt: null, barrier: null, walls: 'art', wallSubdiv: 2 };
   return type === 'track'
     ? { type: 'track', w, sameWidth: true, deckDefault: 'track', dirt: null, barrier: null }
     : { type: 'bridge', w, sameWidth: false, deckDefault: 'wood', dirt: false, barrier: true };
+}
+/** Proyectos anteriores: cada sección socavada pasa a ser un tramo de tipo «Socavado» (mismas paredes y densidad). */
+function migrateCutToTramos(zones) {
+  const m = state.project && state.project.main;
+  if (!m || !m.ctrl) return;
+  let L;
+  try { L = buildLayout(state.project, state.geom); } catch { return; }
+  const r = L.routes[0];
+  const sOf = (p) => { const [X, Y] = L.toWorld(p[0], p[1]); return nearestOnSamples(r, X, Y).s; };
+  m.bridges = m.bridges || [];
+  let n = 0;
+  for (const Z of zones) {
+    if (!Z || !Z.a || !Z.b) continue;
+    const sa = sOf(Z.a), sb = sOf(Z.b), s0 = Math.min(sa, sb), s1 = Math.max(sa, sb);
+    if (s1 - s0 < 2) continue;
+    const e = evalAt(r, (s0 + s1) / 2);
+    m.bridges.push(ensureBridgeUid({ a: Z.a.slice(0, 2), b: Z.b.slice(0, 2), mid: L.toLayout(e.x, e.y), ...tramoDefaults('cut', state.geom.width), walls: Z.walls === 'nat' ? 'nat' : 'art', wallSubdiv: Z.wallSubdiv ?? 2 }));
+    n++;
+  }
+  if (n) setTimeout(() => toast(`${n} sección(es) socavada(s) del proyecto pasaron a ser tramos de tipo «Socavado» (sección «Tramos»).`), 700);
 }
 /** Identificador estable de un puente (sus materiales propios se guardan con él). */
 function ensureBridgeUid(b) { if (b && !b.uid) b.uid = `br${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`; return b; }
@@ -2456,7 +2452,7 @@ function createBridge(w) {
 }
 /** Convierte en puente el tramo de puntos seguidos seleccionado (mantiene la forma; reemplaza puentes superpuestos). */
 /** Tipo de los tramos nuevos (selector de la sección «Tramos»). */
-function newTramoType() { const el = document.getElementById('tramoType'); return el && el.value === 'bridge' ? 'bridge' : 'track'; }
+function newTramoType() { const el = document.getElementById('tramoType'); return el && (el.value === 'bridge' || el.value === 'cut') ? el.value : 'track'; }
 function bridgeFromRun(w) {
   const m = state.project.main;
   const run = bridgeRunSelected();
@@ -2520,7 +2516,7 @@ function refreshBridgeList() {
   bl.forEach((b, i) => {
     ensureBridgeUid(b);
     normalizeTramo(b);
-    const isBr = b.type === 'bridge', tName = isBr ? 'Puente' : 'Tramo';
+    const isBr = b.type === 'bridge', isCut = b.type === 'cut', tName = isBr ? 'Puente' : isCut ? 'Socavado' : 'Tramo';
     const d = document.createElement('div');
     d.className = 'item bridge-card' + (state.selBridge === i ? ' sel' : '') + (b.collapsed ? ' collapsed' : '');
     d.dataset.i = i;
@@ -2533,7 +2529,12 @@ function refreshBridgeList() {
     d.innerHTML = `<div class="head"><span class="row" style="gap:4px;min-width:0"><button class="x btoggle" title="Mostrar u ocultar los parámetros del tramo">${b.collapsed ? '▸' : '▾'}</button><strong>${tName} ${i + 1}</strong></span><button class="x bdel" title="Quitar el tramo (vuelve a ser pista normal)">✕</button></div>
       <div class="meta">${inf ? `${(inf.s1 - inf.s0).toFixed(0)} m · s ${inf.s0.toFixed(0)}–${inf.s1.toFixed(0)} m` : ''}</div>
       <div class="bbody">
-      <div class="field"><label>Tipo</label><select class="btype" title="Pista: el terreno se adapta como en el resto de la pista. Puente: bajo el tramo queda el relieve natural y lleva pilares si queda en altura"><option value="track"${isBr ? '' : ' selected'}>Pista (el terreno se adapta)</option><option value="bridge"${isBr ? ' selected' : ''}>Puente (terreno natural y pilares)</option></select></div>
+      <div class="field"><label>Tipo</label><select class="btype" title="Pista: el terreno se adapta como en el resto de la pista. Puente: bajo el tramo queda el relieve natural y lleva pilares si queda en altura"><option value="track"${!isBr && !isCut ? ' selected' : ''}>Pista (el terreno se adapta)</option><option value="bridge"${isBr ? ' selected' : ''}>Puente (terreno natural y pilares)</option><option value="cut"${isCut ? ' selected' : ''}>Socavado (zanja con paredes)</option></select></div>
+      <div class="bcutBox"${isCut ? '' : ' hidden'}>
+        <div class="field"><label>Paredes</label><select class="bwalls"><option value="art"${b.walls !== 'nat' ? ' selected' : ''}>Artificiales (lisas)</option><option value="nat"${b.walls === 'nat' ? ' selected' : ''}>Naturales (roca)</option></select></div>
+        <div class="field"><label>Densidad de las paredes <span class="val bwsV">${b.wallSubdiv ?? 2} (×${subdivFactor(b.wallSubdiv ?? 2)} pol.)</span></label><input type="range" class="bws" min="0" max="6" step="1" value="${b.wallSubdiv ?? 2}"></div>
+        <div class="meta">Baja los puntos del tramo (perfil o gizmo Z): el terreno se abre en una zanja. Texturas de las paredes: al final de esta sección.</div>
+      </div>
       <label class="check small" title="El tramo toma el ancho de la pista (sin transiciones); desmárcalo para darle su propio ancho"><input type="checkbox" class="bsame"${b.sameWidth ? ' checked' : ''}> Mismo ancho que la pista</label>
       <div class="field bwBox${b.sameWidth ? ' disabled' : ''}"><label>Ancho <span class="val"><input type="number" class="bw" min="2" max="80" step="0.5" style="width:60px" value="${b.w}"> m</span></label><input type="range" class="bwR" min="3" max="40" step="0.5" value="${Math.min(40, b.w)}"></div>
       <div class="field boBox"><label>Desplazamiento lateral <span class="val bo"></span></label><input type="range" class="boR" min="-1" max="1" step="0.01" value="${+b.off || 0}">
@@ -2576,7 +2577,10 @@ function refreshBridgeList() {
     const setMode = (onKey, sideKey, v) => { pushUndo(); if (v === 'inherit') b[onKey] = null; else if (v === 'none') b[onKey] = false; else { b[onKey] = true; b[sideKey] = v; } refreshBridgeList(); scheduleBuild(); };
     d.querySelector('.bdirtMode').addEventListener('change', (e) => setMode('dirt', 'dirtSide', e.target.value));
     d.querySelector('.bbarMode').addEventListener('change', (e) => setMode('barrier', 'barrierSide', e.target.value));
-    d.querySelector('.btype').addEventListener('change', (e) => { pushUndo(); b.type = e.target.value; refreshBridgeList(); scheduleBuild(); });
+    d.querySelector('.btype').addEventListener('change', (e) => { pushUndo(); b.type = e.target.value; if (b.type === 'cut' && !b.walls) { b.walls = 'art'; b.wallSubdiv = 2; } refreshBridgeList(); scheduleBuild(); });
+    d.querySelector('.bwalls').addEventListener('change', (e) => { pushUndo(); b.walls = e.target.value; scheduleBuild(); });
+    d.querySelector('.bws').addEventListener('input', (e) => { b.wallSubdiv = Math.round(parseFloat(e.target.value)); d.querySelector('.bwsV').textContent = `${b.wallSubdiv} (×${subdivFactor(b.wallSubdiv)} pol.)`; });
+    d.querySelector('.bws').addEventListener('change', () => { pushUndo(); scheduleBuild(); });
     d.querySelectorAll('button.btex').forEach((btn) => btn.addEventListener('click', () => pickTextureFile((cv) => app.setBridgeTexture(i, btn.dataset.kind, cv))));
     d.querySelectorAll('button.btexRm').forEach((btn) => btn.addEventListener('click', () => app.setBridgeTexture(i, btn.dataset.kind, null)));
     d.querySelector('button.btoggle').addEventListener('click', () => { b.collapsed = !b.collapsed; d.classList.toggle('collapsed', b.collapsed); d.querySelector('button.btoggle').textContent = b.collapsed ? '▸' : '▾'; });
@@ -3376,7 +3380,6 @@ function bindItemsPanel() {
     toast(`Nuevo grupo ${groupName(type, gid)}${list.length > 1 ? ` (usa los parámetros de ${groupName(type, list[0].gid)})` : ''}.`);
   };
   $('btnNewPuddle').addEventListener('click', () => addGroup('puddle'));
-  $('btnTbPuddle').addEventListener('click', () => addGroup('puddle'));
   // texturas de los elementos y borde de los nitro strips
   for (const key of ['puddle', 'pad', 'strip', 'border']) {
     $(`btnItemTex-${key}`).addEventListener('click', () => $(`fileItemTex-${key}`).click());
@@ -3401,8 +3404,6 @@ function bindItemsPanel() {
   $('stripBorderHeight').addEventListener('input', () => setBH(parseFloat($('stripBorderHeight').value)));
   $('stripBorderHeightNum').addEventListener('change', () => setBH(parseFloat($('stripBorderHeightNum').value)));
   refreshItemTex();
-  $('btnTbPad').addEventListener('click', () => addGroup('pad'));
-  $('btnTbStrip').addEventListener('click', () => addGroup('strip'));
   $('btnNewPad').addEventListener('click', () => addGroup('pad'));
   $('btnNewStrip').addEventListener('click', () => addGroup('strip'));
   const panel = document.querySelector('section[data-panel="items"]');
@@ -3648,24 +3649,6 @@ function refreshPanels() {
   // zonas planas
   const fl = $('flatZoneList');
   fl.innerHTML = '';
-  const czl = $('cutZoneList');
-  if (czl && !draggingIn(czl)) {
-    czl.innerHTML = '';
-    const cz = app.cutZonesS();
-    state.cutZones.forEach((Z, i) => {
-      const c = cz.find((q) => q.idx === i);
-      const div = document.createElement('div');
-      div.className = 'item';
-      div.innerHTML = `<div class="head"><span><strong>socavado_${String(i + 1).padStart(2, '0')}</strong>${c ? ` · s ${c.s0.toFixed(0)}–${c.s1.toFixed(0)} m` : ''}</span><button class="x del" title="Quitar (el terreno vuelve a adaptarse a la pista)">✕</button></div>
-        <div class="field"><label>Paredes</label><select class="czW"><option value="art"${Z.walls !== 'nat' ? ' selected' : ''}>Artificiales (lisas)</option><option value="nat"${Z.walls === 'nat' ? ' selected' : ''}>Naturales (rocosas)</option></select></div>
-        <div class="field"><label>Densidad de las paredes <span class="val czV">${Z.wallSubdiv ?? 2} (×${subdivFactor(Z.wallSubdiv ?? 2)} pol.)</span></label><input type="range" class="czD" min="0" max="6" step="1" value="${Z.wallSubdiv ?? 2}"></div>`;
-      div.querySelector('.czW').addEventListener('change', (e) => { pushUndo(); Z.walls = e.target.value; scheduleElev(); });
-      div.querySelector('.czD').addEventListener('input', (e) => { Z.wallSubdiv = Math.round(parseFloat(e.target.value)); div.querySelector('.czV').textContent = `${Z.wallSubdiv} (×${subdivFactor(Z.wallSubdiv)} pol.)`; });
-      div.querySelector('.czD').addEventListener('change', () => { pushUndo(); scheduleElev(); });
-      div.querySelector('.del').addEventListener('click', () => { pushUndo(); state.cutZones.splice(i, 1); scheduleElev(); });
-      czl.appendChild(div);
-    });
-  }
   const pl = $('profileZoneList');
   if (pl) {
     pl.innerHTML = '';
@@ -4010,10 +3993,6 @@ function bindControls() {
     createBridge(parseFloat($('bridgeWidthNum').value) || state.geom.width); // extremos abiertos o tramo seleccionado
   });
   // sección socavada: botón de la barra con sus opciones; «Socavar selección» la crea sobre los puntos seleccionados
-  $('btnCut').addEventListener('click', () => setFeature(state.feature === 'cut' ? null : 'cut'));
-  $('cutDensity').addEventListener('input', () => { $('cutDensityVal').textContent = $('cutDensity').value; });
-  $('cutDensityVal').textContent = $('cutDensity').value;
-  $('btnCutAdd').addEventListener('click', () => app.addCutFromSelection($('cutWalls').value, Math.round(parseFloat($('cutDensity').value))));
   for (const [id, key] of [['cutArtTex', 'cutArtTex'], ['cutNatTex', 'cutNatTex']]) {
     $(id + 'Btn').addEventListener('click', () => $(id + 'File').click());
     $(id + 'File').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) loadTexture(f, key); });
@@ -4160,7 +4139,7 @@ function bindControls() {
   $('btnFit').addEventListener('click', () => editor.fit());
 
   // herramientas
-  document.querySelectorAll('#toolbar [data-tool], .viewProfile [data-tool]').forEach((b) => b.addEventListener('click', () => { setFeature(null, false); setTool(b.dataset.tool === state.tool && b.dataset.tool === 'profile' ? 'pan' : b.dataset.tool); }));
+  document.querySelectorAll('#toolbar [data-tool], .viewProfile [data-tool], .side-tool[data-tool]').forEach((b) => b.addEventListener('click', () => { setFeature(null, false); setTool(b.dataset.tool === state.tool && b.dataset.tool === 'profile' ? 'pan' : b.dataset.tool); }));
 
   // ejemplos
   const sel = $('sampleSelect');
@@ -4311,7 +4290,7 @@ function bindControls() {
 
 // Herramientas de la barra que trabajan sobre la selección de «Editar puntos» (cada una muestra sus opciones en la
 // barra). Solo una herramienta de la barra está activa a la vez: al elegir una se apagan las demás, y Esc las apaga todas.
-const FEATURES = { cut: ['btnCut', 'cutBox'], helix: ['btnHelix', 'helixBox'], loop: ['btnLoop', 'loopBox'], smooth: ['btnSmooth', 'smoothBox'], line: ['btnLine', 'lineBox'] };
+const FEATURES = { helix: ['btnHelix', 'helixBox'], loop: ['btnLoop', 'loopBox'], smooth: ['btnSmooth', 'smoothBox'], line: ['btnLine', 'lineBox'] };
 function setFeature(f, sync = true) {
   state.feature = f && FEATURES[f] ? f : null;
   for (const [k, [b, box]] of Object.entries(FEATURES)) {
@@ -4325,7 +4304,7 @@ function setFeature(f, sync = true) {
 }
 /** Marca en la barra la herramienta activa (una sola: la de edición de la selección, si hay, o la herramienta). */
 function syncToolButtons() {
-  document.querySelectorAll('#toolbar [data-tool], .viewProfile [data-tool]').forEach((b) => b.classList.toggle('active', !state.feature && b.dataset.tool === state.tool));
+  document.querySelectorAll('#toolbar [data-tool], .viewProfile [data-tool], .side-tool[data-tool]').forEach((b) => b.classList.toggle('active', !state.feature && b.dataset.tool === state.tool));
 }
 function setTool(t) {
   if (t !== 'edit' && state.feature) setFeature(null, false); // otra herramienta (o Esc → Navegar) apaga Rizo, Helix, Recta…
@@ -4612,7 +4591,8 @@ async function openProject(text) {
   state.profileZones = []; state.profileSel = null; // los perfiles dibujados ya no se guardan (solo ubican los puntos)
   state.suspZones = []; // el terreno elevado ya no existe: los tramos antiguos pasan a ser puentes (más abajo)
   const legacySusp = Array.isArray(d.suspZones) ? d.suspZones : [];
-  state.cutZones = d.cutZones || [];
+  state.cutZones = []; // las secciones socavadas antiguas pasan a ser tramos de tipo «Socavado» (más abajo)
+  const legacyCut = Array.isArray(d.cutZones) ? d.cutZones : [];
   state.imageOpacity = d.imageOpacity ?? 0.35;
   state.image = null;
   if (d.image) {
@@ -4670,6 +4650,7 @@ async function openProject(text) {
   state.riverWallTex = await toCanvas(d.riverWallTex);
   state.cutArtTex = await toCanvas(d.cutArtTex);
   state.cutNatTex = await toCanvas(d.cutNatTex);
+  if (legacyCut.length) migrateCutToTramos(legacyCut);
   if (legacySusp.length) await migrateSuspToBridges(legacySusp, { deck: await toCanvas(d.suspTex), barrier: await toCanvas(d.suspBarrierTex), dirt: await toCanvas(d.suspDirtTex) });
   state.fallWallTex = await toCanvas(d.fallWallTex);
   state.densityPaint = d.densityPaint || [];
@@ -5396,7 +5377,7 @@ function focusPanel(id, sub = null) {
 /** Botones (fuera de la barra lateral) con parámetros asociados: a qué sección llevan. */
 const PANEL_FOR_BUTTON = {
   'tool:edit': 'spline', 'tool:draw': 'trace', 'tool:extend': 'trace', 'tool:alt': 'alts', 'tool:start': 'gate', 'tool:ref': 'ref',
-  btnDecoNew: 'deco', 'tool:hill': 'hills', 'tool:river': 'rivers', 'tool:paint': 'terrain', 'tool:sculpt': 'terrain', 'tool:flat': 'elev', 'tool:profile': 'elev', btnCut: 'cut', btnSculptTool: 'terrain', btnRef3dTop: 'ref3d',
+  btnDecoNew: 'deco', 'tool:hill': 'hills', 'tool:river': 'rivers', 'tool:paint': 'relief', 'tool:sculpt': 'relief', 'tool:flat': 'elev', 'tool:profile': 'elev', btnSculptTool: 'relief', btnRef3dTop: 'ref3d',
   btnGame: 'sky', btnExportBlender: 'export', btnExportMax: 'export', btnExportJSON: 'export', btnExportOBJ: 'export',
   btnExportGLB2: 'export', btnExportFBX2: 'export', btnTbRadius: 'spline', btnTbFork: 'spline', btnTbBridge: 'bridges', btnGenTerrain: 'terrain', btnGenTrees: 'trees',
 };
@@ -5540,7 +5521,6 @@ function bindSceneControls() {
   renderAssetList(); renderVegAssetLists(); renderDecoPanel();
   // modelo de referencia 3D
   $('btnRef3d').addEventListener('click', () => $('fileRef3d').click());
-  $('btnRef3dTop').addEventListener('click', () => $('fileRef3d').click());
   $('fileRef3d').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) importRef3dFile(f); });
   $('btnRef3dRemove').addEventListener('click', () => { if (!state.ref3d) return; state.ref3d.inner.traverse((o) => { if (o.geometry) o.geometry.dispose(); }); state.ref3d = null; preview.setReference(null); syncRef3dControls(); editor.draw(); });
   $('btnRef3dSelect').addEventListener('click', () => { if (state.ref3d) selectRef3d(!state.ref3d.sel); });
@@ -5575,7 +5555,6 @@ function bindSceneControls() {
   $('riverDepth').addEventListener('input', (e) => { sc.riverDepth = parseFloat(e.target.value); syncSceneControls(); });
   $('riverWallSubdiv').addEventListener('input', (e) => { sc.riverWallSubdiv = Math.round(parseFloat(e.target.value)); syncSceneControls(); });
   $('btnRiverTool').addEventListener('click', () => setTool('river'));
-  $('btnBankTop').addEventListener('click', () => focusPanel('bank'));
   // material de las paredes socavadas (ríos y cascadas)
   for (const [id, key] of [['riverWall', 'riverWallTex'], ['fallWall', 'fallWallTex']]) {
     $(id + 'Btn').addEventListener('click', () => $(id + 'File').click());
@@ -5803,6 +5782,15 @@ function bindSceneControls() {
     } catch (err) { console.error(err); toast('No se pudo exportar la escena: ' + err.message); }
   };
   $('btnExportGLB').addEventListener('click', glb);
+  // menú «Exportar ▾» del encabezado: se abre y se cierra con el botón, al elegir o al hacer clic afuera
+  {
+    const menu = $('exportMenu'), btn = $('btnExportMenu');
+    const close = () => { menu.hidden = true; btn.classList.remove('on'); };
+    btn.addEventListener('click', (e) => { e.stopPropagation(); menu.hidden = !menu.hidden; btn.classList.toggle('on', !menu.hidden); });
+    menu.addEventListener('click', (e) => { if (e.target.closest('button')) close(); });
+    document.addEventListener('pointerdown', (e) => { if (!menu.hidden && !e.target.closest('#exportMenuWrap')) close(); });
+    window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !menu.hidden) { e.stopPropagation(); close(); } }, true); // Esc solo cierra el menú
+  }
   $('btnExportGLB2').addEventListener('click', glb);
   const fbx = async () => {
     if (!state.layout || !state.result) return;
@@ -5863,9 +5851,6 @@ const HINTS = {
   stripBorder: 'Agrega a todos los nitro strips un borde: paredes sin espesor que suben desde su contorno (una cara, sin techo), para ponerles una textura de «glow».',
   stripBorderHeight: 'Altura del borde de los nitro strips (igual para todos).',
   stripBorderHeightNum: 'Altura exacta del borde en metros.',
-  btnTbPuddle: 'Agrega un grupo de charcos (water puddles) y te lleva a sus parámetros.',
-  btnTbPad: 'Agrega un grupo de turbo pads y te lleva a sus parámetros.',
-  btnTbStrip: 'Agrega un grupo de nitro strips y te lleva a sus parámetros.',
   btnNewPuddle: 'Crea otro grupo de charcos (puddlesA, puddlesB…), con su propia cantidad, tamaño y zonas.',
   btnNewPad: 'Crea otro grupo de turbo pads (turbopadA, turbopadB…), con su propia cantidad, medidas y zonas.',
   btnNewStrip: 'Crea otro grupo de nitro strips (nitrostripA, nitrostripB…), con su propia cantidad, largo, ancho y posición.',

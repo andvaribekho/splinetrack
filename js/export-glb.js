@@ -185,7 +185,7 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
   {
     const bp = bridgePillars(layout, elev, terrain, sp);
     let grp = null;
-    const hasB = tm.bridgeParts.some((q) => q.type !== 'track'), hasT = tm.bridgeParts.some((q) => q.type === 'track');
+    const hasB = tm.bridgeParts.some((q) => q.type === 'bridge' || !q.type), hasT = tm.bridgeParts.some((q) => q.type === 'track' || q.type === 'cut');
     if (bp.length || hasB) {
       grp = new THREE.Group();
       grp.name = 'puentes';
@@ -200,7 +200,7 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
         const own = textures.bridgeFor ? textures.bridgeFor(p.bridge) : null;
         const t = own && own.deck ? tex(own.deck) : bt;
         const deckMat = new THREE.MeshStandardMaterial({ name: p.name, color: t ? 0xffffff : 0x7a5433, map: t, roughness: 0.9, metalness: 0, side: THREE.DoubleSide });
-        (p.type === 'track' ? grpT : grp).add(mesh(p.name, p.positions, p.indices, p.uvs, deckMat));
+        (p.type === 'track' || p.type === 'cut' ? grpT : grp).add(mesh(p.name, p.positions, p.indices, p.uvs, deckMat));
       }
     }
     if (bp.length) {

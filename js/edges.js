@@ -37,7 +37,7 @@ export function buildEdgeMeshes(layout, elev, spIn = {}, opts = {}) {
   const wants = (P) => ({ dirt: P.dirtSide !== 'none' && P.dirtWidth > 0, bar: P.barrierSide !== 'none' && P.barrierHeight > 0 });
   const PR = layout.routes.map((r) => edgeParams(sp, r)); // cada atajo con sus propios parámetros
   const WR = PR.map(wants);
-  const bridgeEdges = (r) => (r.bridges || []).some((b) => b.dirt || b.barrier === true || (b.barrier == null && b.type !== 'track'));
+  const bridgeEdges = (r) => (r.bridges || []).some((b) => b.dirt || b.barrier === true || (b.barrier == null && b.type === 'bridge'));
   if (!WR.some((w) => w.dirt || w.bar) && !(sp.suspRanges || []).some((z) => z.dirt || z.barrier) && !layout.routes.some(bridgeEdges)) return res;
   const skip = opts.skip || [];
   const rowsAll = trackRows(layout, elev, sp);
@@ -130,7 +130,7 @@ export function buildEdgeMeshes(layout, elev, spIn = {}, opts = {}) {
       const dAt = frames.map((F, a) => (dOn[a] ? dw : 0));
       // índices por grupo: pista, tramos suspendidos y cada puente
       const groupOf = (a) => { const b = segBridge(a); return b ? `b${b.idx}` : segSusp(a) ? 's' : 'n'; };
-      const tyOf = (bi) => { const b = (r.bridges || []).find((q) => q.idx === bi); return b && b.type === 'track' ? 'tramo' : 'puente'; };
+      const tyOf = (bi) => { const b = (r.bridges || []).find((q) => q.idx === bi); return b && b.type === 'track' ? 'tramo' : b && b.type === 'cut' ? 'socavado' : 'puente'; };
       if (dAt.some((w) => w > 0)) {
         const pos = [], uv = [], G = {};
         frames.forEach((F, a) => {

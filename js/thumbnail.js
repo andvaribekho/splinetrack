@@ -43,7 +43,7 @@ export function makeTrackThumbnail(layout, elev, hills = null, W = 360, H = 240)
     const last = r.closed ? r.n : r.n - 1;
     for (let i = 0; i < last; i++) {
       const j = (i + 1) % r.n;
-      const br = !!(r.bridges && r.bridges.some((b) => { if (b.type === 'track') return false; const d = r.closed ? (((r.s[i] - b.s0) % r.L) + r.L) % r.L : r.s[i] - b.s0; return d >= 0 && d < b.s1 - b.s0; }));
+      const br = !!(r.bridges && r.bridges.some((b) => { if (b.type === 'track' || b.type === 'cut') return false; const d = r.closed ? (((r.s[i] - b.s0) % r.L) + r.L) % r.L : r.s[i] - b.s0; return d >= 0 && d < b.s1 - b.s0; }));
       segs.push({ r, i, j, z: zs ? (zs[i] + zs[j]) / 2 : 0, alt: r.kind === 'alt', br });
     }
   });
