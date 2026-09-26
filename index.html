@@ -3,13 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Track Spline Generator v0.58</title>
+  <title>Track Spline Generator v0.59</title>
   <link rel="stylesheet" href="styles.css">
   <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.58</span></div>
+    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.59</span></div>
+    <label class="proj-name-wrap" title="Nombre del proyecto: se usa al guardar (<nombre>.tsg.json) y en los autoguardados (<nombre>_auto_…)"><input id="projectName" class="proj-name" value="pista" spellcheck="false" maxlength="80"><span class="small muted" id="autosaveState"></span></label>
     <div class="top-actions">
       <button id="btnNew" title="Empezar de cero">Nuevo</button>
       <button id="btnOpen" title="Abrir proyecto .tsg.json">Abrir</button>
@@ -602,6 +603,7 @@
           <button data-tool="hill" title="Pinta cerros (suaves o paredes rocosas); si cubren la pista se crea un túnel. Alt o clic derecho borra">Cerros</button>
           <button data-tool="paint" title="Pinta zonas del terreno (o del cerro seleccionado) que tendrán más polígonos (Alt o clic derecho borra)">Pintar subdivisión</button>
           <button data-tool="sculpt" title="Esculpe el terreno: clic izquierdo eleva, clic derecho hunde (en el mapa o en la vista 3D). [ y ] cambian el pincel">Esculpir relieve</button>
+          <button data-tool="tsmooth" title="Pincel para suavizar la pista: pinta sobre ella (mapa o vista 3D) y los puntos bajo el pincel se suavizan, sin entrar a «Editar puntos» ni seleccionar nada. Cada pasada suaviza más; Ctrl+Z deshace el trazo. [ y ] cambian el pincel">Suavizar pista</button>
           <button data-tool="river" title="Pinta ríos sobre el terreno; con un cerro seleccionado, lo que pintes sobre él es una cascada. Empezar sobre un río lo extiende (y se bifurca). Alt o clic derecho borra">Ríos y cascadas</button>
           <div class="menu-wrap" id="itemsMenuWrap">
             <button id="btnItemsMenu" title="Agregar elementos de pista (nitro strips, turbo pads, charcos)">Elementos de pista ▾</button>
@@ -626,6 +628,11 @@
             <span class="seg seg-bar" id="sculptMode" role="group" aria-label="Modo del pincel"><button data-smode="raise" data-icon="sculpt" title="Clic izquierdo eleva, clic derecho (o Alt) hunde">Elevar / hundir</button><button data-smode="smooth" data-icon="smooth" title="El pincel no eleva ni hunde: solo suaviza el relieve esculpido bajo él">Suavizar</button></span>
             <label class="check small" title="Las zonas esculpidas reciben más polígonos (como lo pintado con «Pintar subdivisión»), para que el relieve se vea definido"><input type="checkbox" id="sculptDetailBar"> Más detalle en lo esculpido</label>
             <span class="small muted" id="sculptHint">clic izq. eleva · clic der. hunde</span>
+          </span>
+          <span id="tsmoothBox" class="row" hidden>
+            <label class="small" title="Cuánto suaviza cada toque">Fuerza <input type="range" id="tsmoothStrength" min="0.05" max="1" step="0.05" style="width:80px"> <span class="val" id="tsmoothStrengthVal"></span></label>
+            <label class="check small" title="Suaviza también las alturas de los puntos bajo el pincel (quedan fijadas)"><input type="checkbox" id="tsmoothZ"> También alturas</label>
+            <span class="small muted">pinta sobre la pista · Shift + arrastrar navega</span>
           </span>
           <span id="hillBox" class="row" hidden>
             <label class="small">Altura <input type="range" id="hillHeight" min="2" max="150" step="1" style="width:90px"> <span class="val" id="hillHeightVal"></span></label>
@@ -822,6 +829,16 @@
       <h4 class="mini">Fijos</h4>
       <div id="fixedKeyList" class="keymap"></div>
       <div class="row gap" style="margin-top:8px"><button id="btnKeymapReset">Restablecer los atajos por defecto</button></div>
+      <h3 class="subhead">Guardado automático</h3>
+      <p class="meta">El servidor local (node server.js / iniciar) escribe copias del proyecto en una carpeta de tu computador, solo si hubo cambios. Se conservan las más recientes de cada proyecto (según su nombre) y las más viejas se borran.</p>
+      <label class="check"><input type="checkbox" id="asOn"> Guardar automáticamente</label>
+      <div id="asBox">
+        <div class="field"><label>Cada <span class="val"><input type="number" id="asMin" min="0.5" max="120" step="0.5" style="width:60px"> min</span></label></div>
+        <div class="field"><label>Carpeta</label><input type="text" id="asDir" spellcheck="false" placeholder="autoguardado" title="Ruta de una carpeta de tu computador (por ejemplo C:\Users\Bruno\Documents\pistas\autoguardado) o relativa a la carpeta de la app. Se crea si no existe"></div>
+        <div class="field"><label>Archivos por proyecto <span class="val"><input type="number" id="asKeep" min="1" max="50" step="1" style="width:60px"></span></label></div>
+        <div class="row gap wrap"><button id="btnAsNow" title="Guarda una copia ahora">Guardar copia ahora</button><button id="btnAsOpen" title="Lista los autoguardados de la carpeta (con miniatura y fecha) para abrir uno">Abrir autoguardado…</button></div>
+        <p class="meta" id="asInfo"></p>
+      </div>
       <h3 class="subhead">Ventanas</h3>
       <p class="meta">Las secciones de la barra lateral se pueden desanclar (⧉) como ventanas flotantes o anclar a la derecha (⇥).</p>
       <div class="row gap"><button id="btnDockAll" title="Vuelve a anclar todas las ventanas flotantes y de la derecha a la barra lateral">Anclar todas las ventanas</button></div>

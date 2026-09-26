@@ -42,7 +42,7 @@ async function sample(name) {
 async function tool(t) { await ev((t) => document.querySelector(`[data-tool=${t}]`).click(), t); await idle(); }
 async function freshPage() {
   await page.goto(URL);
-  await ev(() => localStorage.clear());
+  await ev(() => { localStorage.clear(); localStorage.setItem('tsg.autosave', JSON.stringify({ on: false })); }); // sin autoguardado durante las pruebas
   await page.reload();
   await page.waitForFunction(() => window.__tsg && window.__tsg.idle);
   await idle();
@@ -96,7 +96,7 @@ test('ejemplos: óvalo, ocho y trébol se construyen', async () => {
 
 test('barra superior: una sola herramienta activa y Esc vuelve a Navegar', async () => {
   await sample('oval');
-  for (const t of ['edit', 'draw', 'paint', 'sculpt', 'hill', 'river']) {
+  for (const t of ['edit', 'draw', 'paint', 'sculpt', 'hill', 'river', 'tsmooth']) {
     await tool(t);
     const act = await ev(() => [...document.querySelectorAll('#toolbar [data-tool].active, .side-tool[data-tool].active')].map((b) => b.dataset.tool));
     expect(act.length === 1 && act[0] === t, `herramienta ${t}: activas ${act}`);
@@ -483,6 +483,71 @@ test('auto 3D: se carga, se escala al tamaño del auto por defecto y se ajusta',
   expect(await ev(() => !window.__tsg.preview.game.customCar && window.__tsg.preview.game.car.userData.body.visible), 'no volvió al auto por defecto');
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => !window.__tsg.preview.game.active);
+});
+
+test('pincel Suavizar pista: suaviza los puntos bajo el pincel sin Editar puntos', async () => {
+  await reset();
+  await tool('edit'); // crea los puntos de control
+  // un tramo de puntos seguidos bien a la vista en el mapa, con zigzag
+  const i0 = await ev(() => {
+    const t = window.__tsg, c = t.state.project.main.ctrl, r = document.getElementById('canvas2d').getBoundingClientRect();
+    const ok = (i) => { const [x, y] = t.editor.toScreen(c[i][0], c[i][1]); return x > 80 && y > 80 && x < r.width - 80 && y < r.height - 80; };
+    for (let i = 2; i < c.length - 9; i++) { let all = true; for (let j = i; j <= i + 6; j++) if (!ok(j)) all = false; if (all) return i; }
+    return 10;
+  });
+  const before = await ev((i0) => { const t = window.__tsg, c = t.state.project.main.ctrl, L = t.state.layout; for (let i = i0; i <= i0 + 6; i++) { const d = (i % 2 ? 1 : -1) * 3 / L.scale; c[i][0] += d; c[i][1] += d; } t.scheduleBuild(); return c.map((q) => q.slice(0, 2)); }, i0);
+  await idle();
+  await tool('tsmooth');
+  const vis = await ev(() => [!!document.getElementById('tsmoothBox').offsetParent, !!document.getElementById('paintSubMode').offsetParent]);
+  expect(vis[0] && !vis[1], `barra del pincel: ${vis}`);
+  const rough = (c) => { let s2 = 0; for (let i = i0 + 1; i <= i0 + 5; i++) s2 += Math.hypot(c[i - 1][0] + c[i + 1][0] - 2 * c[i][0], c[i - 1][1] + c[i + 1][1] - 2 * c[i][1]); return s2; };
+  const sc = await ev((i0) => { const t = window.__tsg, c = t.state.project.main.ctrl, r = document.getElementById('canvas2d').getBoundingClientRect(); return [i0 + 1, i0 + 5].map((i) => { const [x, y] = t.editor.toScreen(c[i][0], c[i][1]); return [x + r.left, y + r.top]; }); }, i0);
+  await page.locator('#tsmoothStrength').fill('1');
+  await drag(sc[0][0], sc[0][1], sc[1][0], sc[1][1], 8);
+  await drag(sc[1][0], sc[1][1], sc[0][0], sc[0][1], 8);
+  await idle();
+  const after = await ev(() => window.__tsg.state.project.main.ctrl.map((q) => q.slice(0, 2)));
+  const farI = (i0 + 30) % after.length;
+  const far = Math.hypot(after[farI][0] - before[farI][0], after[farI][1] - before[farI][1]);
+  expect(rough(after) < rough(before) * 0.6 && far < 1e-9, `suavizado: ${rough(before).toFixed(2)} → ${rough(after).toFixed(2)}, punto lejano movido ${far}`);
+  await ev(() => document.activeElement && document.activeElement.blur());
+  await page.keyboard.press('Control+z');
+  await idle();
+  const und = await ev(() => window.__tsg.state.project.main.ctrl.map((q) => q.slice(0, 2)));
+  expect(rough(und) > rough(after), 'deshacer no devolvió el trazo');
+  await page.keyboard.press('Escape');
+});
+
+test('nombre del proyecto y guardado automático en disco (carpeta, archivos por proyecto)', async () => {
+  await reset();
+  await page.locator('#projectName').fill('Prueba Auto');
+  await page.locator('#projectName').press('Enter');
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#btnSave')]);
+  expect(dl.suggestedFilename() === 'Prueba_Auto.tsg.json', `guardar usa el nombre: ${dl.suggestedFilename()}`);
+  const dir = path.join(os.tmpdir(), `tsg-auto-${process.pid}`);
+  await ev((dir) => { const c = window.__tsg.asCfg(); c.dir = dir; c.keep = 2; }, dir);
+  for (let k = 0; k < 3; k++) {
+    await ev((k) => { const t = window.__tsg; t.state.project.main.pts[3][0] += 1 + k; }, k);
+    const ok = await ev(() => window.__tsg.autosaveNow(false));
+    expect(ok, `autoguardado ${k + 1} falló: ${await ev(() => document.getElementById('asInfo').textContent)}`);
+    await page.waitForTimeout(1100); // nombres con la hora (segundos)
+  }
+  expect(!(await ev(() => window.__tsg.autosaveNow(false))), 'sin cambios no debe guardar otra copia');
+  const fs = require('fs');
+  const files = fs.readdirSync(dir).filter((f) => f.startsWith('Prueba_Auto_auto_'));
+  expect(files.length === 2, `se conservan 2 archivos: ${files}`);
+  const d = JSON.parse(fs.readFileSync(path.join(dir, files[0]), 'utf8'));
+  expect(d.format === 'track-spline-generator' && d.projectName === 'Prueba Auto', 'el autoguardado no es un proyecto válido');
+  // abrir autoguardado: la ventana de abrir lista las copias
+  await ev(() => window.__tsg.openAutosaves());
+  await page.waitForSelector('.open-dialog .od-card');
+  const cards = await ev(() => document.querySelectorAll('.open-dialog .od-card').length);
+  expect(cards === 2, `ventana con los autoguardados: ${cards}`);
+  await page.keyboard.press('Escape');
+  // seguridad: sin el encabezado de la app, el servidor no escribe
+  const code = (await fetch(new (require('url').URL)('/api/autosave/save?name=x', page.url()), { method: 'POST', body: '{}' })).status;
+  expect(code === 403, `pedido sin encabezado: ${code}`);
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('guardar y abrir: el proyecto conserva tramos, cerros y listas fijas', async () => {

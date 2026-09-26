@@ -150,9 +150,9 @@ export class Preview3D {
     };
     const moveRing = (pt) => {
       const sc = this.app.state.scene;
-      const rm = this.paintMode === 'hill' ? sc.hillBrush : this.paintMode === 'sculpt' ? sc.sculptBrush : this.paintMode === 'river' ? sc.riverBrush : sc.paintBrush;
+      const rm = this.paintMode === 'hill' ? sc.hillBrush : this.paintMode === 'sculpt' ? sc.sculptBrush : this.paintMode === 'river' ? sc.riverBrush : this.paintMode === 'tsmooth' ? sc.tsmoothBrush : sc.paintBrush;
       this.shapeBrushRing(pt, rm);
-      this.brushRing.material.color.set(this.paintMode === 'hill' ? 0xe0a050 : this.paintMode === 'river' ? 0x3fa7ff : this.paintMode === 'sculpt' ? 0x7ec8ff : this.paintMode === 'itemPaint' ? this.app.itemPaintColor() : 0xe040fb);
+      this.brushRing.material.color.set(this.paintMode === 'tsmooth' ? 0x9cff8a : this.paintMode === 'hill' ? 0xe0a050 : this.paintMode === 'river' ? 0x3fa7ff : this.paintMode === 'sculpt' ? 0x7ec8ff : this.paintMode === 'itemPaint' ? this.app.itemPaintColor() : 0xe040fb);
       this.brushRing.visible = true;
       this.needsFrame = true;
     };
@@ -179,7 +179,7 @@ export class Preview3D {
       e.stopPropagation(); e.preventDefault();
       this.controls.enabled = false;
       const L = this.app.state.layout;
-      const ses = { kind: this.paintMode, erase: e.button === 2 || e.altKey || (this.paintMode !== 'sculpt' && this.app.state.paintErase), ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey, last: null };
+      const ses = { kind: this.paintMode, erase: e.button === 2 || e.altKey || (this.paintMode !== 'sculpt' && this.paintMode !== 'tsmooth' && this.app.state.paintErase), ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey, last: null };
       const pt0 = paintHit(e);
       this.app.beginPaint(ses.kind, ses, pt0 && L ? L.toLayout(pt0.x, pt0.y) : null, pt0 ? pt0.hillId : null);
       const stroke = (ev) => {

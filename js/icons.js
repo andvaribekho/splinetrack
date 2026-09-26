@@ -85,7 +85,7 @@ const BY_ID = {
   btnAssetLoad: 'upload', btnDecoNew: 'plus', btnExportJSON: 'code', btnExportOBJ: 'box', btnExportBlender: 'download', btnExportMax: 'download',
   btnExportGLB: 'download', btnExportFBX: 'download', btnExportMenu: 'download',
 };
-const BY_TOOL = { pan: 'move', draw: 'pen', alt: 'penAlt', edit: 'cursor', extend: 'extend', start: 'flag', flat: 'flat', ref: 'image', paint: 'brush', hill: 'mountain', sculpt: 'sculpt', itemPaint: 'brush' };
+const BY_TOOL = { pan: 'move', draw: 'pen', alt: 'penAlt', edit: 'cursor', extend: 'extend', start: 'flag', flat: 'flat', ref: 'image', paint: 'brush', hill: 'mountain', sculpt: 'sculpt', itemPaint: 'brush', tsmooth: 'smooth' };
 const BY_GIZMO = { free: 'move', xy: 'axisXY', z: 'axisZ' };
 const BY_TYPE = { forest: 'tree', beach: 'waves', mountain: 'mountain' };
 const BY_CAM = { first: 'eye', third: 'gamepad' };

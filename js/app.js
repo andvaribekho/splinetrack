@@ -79,6 +79,7 @@ const state = {
   selCross: null, // id del cruce seleccionado
   selBridge: null, // índice del puente seleccionado
   items: { puddle: [], pad: [], strip: [] }, // grupos de elementos de pista
+  projectName: 'pista', // nombre del proyecto: archivo al guardar y autoguardados
   triggers: [], // triggers propios [{id, name, p:[x, y] en coords del mapa, depth, height}]
   selItem: null, // {type, gid, idx}
   itemPaintTarget: null, // {type, gid} al pintar zonas de un grupo
@@ -231,8 +232,8 @@ function hillIsEmpty(h) {
 /** Subdivisiones extra del pincel → multiplicador de polígonos por m² (cada lado se divide n + 1 veces). */
 function subdivFactor(n) { const k = Math.max(0, Math.round(n ?? 1)); return (k + 1) * (k + 1); }
 /** Clave del radio del pincel de cada herramienta. */
-function brushKey(t) { return t === 'hill' ? 'hillBrush' : t === 'sculpt' ? 'sculptBrush' : t === 'river' ? 'riverBrush' : 'paintBrush'; }
-const PAINT_TOOLS = ['paint', 'hill', 'itemPaint', 'sculpt', 'river'];
+function brushKey(t) { return t === 'hill' ? 'hillBrush' : t === 'sculpt' ? 'sculptBrush' : t === 'river' ? 'riverBrush' : t === 'tsmooth' ? 'tsmoothBrush' : 'paintBrush'; }
+const PAINT_TOOLS = ['paint', 'hill', 'itemPaint', 'sculpt', 'river', 'tsmooth'];
 function hillAt(p) {
   const sel = state.hills.find((h) => h.id === state.selHill);
   if (sel && hillContainsL(sel, p)) return sel;
@@ -1473,6 +1474,12 @@ const app = {
   /** Empieza una sesión de pincel. Cerros: si empieza sobre un cerro lo extiende (y lo selecciona); si no, crea uno nuevo. */
   beginPaint(kind, ses = null, p = null, hitHill = null) {
     state.paintSes = ses;
+    if (kind === 'tsmooth') { // pincel «Suavizar pista»: un Ctrl+Z por trazo; crea los puntos de control si aún no hay
+      pushUndo();
+      if (state.layout && ensureCtrl()) { state.layout = buildLayout(state.project, state.geom); computeCtrlS(); }
+      if (ses) ses.dabs = 0;
+      return;
+    }
     if (ses) { ses.from = kind === 'sculpt' ? state.terrainSculpt.length : 0; ses.strokes = []; }
     if (kind === 'river' && ses) {
       // río sobre el terreno o, con un cerro seleccionado y pintando sobre él, cascada de ese cerro; si el trazo empieza
@@ -1513,6 +1520,13 @@ const app = {
     if (!L) return;
     const sc = state.scene;
     const rm = sc[brushKey(ses.kind)];
+    if (ses.kind === 'tsmooth') {
+      const rr = rm / L.scale;
+      if (ses.last && Math.hypot(p[0] - ses.last[0], p[1] - ses.last[1]) < rr * 0.25) return;
+      ses.last = p;
+      if (smoothDabCtrl(p, rr, sc.tsmoothStrength ?? 0.5, !!sc.tsmoothZ)) { ses.dabs++; scheduleBuild(); }
+      return;
+    }
     if (ses.kind === 'sculpt') {
       // relieve: clic izquierdo eleva, clic derecho (o Alt) hunde; cada toque guarda la curva del pincel con que se hizo
       const rr = rm / L.scale;
@@ -1579,6 +1593,7 @@ const app = {
   },
   endPaint(kind, ses) {
     state.paintSes = null;
+    if (kind === 'tsmooth') { if (ses && !ses.dabs) { undoStack.pop(); $('btnUndo').disabled = undoStack.length === 0; } editor.draw(); return; } // sin cambios: no deja un paso de deshacer vacío
     setTimeout(() => preview.refreshPaintOverlay(), 0);
     if (kind === 'itemPaint') { if (state.itemPaintTarget && state.itemPaintTarget.type === 'deco') decoChanged(); else itemsChanged(); return; }
     if (kind === 'sculpt') refreshSculptInfo();
@@ -2535,6 +2550,47 @@ function smoothSeq(pts, t) {
   if (f <= 1e-6) return a;
   const b = taubinSmooth(a, 1, false);
   return a.map((p, k) => p.map((v, c) => v + (b[k][c] - v) * f));
+}
+/**
+ * Un toque del pincel «Suavizar pista» en p (coords del mapa), radio rr: los puntos de control de cada ruta bajo el
+ * pincel se acercan al promedio de sus vecinos (Taubin: suaviza sin encoger la curva), más en el centro que en el borde.
+ * Los extremos de las rutas abiertas (y de los atajos, donde se unen a la pista) no se mueven. Devuelve si movió algo.
+ */
+function smoothDabCtrl(p, rr, strength, withZ) {
+  const P = state.project;
+  const routes = [];
+  if (P.main && P.main.ctrl) routes.push({ key: 'main', pts: P.main.ctrl, closed: P.main.closed !== false });
+  P.alts.forEach((a, i) => { if (a.ctrl && a.keep !== false) routes.push({ key: i, pts: a.ctrl, closed: false }); });
+  let moved = false;
+  const zOf = withZ ? new Map(app.ctrlPoints().map((q) => [`${q.key}:${q.idx}`, q.pin !== null ? q.pin : q.z])) : null;
+  for (const R of routes) {
+    const n = R.pts.length;
+    if (n < 3) continue;
+    const w = R.pts.map((q, i) => {
+      if (!R.closed && (i === 0 || i === n - 1)) return 0;
+      const d = Math.hypot(q[0] - p[0], q[1] - p[1]) / rr;
+      return d >= 1 ? 0 : strength * (1 - d * d) * (1 - d * d);
+    });
+    if (!w.some((v) => v > 0)) continue;
+    const za = withZ ? zArray(R.key) : null;
+    const zs = withZ ? R.pts.map((_, i) => zOf.get(`${R.key}:${i}`)) : null;
+    const step = (lam) => {
+      const nx = R.pts.map((q) => q.slice());
+      const nz = zs ? zs.slice() : null;
+      for (let i = 0; i < n; i++) {
+        if (!w[i]) continue;
+        const a = R.pts[(i - 1 + n) % n], b = R.pts[(i + 1) % n];
+        nx[i][0] = R.pts[i][0] + lam * w[i] * ((a[0] + b[0]) / 2 - R.pts[i][0]);
+        nx[i][1] = R.pts[i][1] + lam * w[i] * ((a[1] + b[1]) / 2 - R.pts[i][1]);
+        if (nz && Number.isFinite(zs[(i - 1 + n) % n]) && Number.isFinite(zs[(i + 1) % n]) && Number.isFinite(zs[i])) nz[i] = zs[i] + lam * w[i] * ((zs[(i - 1 + n) % n] + zs[(i + 1) % n]) / 2 - zs[i]);
+      }
+      for (let i = 0; i < n; i++) { R.pts[i][0] = nx[i][0]; R.pts[i][1] = nx[i][1]; if (nz) zs[i] = nz[i]; }
+    };
+    step(0.6); step(-0.62); step(0.6);
+    if (za) for (let i = 0; i < n; i++) if (w[i] && Number.isFinite(zs[i])) za[i] = makePin(zs[i]);
+    moved = true;
+  }
+  return moved;
 }
 /** Reparte n puntos a distancias parejas a lo largo del spline que pasa por pts (conserva el primero y el último). */
 function evenSpacing(pts) {
@@ -4524,7 +4580,7 @@ function bindControls() {
   $('btnNew').addEventListener('click', () => {
     pushUndo();
     state.project = { main: null, alts: [], start: null, reverse: false };
-    state.flatZones = []; state.profileZones = []; state.profileSel = null; state.suspZones = []; state.cutZones = []; state.overrides = []; state.image = null; state.valDismissed = null; state.triggers = []; state.selTrigger = null; renderTriggerPanel();
+    state.flatZones = []; state.profileZones = []; state.profileSel = null; state.suspZones = []; state.cutZones = []; state.overrides = []; state.image = null; state.valDismissed = null; state.triggers = []; state.selTrigger = null; renderTriggerPanel(); setProjectName('pista');
     syncControls(); scheduleBuild(); setTool('draw');
     setTimeout(() => editor.fit(), 0);
   });
@@ -4702,13 +4758,15 @@ function setTool(t) {
   const pb = document.getElementById('paintBox');
   if (pb) pb.hidden = !PAINT_TOOLS.includes(t);
   const eraseLbl = document.getElementById('paintEraseLbl');
-  if (eraseLbl) eraseLbl.hidden = t === 'sculpt';
+  if (eraseLbl) eraseLbl.hidden = t === 'sculpt' || t === 'tsmooth';
   const subLbl = document.getElementById('paintSubdivLbl');
   if (subLbl) subLbl.hidden = t !== 'paint';
   const subMode = document.getElementById('paintSubMode'); // «Aumentar / Disminuir subd.»: solo en «Pintar subdivisión»
   if (subMode) subMode.hidden = t !== 'paint';
   const sb = document.getElementById('sculptBox');
   if (sb) sb.hidden = t !== 'sculpt';
+  const tsb = document.getElementById('tsmoothBox');
+  if (tsb) tsb.hidden = t !== 'tsmooth';
   if (t !== 'itemPaint' && state.itemPaintTarget) { const wasDeco = state.itemPaintTarget.type === 'deco'; state.itemPaintTarget = null; if (typeof renderItemsPanel === 'function') renderItemsPanel(); if (wasDeco && typeof renderDecoPanel === 'function') renderDecoPanel(); }
   const hb = document.getElementById('hillBox');
   if (hb) hb.hidden = t !== 'hill';
@@ -4798,13 +4856,15 @@ function loadSample(k) {
   setTimeout(() => editor.fit(), 0);
 }
 
-function saveProject() { download('pista.tsg.json', JSON.stringify(projectData()), 'application/json'); }
+function saveProject() { download(`${projectFileName()}.tsg.json`, JSON.stringify(projectData()), 'application/json'); markSaved(); }
+/** Nombre de archivo seguro a partir del nombre del proyecto. */
+function projectFileName() { return String(state.projectName || 'pista').replace(/[^\w\-áéíóúñÁÉÍÓÚÑ ]/g, '').trim().replace(/\s+/g, '_').slice(0, 80) || 'pista'; }
 /** Datos del proyecto (lo que se guarda en el .tsg.json). */
 function projectData() {
   let thumbnail = null;
   try { thumbnail = makeTrackThumbnail(state.layout, state.result, app.hillsWorld()); } catch (err) { console.warn('miniatura', err); }
   const data = {
-    format: 'track-spline-generator', version: 1, appVersion: VERSION,
+    format: 'track-spline-generator', version: 1, appVersion: VERSION, projectName: state.projectName,
     thumbnail, // miniatura en planta (JPEG), va primero para leerla rápido al abrir
     savedAt: new Date().toISOString(),
     stats: state.layout ? { length: Math.round(state.layout.routes[0].L), routes: state.layout.routes.length, crossings: state.result ? state.result.crossings.length : 0, hills: state.hills.length } : null,
@@ -4877,6 +4937,7 @@ async function showOpenDialog(files, dirName = null) {
   back.innerHTML = `<div class="open-dialog" role="dialog" aria-label="Abrir proyecto">
       <div class="od-head"><strong>Abrir proyecto</strong><span class="od-sub"></span><span class="grow"></span>
         <button class="od-more" title="Elegir otros archivos .tsg.json (puedes seleccionar varios)">Elegir archivos…</button>
+        <button class="od-auto" title="Copias del guardado automático (carpeta de Ajustes)">Autoguardados…</button>
         ${window.showDirectoryPicker ? '<button class="od-dir" title="Ver las miniaturas de todos los proyectos .json de una carpeta">Abrir carpeta…</button>' : ''}
         <button class="od-close" title="Cerrar (Esc)">✕</button></div>
       <div class="od-grid"></div>
@@ -4895,6 +4956,7 @@ async function showOpenDialog(files, dirName = null) {
   back.querySelector('.od-close').addEventListener('click', close);
   back.querySelector('.od-cancel').addEventListener('click', close);
   back.querySelector('.od-more').addEventListener('click', () => { close(); $('fileProject').click(); });
+  back.querySelector('.od-auto').addEventListener('click', () => { close(); openAutosaves(); });
   back.querySelector('.od-dir')?.addEventListener('click', async () => {
     try {
       const dh = await window.showDirectoryPicker({ id: 'tsg-projects' });
@@ -4912,7 +4974,7 @@ async function showOpenDialog(files, dirName = null) {
     grid.querySelectorAll('.od-card').forEach((c) => c.classList.toggle('sel', c === en.el));
     back.querySelector('.od-ok').disabled = !en.data;
   };
-  const go = () => { if (!chosen || !chosen.data) return; close(); openProject(chosen.data); };
+  const go = () => { if (!chosen || !chosen.data) return; close(); openProject(chosen.data, chosen.f.name); };
   back.querySelector('.od-ok').addEventListener('click', go);
   files.sort((a, b) => b.lastModified - a.lastModified);
   for (const f of files) {
@@ -4952,11 +5014,16 @@ async function showOpenDialog(files, dirName = null) {
   back.querySelector('.od-info').textContent = `${ok} proyecto${ok === 1 ? '' : 's'}${entries.length > ok ? ` · ${entries.length - ok} no válido${entries.length - ok === 1 ? '' : 's'}` : ''} · doble clic o Enter para abrir`;
 }
 
-async function openProject(text) {
+async function openProject(text, fileName = null) {
   let d;
   if (typeof text === 'object' && text) d = text;
   else try { d = JSON.parse(text); } catch { toastErr('Archivo no válido.'); return; }
   state.valDismissed = null; // los avisos eliminados son de cada proyecto
+  { // nombre del proyecto: el guardado dentro del archivo o, si no tiene, el nombre del archivo (sin «_auto_…»)
+    const fromFile = fileName ? fileName.replace(/\.tsg\.json$|\.json$/i, '').replace(/_auto_\d{8}-\d{6}$/, '') : null;
+    const nm = (typeof text === 'object' && text && text.projectName) || (() => { try { return JSON.parse(text).projectName; } catch { return null; } })() || fromFile;
+    if (nm) setProjectName(nm);
+  }
   if (d.format !== 'track-spline-generator') {
     // también acepta un JSON exportado (trae "project")
     if (d.project && d.project.main) d = { project: d.project, geom: d.params?.geom, elev: d.params?.elev };
@@ -5306,6 +5373,7 @@ function syncSceneControls() {
   if ($('sculptHint')) $('sculptHint').textContent = sc.sculptMode === 'smooth' ? 'clic: suaviza el relieve' : 'clic izq. eleva · clic der. hunde';
   set('sculptStrength', sc.sculptStrength); set('sculptStrengthP', sc.sculptStrength); set('sculptBrushP', Math.min(200, sc.sculptBrush));
   set('sculptDetail', sc.sculptDetail !== false); set('sculptDetailBar', sc.sculptDetail !== false);
+  set('tsmoothStrength', sc.tsmoothStrength ?? 0.5); set('tsmoothZ', !!sc.tsmoothZ); if ($('tsmoothStrengthVal')) $('tsmoothStrengthVal').textContent = `${Math.round((sc.tsmoothStrength ?? 0.5) * 100)} %`;
   if ($('sculptStrengthVal')) $('sculptStrengthVal').textContent = `${sc.sculptStrength} m`;
   if ($('sculptStrengthPVal')) $('sculptStrengthPVal').textContent = `${sc.sculptStrength} m`;
   if ($('sculptBrushPVal')) $('sculptBrushPVal').textContent = `${sc.sculptBrush} m`;
@@ -5457,6 +5525,86 @@ function bufToB64(buf) {
 function b64ToBuf(b64) { const bin = atob(b64); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u.buffer; }
 const REF3D_KEEP = ['pos', 'rotZ', 'scale', 'visible', 'show2d', 'locked', 'look', 'color', 'opacity', 'gizmo', 'unitOpt', 'upOpt'];
 function ref3dSettings() { const R = state.ref3d; const o = {}; for (const k of REF3D_KEEP) o[k] = R[k]; return o; }
+// ---------- nombre del proyecto y guardado automático ----------
+function setProjectName(nm) {
+  state.projectName = String(nm || 'pista').slice(0, 80) || 'pista';
+  if ($('projectName')) $('projectName').value = state.projectName;
+  document.title = `${state.projectName} · Track Spline Generator v${VERSION}`;
+}
+const AS_KEY = 'tsg.autosave';
+const AS_DEF = { on: true, min: 2, dir: 'autoguardado', keep: 3 };
+let asCfg = (() => { try { return { ...AS_DEF, ...(JSON.parse(localStorage.getItem(AS_KEY) || '{}') || {}) }; } catch { return { ...AS_DEF }; } })();
+let asLastSig = null, asLastTime = 0, asBusy = false, asLast = null, asErr = null;
+const saveAsCfg = () => { try { localStorage.setItem(AS_KEY, JSON.stringify(asCfg)); } catch { /* sin almacenamiento */ } };
+/** Firma barata del proyecto (para guardar solo si hubo cambios). */
+function projectSig() {
+  const str = snapshot() + JSON.stringify(state.scene) + JSON.stringify(state.game) + state.projectName + JSON.stringify(state.decoSets.map((d) => d.assets));
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return `${str.length}:${h >>> 0}`;
+}
+/** Tras guardar a mano, el autoguardado no repite una copia igual. */
+function markSaved() { asLastSig = projectSig(); asLastTime = Date.now(); }
+async function autosaveNow(force = false) {
+  if (asBusy || !state.project.main) return false;
+  const sig = projectSig();
+  if (!force && sig === asLastSig) return false;
+  asBusy = true;
+  try {
+    const q = new URLSearchParams({ dir: asCfg.dir || 'autoguardado', name: projectFileName(), keep: String(asCfg.keep || 3) });
+    const r = await fetch(`/api/autosave/save?${q}`, { method: 'POST', headers: { 'X-TSG': '1', 'Content-Type': 'text/plain' }, body: JSON.stringify(projectData()) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) throw new Error(j.error || `el servidor respondió ${r.status}`);
+    asLastSig = sig; asLastTime = Date.now(); asLast = { file: j.file, dir: j.dir, at: new Date() }; asErr = null;
+    return true;
+  } catch (err) {
+    asErr = err.message || String(err);
+    asLastTime = Date.now(); // reintenta en el próximo intervalo
+    return false;
+  } finally { asBusy = false; refreshAutosaveInfo(); }
+}
+function refreshAutosaveInfo() {
+  const hm = (d) => d.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' });
+  if ($('autosaveState')) $('autosaveState').textContent = !asCfg.on ? '' : asErr ? 'autoguardado: error' : asLast ? `autoguardado ${hm(asLast.at)}` : '';
+  if ($('autosaveState')) $('autosaveState').title = asErr ? `No se pudo guardar: ${asErr}` : asLast ? `${asLast.dir} · ${asLast.file}` : '';
+  if ($('asInfo')) $('asInfo').textContent = asErr ? `No se pudo guardar: ${asErr}. ¿Abriste la app con node server.js (o iniciar)?` : asLast ? `Último: ${hm(asLast.at)} · ${asLast.file} en ${asLast.dir}` : asCfg.on ? `Cada ${asCfg.min} min si hay cambios, en «${asCfg.dir}».` : 'Desactivado.';
+}
+/** Autoguardados de la carpeta, en la ventana «Abrir proyecto» (con miniatura y fecha). */
+async function openAutosaves() {
+  try {
+    const q = new URLSearchParams({ dir: asCfg.dir || 'autoguardado' });
+    const r = await fetch(`/api/autosave/list?${q}`, { headers: { 'X-TSG': '1' } });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.status);
+    if (!j.files.length) { toastErr(`No hay autoguardados en «${j.dir}».`); return; }
+    const files = [];
+    for (const f of j.files.slice(0, 40)) {
+      const rr = await fetch(`/api/autosave/file?${new URLSearchParams({ dir: asCfg.dir || 'autoguardado', file: f.file })}`, { headers: { 'X-TSG': '1' } });
+      if (rr.ok) files.push(new File([await rr.text()], f.file, { lastModified: f.mtime }));
+    }
+    showOpenDialog(files, j.dir);
+  } catch (err) { toastErr(`No se pudieron leer los autoguardados: ${err.message}. ¿Abriste la app con node server.js (o iniciar)?`); }
+}
+function bindAutosave() {
+  setProjectName(state.projectName);
+  $('projectName').addEventListener('change', (e) => { setProjectName(e.target.value.trim() || 'pista'); });
+  $('projectName').addEventListener('keydown', (e) => { if (e.key === 'Enter') e.target.blur(); });
+  const sync = () => {
+    $('asOn').checked = !!asCfg.on; $('asMin').value = asCfg.min; $('asDir').value = asCfg.dir; $('asKeep').value = asCfg.keep;
+    $('asBox').classList.toggle('disabled', !asCfg.on);
+    refreshAutosaveInfo();
+  };
+  $('asOn').addEventListener('change', (e) => { asCfg.on = e.target.checked; saveAsCfg(); sync(); });
+  $('asMin').addEventListener('change', (e) => { const v = parseFloat(e.target.value); if (v > 0) asCfg.min = Math.max(0.5, Math.min(120, v)); saveAsCfg(); sync(); });
+  $('asDir').addEventListener('change', (e) => { asCfg.dir = e.target.value.trim() || 'autoguardado'; saveAsCfg(); sync(); });
+  $('asKeep').addEventListener('change', (e) => { const v = parseInt(e.target.value, 10); if (v > 0) asCfg.keep = Math.max(1, Math.min(50, v)); saveAsCfg(); sync(); });
+  $('btnAsNow').addEventListener('click', async () => { if (!state.project.main) { toastErr('No hay pista que guardar.'); return; } if (await autosaveNow(true)) toast(`Copia guardada: ${asLast.file}`); else if (asErr) toastErr(`No se pudo guardar: ${asErr}`); });
+  $('btnAsOpen').addEventListener('click', () => openAutosaves());
+  sync();
+  asLastTime = Date.now();
+  setInterval(() => { if (asCfg.on && Date.now() - asLastTime >= asCfg.min * 60000) autosaveNow(false); }, 10000);
+}
+
 // ---------- divisiones de las transiciones de ancho ----------
 const TRANS_DIVS_DEFAULT = [0.07, 0.47, 0.53, 0.93];
 let transDivSel = -1;
@@ -5955,7 +6103,7 @@ function focusPanel(id, sub = null) {
 /** Botones (fuera de la barra lateral) con parámetros asociados: a qué sección llevan. */
 const PANEL_FOR_BUTTON = {
   'tool:edit': 'spline', 'tool:draw': 'trace', 'tool:extend': 'trace', 'tool:alt': 'alts', 'tool:start': 'gate', 'tool:ref': 'ref',
-  btnDecoNew: 'deco', 'tool:hill': 'hills', 'tool:river': 'rivers', 'tool:paint': 'relief', 'tool:sculpt': 'relief', 'tool:profile': 'elev', btnSculptTool: 'relief', btnRef3dTop: 'ref3d',
+  btnDecoNew: 'deco', 'tool:hill': 'hills', 'tool:river': 'rivers', 'tool:paint': 'relief', 'tool:sculpt': 'relief', 'tool:tsmooth': 'spline', 'tool:profile': 'elev', btnSculptTool: 'relief', btnRef3dTop: 'ref3d',
   btnGame: 'sky', btnTbRadius: 'spline', btnTbFork: 'spline', btnTbBridge: 'bridges', btnGenTerrain: 'terrain', btnGenTrees: 'trees',
 };
 const PANEL_SUB = { 'tool:sculpt': 'sculptCurveBox', btnSculptTool: 'sculptCurveBox', btnTbRadius: 'arcControls', btnTbFork: 'forkControls' }; // elemento interior al que se baja
@@ -6086,6 +6234,8 @@ function bindSceneControls() {
   $('paintSubMode').addEventListener('change', (e) => { sc.paintSubMode = e.target.value; syncSceneControls(); });
   $('sculptStrengthP').addEventListener('input', (e) => sStr(parseFloat(e.target.value)));
   $('sculptBrushP').addEventListener('input', (e) => { sc.sculptBrush = Math.round(parseFloat(e.target.value)); syncSceneControls(); editor.draw(); });
+  $('tsmoothStrength').addEventListener('input', (e) => { sc.tsmoothStrength = parseFloat(e.target.value) || 0.5; $('tsmoothStrengthVal').textContent = `${Math.round(sc.tsmoothStrength * 100)} %`; });
+  $('tsmoothZ').addEventListener('change', (e) => { sc.tsmoothZ = e.target.checked; });
   for (const id of ['sculptDetail', 'sculptDetailBar']) $(id).addEventListener('change', (e) => { sc.sculptDetail = e.target.checked; syncSceneControls(); sceneChanged(); });
   initSculptCurveEditor();
   refreshSculptInfo();
@@ -6810,6 +6960,7 @@ bindSceneControls();
 bindItemsPanel();
 bindTriggerControls();
 bindTransDivs();
+bindAutosave();
 bindPanelFocus();
 renderItemsPanel();
 refreshSkyThumb();
@@ -6821,7 +6972,7 @@ initPanelStripes(); // fondo alternado de las secciones (se rehace al desanclar 
 initSplitters();
 $('btnDockAll').addEventListener('click', () => panels.dockAll());
 initHints();
-$('appVersion').textContent = `v${VERSION}`; document.title = `Track Spline Generator v${VERSION}`;
+$('appVersion').textContent = `v${VERSION}`; setProjectName(state.projectName);
 initSettings(initHotkeys({ toast }));
 setTool('pan');
 loadSample('figure8');
@@ -6843,4 +6994,4 @@ function idle(timeout = 30000) {
     step();
   });
 }
-window.__tsg = { state, app, editor, preview, profile, openProject, scheduleBuild, refreshBridgeList, refreshPanels, projectData, busy, idle }; // para depuración y pruebas // para depuración
+window.__tsg = { state, app, editor, preview, profile, openProject, scheduleBuild, refreshBridgeList, refreshPanels, projectData, busy, idle, autosaveNow, openAutosaves, asCfg: () => asCfg }; // para depuración y pruebas // para depuración

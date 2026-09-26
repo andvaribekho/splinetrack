@@ -96,13 +96,13 @@ export class Editor2D {
       const tool = this.app.state.tool;
       // auto de la cámara de juego: se arrastra a lo largo de la pista
       if (e.button === 0 && this.hitCar(sx, sy)) { this.carDrag = true; this.app.beginCarDrag(); cv.style.cursor = 'grabbing'; return; }
-      if ((tool === 'paint' || tool === 'hill' || tool === 'itemPaint' || tool === 'sculpt' || tool === 'river') && e.shiftKey) {
+      if ((tool === 'paint' || tool === 'hill' || tool === 'itemPaint' || tool === 'sculpt' || tool === 'river' || tool === 'tsmooth') && e.shiftKey) {
         // pintando, Shift + arrastrar desplaza el mapa (la rueda acerca / aleja)
         this.panning = { sx, sy, ox: this.view.ox, oy: this.view.oy };
         return;
       }
-      if ((tool === 'paint' || tool === 'hill' || tool === 'itemPaint' || tool === 'sculpt' || tool === 'river') && (e.button === 0 || e.button === 2)) {
-        this.painting = { kind: tool, erase: e.button === 2 || e.altKey || (tool !== 'sculpt' && this.app.state.paintErase), ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey, last: null };
+      if ((tool === 'paint' || tool === 'hill' || tool === 'itemPaint' || tool === 'sculpt' || tool === 'river' || tool === 'tsmooth') && (e.button === 0 || e.button === 2)) {
+        this.painting = { kind: tool, erase: e.button === 2 || e.altKey || (tool !== 'sculpt' && tool !== 'tsmooth' && this.app.state.paintErase), ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey, last: null };
         const p0 = this.toLayout(sx, sy);
         this.app.beginPaint(tool, this.painting, p0);
         this.addPaint(p0);
@@ -312,7 +312,7 @@ export class Editor2D {
       const s = this.app.nearestMainS(p, 25 / this.view.zoom);
  const tl = this.app.state.tool;
       if (this.hitCar(sx, sy)) { cv.style.cursor = 'grab'; return; }
-      if (tl === 'paint' || tl === 'hill' || tl === 'itemPaint' || tl === 'sculpt' || tl === 'river') { this.paintCursor = p; cv.style.cursor = 'none'; this.draw(); return; }
+      if (tl === 'paint' || tl === 'hill' || tl === 'itemPaint' || tl === 'sculpt' || tl === 'river' || tl === 'tsmooth') { this.paintCursor = p; cv.style.cursor = 'none'; this.draw(); return; }
       if (tl === 'pan' && this.hitCave(sx, sy)) { cv.style.cursor = 'move'; return; }
       if (tl === 'pan' && this.app.placingTrigger && this.app.placingTrigger()) { cv.style.cursor = 'copy'; return; }
       if (tl === 'pan' && this.hitTrigger(sx, sy)) { cv.style.cursor = 'move'; return; }
@@ -745,14 +745,14 @@ export class Editor2D {
     if (st.terrainSculpt && st.terrainSculpt.length && (tool === 'sculpt' || st.scene.terrain)) this.drawStrokeLayer(st.terrainSculpt, null, tool === 'sculpt' ? 0.4 : 0.14, (q) => (q.h > 0 ? 'rgb(255,160,70)' : 'rgb(80,160,255)'));
     if (tool === 'itemPaint') this.drawStrokeLayer(this.app.itemPaintStrokes(), this.app.itemPaintColor(), 0.4);
     // cursor del pincel
-    if ((tool === 'paint' || tool === 'hill' || tool === 'itemPaint' || tool === 'sculpt' || tool === 'river') && this.paintCursor && st.layout) {
+    if ((tool === 'paint' || tool === 'hill' || tool === 'itemPaint' || tool === 'sculpt' || tool === 'river' || tool === 'tsmooth') && this.paintCursor && st.layout) {
       const [x, y] = this.toScreen(this.paintCursor[0], this.paintCursor[1]);
       const erase = (this.painting && this.painting.erase) || st.paintErase;
       ctx_stroke: {
         const ctx = this.ctx;
-        ctx.strokeStyle = tool === 'sculpt' ? (this.painting ? (this.painting.erase ? '#50a0ff' : '#ffa046') : '#7ec8ff') : erase ? '#ff8a80' : tool === 'hill' ? '#e0a050' : tool === 'river' ? '#3fa7ff' : tool === 'itemPaint' ? this.app.itemPaintColor() : '#e040fb';
+        ctx.strokeStyle = tool === 'tsmooth' ? '#9cff8a' : tool === 'sculpt' ? (this.painting ? (this.painting.erase ? '#50a0ff' : '#ffa046') : '#7ec8ff') : erase ? '#ff8a80' : tool === 'hill' ? '#e0a050' : tool === 'river' ? '#3fa7ff' : tool === 'itemPaint' ? this.app.itemPaintColor() : '#e040fb';
         ctx.lineWidth = 1.5;
-        const rm = tool === 'hill' ? st.scene.hillBrush : tool === 'sculpt' ? st.scene.sculptBrush : tool === 'river' ? st.scene.riverBrush : st.scene.paintBrush;
+        const rm = tool === 'hill' ? st.scene.hillBrush : tool === 'sculpt' ? st.scene.sculptBrush : tool === 'river' ? st.scene.riverBrush : tool === 'tsmooth' ? st.scene.tsmoothBrush : st.scene.paintBrush;
         ctx.beginPath(); ctx.arc(x, y, (rm / st.layout.scale) * this.view.zoom, 0, Math.PI * 2); ctx.stroke();
       }
     }

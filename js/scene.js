@@ -25,6 +25,9 @@ export const DEFAULT_SCENE = {
   showTriggers: true, // se ven en la vista 3D (semitransparentes); en la exportación son invisibles
   transSubdiv: true, // «Subdividir transiciones»: divisiones a lo largo donde la pista cambia de ancho (la textura no se tuerce)
   transDivs: [0.07, 0.47, 0.53, 0.93], // posiciones de esas divisiones (fracción del ancho desde el borde izquierdo)
+  tsmoothBrush: 25, // pincel «Suavizar pista»: radio (m), fuerza por toque (0..1) y si suaviza también las alturas
+  tsmoothStrength: 0.5,
+  tsmoothZ: false,
   skirtHeight: 1.1, // m que bajan los faldones desde el borde (pista y camino de tierra); como mínimo la separación del terreno + 0.1
   // terreno
   terrain: false,

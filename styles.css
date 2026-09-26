@@ -460,3 +460,9 @@ button.km-keys:hover { border-color: var(--accent); background: rgba(242,169,59,
 .tdiv-mark::after { content: ''; position: absolute; left: 2px; top: 0; width: 10px; height: 8px; background: #3fd7ff; border-radius: 2px; }
 .tdiv-mark.sel::before, .tdiv-mark.sel::after { background: #ffe066; }
 #transDivEdit input { width: 64px; }
+/* nombre del proyecto (encabezado) */
+.proj-name-wrap { display: inline-flex; align-items: center; gap: 8px; margin: 0 10px; }
+.proj-name { width: 150px; background: transparent; border: 1px solid transparent; border-radius: 4px; color: var(--text, #e6e6e6); padding: 3px 6px; font-weight: 600; }
+.proj-name:hover { border-color: var(--line); }
+.proj-name:focus { border-color: #f2a93b; background: var(--panel2); outline: none; }
+#autosaveState { white-space: nowrap; }
