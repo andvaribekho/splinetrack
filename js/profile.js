@@ -43,6 +43,7 @@ export class ProfileView {
     canvas.addEventListener('pointerleave', () => { if (!this.drag) { this.tip.hidden = true; this.app.setHover(null, 'profile'); } });
     canvas.addEventListener('pointerdown', (e) => this.onDown(e));
     const up = () => {
+      if (this.zsDrag) { this.zsDrag = null; this.frozen = null; this.tip.hidden = true; this.app.endSelZScale(); this.draw(); return; }
       if (this.carDrag) { this.carDrag = false; this.frozen = null; this.app.endCarDrag(); this.cv.style.cursor = 'grab'; this.tip.hidden = true; this.draw(); return; }
       if (this.pan) { this.pan = null; this.cv.style.cursor = 'default'; return; }
       if (this.selDrag) { // Perfil de tramo + Shift: elige el tramo
@@ -159,6 +160,17 @@ export class ProfileView {
     }
     if (this.app.state.tool !== 'edit') return;
     const [x, y] = this.localPos(e);
+    // marco de la selección: las asas de arriba y abajo escalan las alturas
+    const zh = e.button === 0 && !e.altKey && !e.ctrlKey && !e.metaKey ? this.hitZFrame(x, y) : null;
+    if (zh) {
+      const g = this.app.beginSelZScale();
+      if (g) {
+        this.cv.setPointerCapture(e.pointerId);
+        this.frozen = this.scales();
+        this.zsDrag = { which: zh, g, top: this.cv.getBoundingClientRect().top, y0: y }; // posición del lienzo al empezar (el panel de avisos puede moverlo)
+      }
+      return;
+    }
     const h = this.hit(x, y);
     if (e.button === 0 && e.altKey) {
       // Alt: arrastrar = caja que quita puntos de la selección; clic sobre un punto = altura automática
@@ -253,6 +265,18 @@ export class ProfileView {
       this.draw();
       return;
     }
+    if (this.zsDrag) {
+      const { which, g } = this.zsDrag;
+      const pivot = e.shiftKey ? g.mean : which === 'top' ? g.zmin : g.zmax, ref = which === 'top' ? g.zmax : g.zmin;
+      const z = ref + sc.zAt(e.clientY - this.zsDrag.top) - sc.zAt(this.zsDrag.y0); // el asa arrastra el punto extremo (sin salto al empezar)
+      const f = Math.abs(ref - pivot) < 1e-6 ? 1 : (z - pivot) / (ref - pivot);
+      this.app.applySelZScale(f, pivot);
+      this.tip.hidden = false;
+      this.tip.style.left = `${e.clientX + 12}px`;
+      this.tip.style.top = `${e.clientY - 30}px`;
+      this.tip.textContent = `escala Z ×${f.toFixed(2)} · ${g.items.length} puntos (desde ${e.shiftKey ? 'el promedio' : which === 'top' ? 'el más bajo' : 'el más alto'}; Shift = desde el promedio)`;
+      return;
+    }
     if (this.box) { this.box.x1 = x; this.box.y1 = e.clientY - r.top; this.draw(); return; }
     if (this.selDrag || this.drawStroke) {
       const sv = Math.max(0, Math.min(sc.Lm, sc.sAt(x)));
@@ -284,7 +308,7 @@ export class ProfileView {
       this.tip.textContent = `altura fijada ${z.toFixed(2)} m`;
       return;
     }
-    if (this.app.state.tool === 'edit') this.cv.style.cursor = this.hit(x, e.clientY - r.top) ? 'ns-resize' : 'default';
+    if (this.app.state.tool === 'edit') this.cv.style.cursor = this.hitZFrame(x, e.clientY - r.top) || this.hit(x, e.clientY - r.top) ? 'ns-resize' : 'default';
     const s = sc.sAt(x);
     if (s < 0 || s > sc.Lm || x < sc.f.x0 || x > sc.f.x1) { this.tip.hidden = true; this.app.setHover(null, 'profile'); return; }
     this.app.setHover(s, 'profile');
@@ -494,6 +518,26 @@ export class ProfileView {
         }
       }
     }
+    // marco de la selección (2 o más puntos): asas arriba y abajo para escalar sus alturas
+    this.zFrame = null;
+    const msF = this.app.state.selSet;
+    if (this.app.state.tool === 'edit' && msF && msF.idxs.size > 1) {
+      const hs = this.handles.filter((q) => q.key === msF.key && msF.idxs.has(q.idx));
+      if (hs.length > 1) {
+        const x0 = Math.min(...hs.map((q) => q.x)) - 10, x1 = Math.max(...hs.map((q) => q.x)) + 10;
+        const y0 = Math.min(...hs.map((q) => q.y)) - 10, y1 = Math.max(...hs.map((q) => q.y)) + 10, cx = (x0 + x1) / 2;
+        this.zFrame = { x0, x1, y0, y1, cx };
+        ctx.strokeStyle = 'rgba(255,224,102,0.75)'; ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+        ctx.setLineDash([]);
+        for (const yy of [y0, y1]) {
+          ctx.fillStyle = '#ffe066'; ctx.strokeStyle = '#3a2d00'; ctx.lineWidth = 1.5;
+          ctx.fillRect(cx - 6, yy - 4, 12, 8); ctx.strokeRect(cx - 6, yy - 4, 12, 8);
+          ctx.beginPath(); ctx.moveTo(cx - 3, yy); ctx.lineTo(cx + 3, yy); ctx.stroke();
+        }
+      }
+    }
     if (this.box && Math.abs(this.box.x1 - this.box.x0) + Math.abs(this.box.y1 - this.box.y0) > 4) {
       const b = this.box;
       ctx.strokeStyle = 'rgba(255,224,102,0.9)';
@@ -522,6 +566,16 @@ export class ProfileView {
       ctx.beginPath(); ctx.arc(x, sy(e0.z[i]), 4, 0, Math.PI * 2); ctx.fill();
     }
     this.drawGameCar(sc);
+    if (this.app.syncSmoothZ) this.app.syncSmoothZ();
+  }
+
+  /** ¿(x, y) cae sobre un asa del marco de la selección? 'top' | 'bot' | null. */
+  hitZFrame(x, y) {
+    const F = this.zFrame;
+    if (!F || Math.abs(x - F.cx) > 9) return null;
+    if (Math.abs(y - F.y0) <= 7) return 'top';
+    if (Math.abs(y - F.y1) <= 7) return 'bot';
+    return null;
   }
 
   /** ¿(x, y) cae sobre el autito de la cámara de juego? */

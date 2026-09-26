@@ -357,6 +357,7 @@ export function applyTunnelOverrides(layout, runs, sp) {
     t.stalDensity = o && Number.isFinite(o.stalDensity) ? clamp(o.stalDensity, 0, 100) : sp.caveStalDensity ?? 50;
     t.singleMesh = o && typeof o.singleMesh === 'boolean' ? o.singleMesh : sp.caveSingleMesh !== false;
     t.caveMoves = o && o.caveMoves && typeof o.caveMoves === 'object' ? o.caveMoves : null;
+    t.noHill = !!(o && o.noHill); // «Quitar cerro»: queda solo el túnel (con cáscara exterior); el cerro no se genera
     // medidas propias del túnel (si no, las por defecto del proyecto)
     const num = (key, def, a, b) => (o && Number.isFinite(o[key]) ? clamp(o[key], a, b) : def);
     t.width = num('width', sp.tunnelWidth, 4, 200);
@@ -490,6 +491,46 @@ export function buildTunnelGeometry(layout, elev, spIn, runs, opts = {}) {
     };
     const walls = strip([[0, ca], [cb + 1, N - 1]]);
     const ceiling = strip([[ca, cb + 1]]);
+    // caja de la boca (marco incluido), medida en los contornos reales de ambos extremos
+    const box = portalBox(sp, roadW, r);
+    {
+      let mu = 0, mv = 0;
+      for (const R of [ring[0], ring[ns]]) for (let q = 0; q < N; q++) if (keep[q]) { mu = Math.max(mu, Math.abs(R.loc[q][0])); mv = Math.max(mv, R.loc[q][1]); }
+      box.A = mu + box.thick; box.B = mv + box.thick;
+    }
+    const cvC = Hb * 0.45;
+    // «Quitar cerro»: cáscara exterior (el contorno interior desplazado hacia afuera, un poco menos que el marco de la
+    // boca, así queda dentro de él) que baja hasta bajo el terreno; normales hacia afuera
+    const shellTh = Math.max(0.25, box.thick * 0.85), shellFoot = -((sp.terrainGap ?? 0.3) + 0.6);
+    const shellLoc = (loc) => loc.map(([u, v], q) => {
+      if (q === 0 || q === N - 1) return [u + Math.sign(u || (q === 0 ? -1 : 1)) * shellTh, shellFoot]; // pie: hacia el costado y bajo el suelo
+      const du = u, dv = v - cvC, d = Math.hypot(du, dv) || 1;
+      return [u + (du / d) * shellTh, Math.max(shellFoot, v + (dv / d) * shellTh)];
+    });
+    let shell = null;
+    if (t.noHill) {
+      const pos = [], uv = [], idx = [];
+      for (let a = 0; a <= ns; a++) {
+        const L2 = shellLoc(ring[a].loc);
+        for (let q = 0; q < N; q++) { const p = ring[a].F.at(...L2[q]); pos.push(p[0], p[1], p[2]); uv.push(perim[q] / 6, (ring[a].s - t.e0) / 6); }
+      }
+      for (let a = 0; a < ns; a++) for (let q = 0; q < N - 1; q++) {
+        if (!keep[q] || !keep[q + 1]) continue;
+        const i0 = a * N + q, i1 = i0 + 1, j0 = i0 + N, j1 = j0 + 1;
+        idx.push(i0, j0, i1, i1, j0, j1);
+      }
+      // costado abierto (galería): tapa entre el borde interior y el exterior a lo largo
+      if (open) {
+        const qi = open > 0 ? keep.lastIndexOf(true) : keep.indexOf(true);
+        const base = pos.length / 3;
+        for (let a = 0; a <= ns; a++) {
+          const pi = ring[a].pts[qi], po = ring[a].F.at(...shellLoc(ring[a].loc)[qi]);
+          pos.push(pi[0], pi[1], pi[2], po[0], po[1], po[2]); uv.push(0, (ring[a].s - t.e0) / 6, shellTh / 6, (ring[a].s - t.e0) / 6);
+        }
+        for (let a = 0; a < ns; a++) { const i0 = base + a * 2; idx.push(i0, i0 + 2, i0 + 1, i0 + 1, i0 + 2, i0 + 3); }
+      }
+      shell = meshOut(pos, uv, idx);
+    }
     // veredas: de la orilla de la calzada al pie del muro, a nivel de la calzada
     const wpos = [], wuv = [], widx = [];
     const walk = (side) => {
@@ -511,13 +552,6 @@ export function buildTunnelGeometry(layout, elev, spIn, runs, opts = {}) {
     const walkways = meshOut(wpos, wuv, widx);
     // bocas: marco con contorno exterior rectangular que sobresale del cerro (depth) y se mete en él (collarIn)
     // caja de la boca medida en los contornos reales de ambos extremos (+ grosor del marco)
-    const box = portalBox(sp, roadW, r);
-    {
-      let mu = 0, mv = 0;
-      for (const R of [ring[0], ring[ns]]) for (let q = 0; q < N; q++) if (keep[q]) { mu = Math.max(mu, Math.abs(R.loc[q][0])); mv = Math.max(mv, R.loc[q][1]); }
-      box.A = mu + box.thick; box.B = mv + box.thick;
-    }
-    const cvC = Hb * 0.45;
     const toOuter = ([u, v]) => {
       // rayo desde el centro de la sección hasta el rectángulo [-A, A] x [0, B]
       const du = u, dv = v - cvC;
@@ -555,6 +589,15 @@ export function buildTunnelGeometry(layout, elev, spIn, runs, opts = {}) {
         quad(Fb.at(...outer[q]), Fb.at(...outer[q1]), Ff.at(...outer[q]), Ff.at(...outer[q1]), pu, pu1, 0, (box.depth + collarIn) / 2);
         // superficie interior (del frente hasta el inicio del tubo)
         quad(Ff.at(...inner[q]), Ff.at(...inner[q1]), Fi.at(...inner[q]), Fi.at(...inner[q1]), pu, pu1, 0, (box.depth + 0.3) / 2);
+      }
+      // sin cerro: tapa trasera del collar (del contorno exterior de la boca a la cáscara), así no queda un hueco
+      if (t.noHill) {
+        const sh = shellLoc(inner);
+        for (let k2 = 0; k2 < qs.length - 1; k2++) {
+          const q = qs[k2], q1 = qs[k2 + 1];
+          if (q1 !== q + 1) continue;
+          quad(Fb.at(...sh[q]), Fb.at(...sh[q1]), Fb.at(...outer[q]), Fb.at(...outer[q1]), perim[q] / 2, perim[q1] / 2, 0, box.thick / 2);
+        }
       }
       // tapas en los extremos del contorno (piso y corte del lado abierto)
       for (const q of [qs[0], qs[qs.length - 1]]) {
@@ -719,13 +762,13 @@ export function buildTunnelGeometry(layout, elev, spIn, runs, opts = {}) {
     }
     const stalactites = merge(stalItems), rocks = merge(rockItems);
     const singleMesh = t.singleMesh !== false;
-    const tris = (walls.indices.length + ceiling.indices.length + walkways.indices.length + portals.reduce((a2, p) => a2 + p.geo.indices.length, 0) + stalactites.indices.length + rocks.indices.length) / 3 + pillars.length * 12;
+    const tris = (walls.indices.length + ceiling.indices.length + walkways.indices.length + (shell ? shell.indices.length : 0) + portals.reduce((a2, p) => a2 + p.geo.indices.length, 0) + stalactites.indices.length + rocks.indices.length) / 3 + pillars.length * 12;
     out.push({
       id: t.id, name: `tunel_${String(t.id + 1).padStart(2, '0')}`, len: t.s1 - t.s0, k: t.k, sMid: (t.s0 + t.s1) / 2,
       openMode: t.openMode ?? sp.tunnelOpen, pillarCount: nPil, custom: !!t.custom, key: t.key ?? -1,
       shape: sp.tunnelShape, type: sp.tunnelType, natural, density: sp.tunnelDensity, meshMode: t.meshMode || 'uniform', maxTris: t.maxTris, adapt: t.adapt, rocksOn, stalOn, rockDensity: t.rockDensity ?? 50, stalDensity: t.stalDensity ?? 50, singleMesh, sections: ns + 1, profilePts: N,
       width: sp.tunnelWidth, height: sp.tunnelHeight, caveSize: sp.caveSize, portalFrame: sp.portalFrame ?? 1, portalDepth: sp.portalDepth ?? 1,
-      walls, ceiling, walkways, portals, stalactites, rocks, stalItems, rockItems, caveSnap, pillars, tris, box,
+      walls, ceiling, walkways, portals, stalactites, rocks, stalItems, rockItems, caveSnap, pillars, tris, box, shell, noHill: !!t.noHill,
     });
   }
   return out;

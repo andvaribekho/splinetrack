@@ -158,7 +158,7 @@ export function buildLayout(project, gpIn = {}) {
       else if (f < 0) { f = -f; j0 = jb; }
       if (f < 1) return;
       // con desplazamiento lateral la transición se alarga para que el eje no se quiebre (borde sin pliegues)
-      const A = Math.abs(clamp(+b.off || 0, -1, 1)) * Math.max(0, (base[j0] - b.w) / 2);
+      const A = Math.abs(clamp(+b.off || 0, -1, 1)) * Math.abs(base[j0] - b.w) / 2;
       const tn = Math.round(Math.max(trans, Math.sqrt(12 * A * base[j0] / 2)) / ds);
       for (let d = -tn; d <= f + tn; d++) {
         const i = closed ? (((j0 + d) % n) + n) % n : j0 + d;
@@ -166,12 +166,13 @@ export function buildLayout(project, gpIn = {}) {
         const inside = d >= 0 && d <= f;
         const t = inside ? 1 : smoothstep(0, 1, 1 - (d < 0 ? -d : d - f) / tn);
         const w = base[i] + (b.w - base[i]) * t;
-        // desplazamiento lateral: off = -1 (borde izquierdo) … 0 (centro) … 1 (borde derecho); el borde del puente
-        // queda alineado con el borde de la pista, que es el límite
+        // desplazamiento lateral: off = -1 (izquierda) … 0 (centro) … 1 (derecha). Tramo más angosto: su borde queda
+        // alineado con el de la pista. Tramo más ancho: el borde opuesto queda alineado y todo el ensanche va hacia ese
+        // lado (el eje del spline se corre con él)
         const off = clamp(+b.off || 0, -1, 1);
         let px = mainUni[i][0], py = mainUni[i][1];
         if (off && t > 0) {
-          const m = -off * Math.max(0, (base[i] - b.w) / 2) * t;
+          const m = -off * (Math.abs(base[i] - b.w) / 2) * t;
           const [nx, ny] = nrm(i);
           px = orig[i][0] + nx * m; py = orig[i][1] + ny * m;
           shifted = true;

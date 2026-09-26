@@ -442,3 +442,13 @@ button.km-keys:hover { border-color: var(--accent); background: rgba(242,169,59,
 /* edición a mano de árboles y adornos (sin «single mesh») */
 .veg-edit { border-left: 2px solid #ffd54f55; padding: 2px 0 6px 8px; margin: 4px 0 6px; }
 .veg-edit .hint { margin-top: 2px; }
+/* mensajes breves: informativos abajo; errores e instrucciones al centro, 30 % más grandes */
+#toast { left: 50%; bottom: 24px; transform: translateX(-50%); padding: 8px 14px; border-color: #f2a93b; max-width: min(760px, 90vw); text-align: center; }
+#toast.toast-err { top: 50%; bottom: auto; transform: translate(-50%, -50%); font-size: calc(15.6px * var(--fs, 1)); padding: 12px 20px; border-width: 2px; box-shadow: 0 8px 30px rgba(0,0,0,0.55); line-height: 1.4; }
+.validation .vclear { float: right; position: sticky; top: 2px; margin: 2px 6px 0 6px; padding: 2px 8px; font-size: calc(11px * var(--fs, 1)); }
+.viewProfile .zsmooth { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.viewProfile .zsmooth label { margin: 0; }
+.viewProfile .zsmooth input[type=range] { width: 110px; margin: 0; }
+.viewProfile .zsmooth .val { min-width: 22px; text-align: right; }
+.seg.seg-bar { margin: 0; }
+.seg.seg-bar button { padding: 3px 10px; }

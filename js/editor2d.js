@@ -40,7 +40,6 @@ export class Editor2D {
     this.app = app;
     this.view = { ox: 0, oy: 0, zoom: 1 };
     this.stroke = null;
-    this.dragFlat = null;
     this.panning = null;
     this.hoverS = null;
     this.markers = []; // posiciones en pantalla de los marcadores de cruce
@@ -235,7 +234,6 @@ export class Editor2D {
       const p = this.toLayout(sx, sy);
       if (tool === 'draw' || tool === 'alt') this.stroke = { kind: tool === 'draw' && this.app.drawExtends && this.app.drawExtends() ? 'extend' : tool, pts: [p] }; // «Dibujar» con «Extender»: continúa o redibuja
       else if (tool === 'start') this.app.setStart(p);
-      else if (tool === 'flat') this.dragFlat = { a: p, b: p };
       else if (tool === 'profile') this.dragProfile = { a: p, b: p }; // tramo para dibujar su perfil
       this.draw();
     });
@@ -303,7 +301,6 @@ export class Editor2D {
         this.draw();
         return;
       }
-      if (this.dragFlat) { this.dragFlat.b = p; this.draw(); return; }
       if (this.dragProfile) { this.dragProfile.b = p; this.draw(); return; }
       // hover sobre la ruta principal
       const s = this.app.nearestMainS(p, 25 / this.view.zoom);
@@ -382,12 +379,6 @@ export class Editor2D {
         const st = this.stroke;
         this.stroke = null;
         if (st.pts.length >= 4) this.app.commitStroke(st.kind, this.smoothStroke(st.pts, st.kind), this.view.zoom);
-        this.draw();
-      }
-      if (this.dragFlat) {
-        const d = this.dragFlat;
-        this.dragFlat = null;
-        this.app.addFlatZone(d.a, d.b);
         this.draw();
       }
       if (this.dragProfile) {
@@ -1154,11 +1145,6 @@ export class Editor2D {
       // extremos a los que se puede enganchar (herramienta Extender)
       if (this.stroke.kind === 'extend') this.drawSnapTargets();
     } else if (st.tool === 'draw' && this.app.drawExtends && this.app.drawExtends()) this.drawSnapTargets(); // extremos para continuar la pista
-    if (this.dragFlat && L) {
-      const s0 = this.app.nearestMainS(this.dragFlat.a, Infinity);
-      const s1 = this.app.nearestMainS(this.dragFlat.b, Infinity);
-      if (s0 !== null && s1 !== null) this.strokeRange(L, 0, Math.min(s0, s1), Math.max(s0, s1), 'rgba(120,230,255,0.9)', 5);
-    }
     // tramos suspendidos: línea discontinua celeste (más marcada con su herramienta)
     if (L && st.suspZones && st.suspZones.length) {
       const ctx = this.ctx;
@@ -1168,7 +1154,7 @@ export class Editor2D {
       ctx.restore();
     }
     // perfiles dibujados (violeta) y tramo elegido para dibujar su perfil (amarillo)
-    if (L && (st.tool === 'profile' || st.tool === 'flat' || this.dragProfile)) {
+    if (L && (st.tool === 'profile' || this.dragProfile)) {
       for (const Z of this.app.profileZonesS()) this.strokeRange(L, 0, Z.s0, Z.s1, 'rgba(186,120,255,0.75)', 4);
       let selT = this.app.profileSelS();
       if (this.dragProfile) { const s0 = this.app.nearestMainS(this.dragProfile.a, Infinity), s1 = this.app.nearestMainS(this.dragProfile.b, Infinity); selT = s0 !== null && s1 !== null ? [Math.min(s0, s1), Math.max(s0, s1)] : null; }

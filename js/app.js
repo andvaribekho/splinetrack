@@ -23,7 +23,7 @@ import { defaultDecoSet } from './deco.js';
 import { makeGrassCanvas, makePadCanvas, makeGlowCanvas, makeAsphaltCanvas, makeBridgeCanvas, makeBarrierCanvas, makeSandCanvas } from './gatetex.js';
 import { GameCam, makeDefaultSky } from './gamecam.js';
 import { tunnelResolution, edgeParams } from './tunnels.js';
-import { initButtonIcons } from './icons.js';
+import { initButtonIcons, decorateButton } from './icons.js';
 import { computeItems, defaultGroup, nextGroupId, itemAt, projectToTrack, groupName, itemName, ITEM_TYPES, SHARED_KEYS, effectiveGroup } from './items.js';
 
 const $ = (id) => document.getElementById(id);
@@ -247,6 +247,17 @@ function refreshTunnelInfo() {
   for (const t of tl) el.appendChild(tunnelCard(t, t.id === state.selTunnel));
   refreshCaveInfo();
 }
+/** Aviso en la tarjeta del túnel: qué otros túneles comparten el cerro quitado (o quién lo quitó). */
+function noHillNote(t) {
+  const ids = new Set(t.hillIds || []);
+  if (!ids.size) return '';
+  const others = (state.tunnelInfo || []).filter((o) => o.id !== t.id && (o.hillIds || []).some((h) => ids.has(h)));
+  if (!others.length) return '';
+  const names = others.map((o) => o.name).join(', ');
+  if (t.noHill) return `<div class="meta">También quedan sin cerro: ${names} (mismo cerro).</div>`;
+  const by = others.filter((o) => o.noHill);
+  return by.length ? `<div class="meta">Sin cerro: se quitó desde ${by.map((o) => o.name).join(', ')} (mismo cerro).</div>` : '';
+}
 function tunnelCard(t, open) {
   const div = document.createElement('div');
   div.className = 'item tun-card' + (open ? ' sel' : '');
@@ -271,6 +282,8 @@ function tunnelCard(t, open) {
   const nMoved = cm ? Object.keys(cm.r || {}).length + Object.keys(cm.s || {}).length : 0;
   div.innerHTML = `${head}
     <div class="field"><label>Forma</label><select class="tsShape" title="Forma de la sección del túnel.">${opt(shapes, t.shape)}</select></div>
+    <label class="check small tsChk" title="Deja solo el túnel: el cerro que lo contiene no se genera ni se exporta (sigue definiendo dónde está el túnel), y el túnel recibe una cáscara exterior («_cascara»). Si el cerro tiene otros túneles, también quedan sin cerro."><input type="checkbox" class="tsNoHill"${t.noHill ? ' checked' : ''}> Quitar cerro</label>
+    ${noHillNote(t)}
     <div class="field"><label>Tipo</label><select class="tsType" title="Artificial: sección regular en todo el recorrido. Natural: caverna irregular de roca, que puede abrirse en una bóveda con estalactitas y rocas.">${opt(types, t.type)}</select></div>
     <div class="field"><label>Ancho del túnel <span class="val"><input type="number" class="tsWN" min="4" step="0.5" style="width:62px" value="${W}"> m</span></label><input type="range" class="tsW" min="6" max="40" step="0.5" value="${Math.min(40, W)}" title="Ancho interior del túnel (como mínimo el ancho de la pista + 1 m)."></div>
     <div class="field"><label>Altura libre <span class="val tsHV">${H} m</span></label><input type="range" class="tsH" min="4" max="20" step="0.5" value="${H}" title="Altura libre del túnel sobre la calzada."></div>
@@ -308,6 +321,7 @@ function tunnelCard(t, open) {
   const numIn = (v, a, b, round) => { v = parseFloat(v); if (!Number.isFinite(v)) return null; v = Math.max(a, Math.min(b, v)); return round ? Math.round(v) : v; };
   q('.tsShape').addEventListener('change', (e) => setOv({ shape: e.target.value }));
   q('.tsType').addEventListener('change', (e) => setOv({ type: e.target.value }));
+  q('.tsNoHill').addEventListener('change', (e) => { pushUndo(); setOv({ noHill: e.target.checked || undefined }); });
   q('.tsOpen').addEventListener('change', (e) => setOv({ open: e.target.value }));
   const wSet = (v) => { v = numIn(v, 4, 200); if (v == null) return; q('.tsWN').value = v; q('.tsW').value = Math.min(40, v); setOv({ width: v }); };
   q('.tsW').addEventListener('input', (e) => wSet(e.target.value));
@@ -575,7 +589,7 @@ function pickTextureFile(done) {
       cv.width = Math.max(1, Math.round(bmp.width * k)); cv.height = Math.max(1, Math.round(bmp.height * k));
       cv.getContext('2d').drawImage(bmp, 0, 0, cv.width, cv.height);
       done(cv);
-    } catch (err) { toast('No se pudo leer la textura: ' + err.message); }
+    } catch (err) { toastErr('No se pudo leer la textura: ' + err.message); }
   });
   inp.click();
 }
@@ -592,7 +606,7 @@ function pickAltTexture(a, kind) {
       cv.width = Math.max(1, Math.round(bmp.width * k)); cv.height = Math.max(1, Math.round(bmp.height * k));
       cv.getContext('2d').drawImage(bmp, 0, 0, cv.width, cv.height);
       app.setAltTexture(a, kind, cv);
-    } catch (err) { toast('No se pudo leer la textura: ' + err.message); }
+    } catch (err) { toastErr('No se pudo leer la textura: ' + err.message); }
   });
   inp.click();
 }
@@ -794,7 +808,7 @@ const app = {
       state.project.start = null;
       state.overrides = [];
     } else {
-      if (!state.project.main) { toast('Primero dibuja o traza la ruta principal.'); undoStack.pop(); return; }
+      if (!state.project.main) { toastErr('Primero dibuja o traza la ruta principal.'); undoStack.pop(); return; }
       state.project.alts.push({ pts, keep: true });
     }
     scheduleBuild();
@@ -882,7 +896,7 @@ const app = {
     let a = P[0][0], b = P[P.length - 1][0];
     const sel = app.profileSelS();
     if (sel) { a = Math.max(a, sel[0]); b = Math.min(b, sel[1]); }
-    if (b - a < 5) { toast(sel ? 'Dibuja el perfil dentro del tramo elegido (resaltado).' : 'Dibuja el perfil a lo largo de al menos unos metros de pista.'); return false; }
+    if (b - a < 5) { toastErr(sel ? 'Dibuja el perfil dentro del tramo elegido (resaltado).' : 'Dibuja el perfil a lo largo de al menos unos metros de pista.'); return false; }
     const zAt = (sv) => {
       if (sv <= P[0][0]) return P[0][1];
       if (sv >= P[P.length - 1][0]) return P[P.length - 1][1];
@@ -902,7 +916,7 @@ const app = {
     if (!hasCtrl()) { ensureCtrl(); computeCtrlS(); }
     const za = zArray('main');
     const list = za ? app.ctrlPoints().filter((q) => q.key === 'main' && q.s >= a - 0.5 && q.s <= b + 0.5) : [];
-    if (!list.length) { undoStack.pop(); $('btnUndo').disabled = undoStack.length === 0; toast('No hay puntos de control en ese tramo: agrega puntos (Editar puntos) o dibuja un tramo más largo.'); return false; }
+    if (!list.length) { undoStack.pop(); $('btnUndo').disabled = undoStack.length === 0; toastErr('No hay puntos de control en ese tramo: agrega puntos (Editar puntos) o dibuja un tramo más largo.'); return false; }
     for (const q of list) za[q.idx] = makePin(zProf(q.s));
     state.profileZones = [];
     scheduleBuild();
@@ -913,9 +927,9 @@ const app = {
   flattenSelected() {
     const st = state;
     const sel = st.selSet && st.selSet.idxs.size ? { key: st.selSet.key, idxs: st.selSet.idxs } : st.sel ? { key: st.sel.key, idxs: new Set([st.sel.idx]) } : null;
-    if (!sel) { toast('Selecciona puntos (Editar puntos: Shift + clic o caja) para aplanarlos.'); return false; }
+    if (!sel) { toastErr('Selecciona puntos (Editar puntos: Shift + clic o caja) para aplanarlos.'); return false; }
     const list = app.ctrlPoints().filter((q) => q.key === sel.key && sel.idxs.has(q.idx));
-    if (list.length < 2) { toast('Selecciona al menos dos puntos para aplanarlos.'); return false; }
+    if (list.length < 2) { toastErr('Selecciona al menos dos puntos para aplanarlos.'); return false; }
     const avg = list.reduce((acc, q) => acc + q.z, 0) / list.length;
     const za = zArray(sel.key);
     if (!za) return false;
@@ -926,14 +940,82 @@ const app = {
     toast(`${list.length} puntos a ${avg.toFixed(2)} m (su altura promedio). Puedes seguir editándolos.`);
     return true;
   },
-  addFlatZone(a, b) {
-    if (!state.layout) return;
-    const s0 = app.nearestMainS(a, Infinity), s1 = app.nearestMainS(b, Infinity);
-    if (s0 === null || Math.abs(s1 - s0) < 5) return;
-    pushUndo();
-    state.flatZones.push([a, b]);
-    scheduleElev();
+
+  /** Puntos seleccionados (Editar puntos) ordenados a lo largo de su ruta: [{idx, s, z}] (z = altura fijada o actual). */
+  selHeights() {
+    const st = state;
+    const sel = st.selSet && st.selSet.idxs.size ? { key: st.selSet.key, idxs: st.selSet.idxs } : null;
+    if (!sel) return null;
+    const list = app.ctrlPoints().filter((q) => q.key === sel.key && sel.idxs.has(q.idx)).map((q) => ({ idx: q.idx, s: q.s, z: q.pin !== null ? q.pin : q.z }));
+    const L = state.layout, k = sel.key === 'main' ? 0 : L ? L.routes.findIndex((r) => r.altIndex === sel.key) : -1, r = L && L.routes[k];
+    const run = contiguousRun(sel.key);
+    if (run && run.length === list.length) { const pos = new Map(run.map((idx, j) => [idx, j])); list.sort((a, b) => pos.get(a.idx) - pos.get(b.idx)); } // corrida seguida (también si cruza la meta)
+    else list.sort((a, b) => a.s - b.s);
+    // distancia a lo largo de la ruta entre puntos seguidos
+    for (let j = 1; j < list.length; j++) { let d = list[j].s - list[j - 1].s; if (r && r.closed) d = ((d % r.L) + r.L) % r.L; list[j].d = Math.max(0.01, Math.abs(d)); }
+    return { key: sel.key, list };
   },
+  /** Escala de alturas desde el marco del perfil: empieza con la selección actual (2 o más puntos). */
+  beginSelZScale() {
+    const H = app.selHeights();
+    if (!H || H.list.length < 2) { toastErr('Selecciona 2 o más puntos (Shift + clic o caja) para escalar sus alturas.'); return null; }
+    const zs = H.list.map((q) => q.z), zmin = Math.min(...zs), zmax = Math.max(...zs);
+    if (zmax - zmin < 0.01) { toastErr('Los puntos están a la misma altura: no hay nada que escalar.'); return null; }
+    pushUndo();
+    state.selZScale = { key: H.key, items: H.list.map((q) => ({ idx: q.idx, z0: q.z })), zmin, zmax, mean: zs.reduce((a, b) => a + b, 0) / zs.length };
+    return state.selZScale;
+  },
+  /** f = factor de escala; pivot = altura que no cambia. */
+  applySelZScale(f, pivot) {
+    const g = state.selZScale;
+    if (!g) return;
+    const za = zArray(g.key);
+    if (!za) return;
+    f = Math.max(-5, Math.min(20, f));
+    for (const it of g.items) za[it.idx] = makePin(pivot + (it.z0 - pivot) * f);
+    scheduleElev();
+    editor.draw();
+  },
+  endSelZScale() { state.selZScale = null; refreshPanels(); editor.draw(); },
+  /**
+   * Suavizar alturas (0..100) de los puntos seleccionados: difusión a lo largo de la ruta (ponderada por la distancia
+   * entre puntos) con los extremos fijos. 100 ≈ rampa lisa entre los extremos. Parte siempre de las alturas que había
+   * al empezar a mover la barra (con la misma selección y sin otros cambios entre medio).
+   */
+  smoothSelHeights(amount) {
+    const H = app.selHeights();
+    if (!H || H.list.length < 3) { if (!state.smoothZWarned) { state.smoothZWarned = true; toastErr('Selecciona 3 o más puntos (Shift + clic o caja) para suavizar sus alturas.'); } return false; }
+    state.smoothZWarned = false;
+    const za = zArray(H.key);
+    if (!za) return false;
+    const sig = `${H.key}:${H.list.map((q) => q.idx).join(',')}`;
+    let S = state.smoothZ;
+    const same = S && S.sig === sig && S.applied && H.list.every((q) => Math.abs(pinVal(za[q.idx]) - S.applied.get(q.idx)) < 1e-3);
+    if (!same) { pushUndo(); S = state.smoothZ = { sig, z0: H.list.map((q) => q.z), applied: null }; }
+    const n = H.list.length, a = Math.max(0, Math.min(100, amount)) / 100;
+    const z = S.z0.slice();
+    const it = Math.min(40000, Math.round(a * a * Math.max(8, n * n)));
+    const w = H.list.map((q) => 1 / (q.d || 1)); // w[j] = peso del tramo (j-1, j)
+    for (let k = 0; k < it; k++) {
+      for (let j = 1; j < n - 1; j++) {
+        const wa = w[j], wb = w[j + 1];
+        z[j] += 0.5 * ((wa * z[j - 1] + wb * z[j + 1]) / (wa + wb) - z[j]);
+      }
+    }
+    S.applied = new Map();
+    H.list.forEach((q, j) => { const v = makePin(a > 0 ? z[j] : S.z0[j]); za[q.idx] = v; S.applied.set(q.idx, pinVal(v)); });
+    scheduleElev();
+    editor.draw();
+    return true;
+  },
+  /** La barra «Suavizar alturas» vuelve a 0 cuando cambia la selección. */
+  syncSmoothZ() {
+    const S = state.smoothZ, el = $('smoothZ');
+    if (!el || !S || el === rangeDrag) return;
+    const H = app.selHeights(), sig = H ? `${H.key}:${H.list.map((q) => q.idx).join(',')}` : '';
+    if (sig !== S.sig) { state.smoothZ = null; el.value = 0; $('smoothZVal').textContent = '0'; }
+  },
+
   // ---- edición de puntos de control ----
   ctrlRoutes() {
     const out = [];
@@ -971,7 +1053,7 @@ const app = {
       }
     }
     // tolerancia generosa: el spline puede alejarse del polígono de control
-    if (!best || best.d > tol * 4) { toast('Haz doble clic sobre la pista para agregar un punto.'); return; }
+    if (!best || best.d > tol * 4) { toastErr('Haz doble clic sobre la pista para agregar un punto.'); return; }
     pushUndo();
     const arr = ctrlArray(best.key);
     const pt = [p[0], p[1]];
@@ -991,7 +1073,7 @@ const app = {
     const remain = arr.length - idxs.length;
     const openIt = key === 'main' && closed && state.openOnDelete;
     const minR = closed && !openIt ? 3 : 2;
-    if (remain < minR) { toast(`Deben quedar al menos ${minR} puntos.`); return; }
+    if (remain < minR) { toastErr(`Deben quedar al menos ${minR} puntos.`); return; }
     const za = zArray(key);
     const set = new Set(idxs);
     pushUndo();
@@ -1025,7 +1107,7 @@ const app = {
     const m0 = state.project.main;
     if (key === 'main' && state.openOnDelete && m0.closed !== false) {
       // «Abrir»: el circuito queda abierto donde estaba el punto (en vez de cerrarse con un punto menos)
-      if (arr.length < 4) { toast('La ruta necesita al menos 3 puntos para quedar abierta.'); return; }
+      if (arr.length < 4) { toastErr('La ruta necesita al menos 3 puntos para quedar abierta.'); return; }
       pushUndo();
       const za = zArray('main');
       m0.ctrl = arr.slice(idx + 1).concat(arr.slice(0, idx));
@@ -1039,7 +1121,7 @@ const app = {
       return;
     }
     const min = key === 'main' ? (state.project.main.closed !== false ? 4 : 3) : 3;
-    if (arr.length <= min) { toast(`La ruta necesita al menos ${min} puntos.`); return; }
+    if (arr.length <= min) { toastErr(`La ruta necesita al menos ${min} puntos.`); return; }
     pushUndo();
     arr.splice(idx, 1);
     zArray(key).splice(idx, 1);
@@ -1191,7 +1273,7 @@ const app = {
     });
     return best ? { key: best.key, seg: best.seg } : null;
   },
-  toast(m) { toast(m); },
+  toast(m) { toastErr(m); },
   segmentAtWorld(x, y, tolM = 12) { const L = state.layout; if (!L) return null; return app.segmentAt(L.toLayout(x, y), tolM / L.scale); },
   segEnds(key, seg) {
     const arr = ctrlArray(key);
@@ -1340,8 +1422,8 @@ const app = {
    */
   beginZScale() {
     const T = app.xformTargets();
-    if (!T || T.idxs.length < 2) { toast('Selecciona 2 o más puntos (o un segmento) para escalar su altura.'); return false; }
-    if (state.elev.mode !== 'direct') { toast('Escalar la altura funciona en el modo de elevación Directo.'); return false; }
+    if (!T || T.idxs.length < 2) { toastErr('Selecciona 2 o más puntos (o un segmento) para escalar su altura.'); return false; }
+    if (state.elev.mode !== 'direct') { toastErr('Escalar la altura funciona en el modo de elevación Directo.'); return false; }
     const L = state.layout, k = T.key === 'main' ? 0 : L.routes.findIndex((r) => r.altIndex === T.key);
     const r = L.routes[k], S = state.ctrlS && state.ctrlS[k];
     if (!S) return false;
@@ -1374,9 +1456,9 @@ const app = {
   applyXformNumeric(mode, v) {
     if (!Number.isFinite(v)) return false;
     const T = app.xformTargets();
-    if (!T || T.idxs.length < 2) { toast(state.subObj === 'segment' ? 'Selecciona uno o más segmentos para transformarlos.' : 'Selecciona 2 o más puntos para rotarlos o escalarlos.'); return false; }
+    if (!T || T.idxs.length < 2) { toastErr(state.subObj === 'segment' ? 'Selecciona uno o más segmentos para transformarlos.' : 'Selecciona 2 o más puntos para rotarlos o escalarlos.'); return false; }
     if (mode === 'scale' && zScaleOn()) { if (!app.beginZScale()) return false; app.applyZScale(v / 100); app.endZScale(); return true; }
-    if (mode === 'scale' && !(v > 0)) { toast('La escala debe ser mayor que 0 %.'); return false; }
+    if (mode === 'scale' && !(v > 0)) { toastErr('La escala debe ser mayor que 0 %.'); return false; }
     app.beginXform();
     if (mode === 'rotate') app.applyXform({ type: 'rotate', a: (-v * Math.PI) / 180 });
     else app.applyXform({ type: 'scale', sx: v / 100, sy: v / 100 });
@@ -1636,8 +1718,8 @@ const app = {
     const b = state.project.main.bridges[d.i], rb = L.routes[0].bridges && L.routes[0].bridges.find((q) => q.idx === d.i);
     if (!b || !rb) return;
     const r = L.routes[0];
-    const maxOff = (state.geom.width - b.w) / 2;
-    if (maxOff < 0.05) { if (!d.warned) { d.warned = true; toast('El puente es tan ancho como la pista: no hay espacio para desplazarlo.'); } return; }
+    const maxOff = b.sameWidth ? 0 : Math.abs(state.geom.width - b.w) / 2; // más angosto: se mueve dentro de la pista; más ancho: el ensanche va hacia un lado
+    if (maxOff < 0.05) { if (!d.warned) { d.warned = true; toastErr('El tramo es tan ancho como la pista: dale otro ancho para poder desplazarlo.'); } return; }
     const j = ((Math.round((rb.s0 + rb.s1) / 2 / r.ds) % r.n) + r.n) % r.n;
     const a = L.toWorld(p0[0], p0[1]), c = L.toWorld(p1[0], p1[1]);
     const lat = (c[0] - a[0]) * -r.ty[j] + (c[1] - a[1]) * r.tx[j]; // hacia la izquierda de la marcha
@@ -1810,7 +1892,7 @@ const app = {
     const za = zArray(key);
     if (!za) return;
     const list = idxs.filter((i) => za[i] !== null && za[i] !== undefined);
-    if (!list.length) { toast('Esos puntos ya tienen altura automática.'); return; }
+    if (!list.length) { toastErr('Esos puntos ya tienen altura automática.'); return; }
     pushUndo();
     for (const i of list) za[i] = null;
     scheduleElev();
@@ -1976,7 +2058,7 @@ let featUndoAt = 0;
 /** Rehace un rizo / helix con nuevos parámetros, en el mismo lugar (el resto de los puntos no se toca). */
 function regenFeature(af, plan, params) {
   const { f, start } = af;
-  if (plan.error) { toast(plan.error); return false; }
+  if (plan.error) { toastErr(plan.error); return false; }
   const arr = ctrlArray(f.key), za = zArray(f.key);
   if (Date.now() - featUndoAt > 900) pushUndo(); // un paso de deshacer por cada gesto
   featUndoAt = Date.now();
@@ -2083,7 +2165,7 @@ function helixGeom(L, key, A, t, z0, turns, r0, r1, pitch, dirMode, side) {
 }
 function addHelix(turns, r0, r1, pitch, dirMode, sideMode) {
   const P = helixPlan(turns, r0, r1, pitch, dirMode, sideMode);
-  if (P.error) { toast(P.error); return false; }
+  if (P.error) { toastErr(P.error); return false; }
   const arr = ctrlArray(P.key), za = zArray(P.key);
   pushUndo();
   const inner = new Set(P.run.slice(1, -1));
@@ -2255,7 +2337,7 @@ function loopPlan(turns, sep, sideMode = 'auto', radius = 0, feat = null) {
 }
 function addLoop(turns, sep, sideMode, radius = 0) {
   const P = loopPlan(turns, sep, sideMode, radius);
-  if (P.error) { toast(P.error); return false; }
+  if (P.error) { toastErr(P.error); return false; }
   const arr = ctrlArray(P.key), za = zArray(P.key);
   pushUndo();
   const inner = new Set(P.run.slice(1, -1)); // los puntos entre el primero y el último quedan reemplazados por el rizo
@@ -2311,7 +2393,7 @@ function lineRun() {
  */
 function alignSelection(mode = 'chord', angleDeg = 0, quiet = false, noUndo = false) {
   const R = lineRun(), L = state.layout;
-  if (!R || !L) { toast('Selecciona 2 o más puntos (Shift o arrastrando un recuadro) para alinearlos en una recta.'); return false; }
+  if (!R || !L) { toastErr('Selecciona 2 o más puntos (Shift o arrastrando un recuadro) para alinearlos en una recta.'); return false; }
   const W = R.idxs.map((i) => L.toWorld(R.arr[i][0], R.arr[i][1]));
   const n = W.length, cum = [0];
   for (let k = 1; k < n; k++) cum.push(cum[k - 1] + Math.hypot(W[k][0] - W[k - 1][0], W[k][1] - W[k - 1][1]));
@@ -2319,7 +2401,7 @@ function alignSelection(mode = 'chord', angleDeg = 0, quiet = false, noUndo = fa
   const A = W[0], B = W[n - 1], D = Math.hypot(B[0] - A[0], B[1] - A[1]);
   let P0, P1;
   if (mode === 'chord') {
-    if (D < 1e-6) { toast('El primer y el último punto coinciden: elige una dirección (Eje X, Eje Y o un ángulo).'); return false; }
+    if (D < 1e-6) { toastErr('El primer y el último punto coinciden: elige una dirección (Eje X, Eje Y o un ángulo).'); return false; }
     P0 = A; P1 = B;
   } else {
     const a = ((mode === 'x' ? 0 : mode === 'y' ? 90 : +angleDeg || 0) * Math.PI) / 180;
@@ -2449,7 +2531,7 @@ function evenSpacing(pts) {
 function smoothSelection(t, newGesture = true) {
   if (!smoothBaseValid()) smoothBase = captureSmoothBase();
   const B = smoothBase;
-  if (!B) { toast('Selecciona 3 o más puntos seguidos (Shift + clic o caja) para suavizar el tramo.'); return false; }
+  if (!B) { toastErr('Selecciona 3 o más puntos seguidos (Shift + clic o caja) para suavizar el tramo.'); return false; }
   if (newGesture) pushUndo();
   const arr = ctrlArray(B.key);
   let P = smoothSeq(B.pts, t);
@@ -2637,7 +2719,7 @@ function newTramoType() { const el = document.getElementById('tramoType'); retur
 function bridgeFromRun(w) {
   const m = state.project.main;
   const run = bridgeRunSelected();
-  if (!run) { toast('Para un puente: selecciona con Shift varios puntos seguidos de la ruta principal, o los dos extremos de la ruta abierta.'); return false; }
+  if (!run) { toastErr('Para un puente: selecciona con Shift varios puntos seguidos de la ruta principal, o los dos extremos de la ruta abierta.'); return false; }
   w = Math.max(2, w || state.geom.width);
   const P = (i) => m.ctrl[i].slice(0, 2);
   const br = ensureBridgeUid({ a: P(run[0]), b: P(run[run.length - 1]), ...tramoDefaults(newTramoType(), w) });
@@ -2737,13 +2819,16 @@ function refreshBridgeList() {
       img.classList.toggle('inherited', !app.bridgeOwnTex(i, k));
     });
     let editing = false;
-    const setW = (v, done) => { if (!(v > 0)) return; if (!editing) { pushUndo(); editing = true; } b.w = Math.min(80, Math.max(2, v)); d.querySelector('.bw').value = b.w; d.querySelector('.bwR').value = Math.min(40, b.w); scheduleBuild(); if (done) editing = false; };
+    const setW = (v, done) => { if (!(v > 0)) return; if (!editing) { pushUndo(); editing = true; } b.w = Math.min(80, Math.max(2, v)); d.querySelector('.bw').value = b.w; d.querySelector('.bwR').value = Math.min(40, b.w); offLabel(); scheduleBuild(); if (done) editing = false; };
     d.querySelector('.bwR').addEventListener('input', (e) => setW(parseFloat(e.target.value), false));
     d.querySelector('.bwR').addEventListener('change', (e) => setW(parseFloat(e.target.value), true));
     d.querySelector('.bw').addEventListener('change', (e) => setW(parseFloat(e.target.value), true));
     const offLabel = () => {
-      const maxOff = b.sameWidth ? 0 : Math.max(0, (state.geom.width - b.w) / 2), o = +b.off || 0;
-      d.querySelector('.bo').textContent = maxOff < 0.05 ? 'sin espacio (ancho = pista)' : Math.abs(o) < 0.005 ? 'centrado' : `${(Math.abs(o) * maxOff).toFixed(1)} m a la ${o < 0 ? 'izquierda' : 'derecha'}${Math.abs(o) > 0.995 ? ' (borde)' : ''}`;
+      const wide = b.w > state.geom.width, maxOff = b.sameWidth ? 0 : Math.abs(state.geom.width - b.w) / 2, o = +b.off || 0;
+      d.querySelector('.bo').textContent = maxOff < 0.05 ? 'sin espacio (ancho = pista)' : Math.abs(o) < 0.005 ? (wide ? 'centrado (se ensancha a ambos lados)' : 'centrado') : `${(Math.abs(o) * maxOff).toFixed(1)} m a la ${o < 0 ? 'izquierda' : 'derecha'}${Math.abs(o) > 0.995 ? (wide ? ' (ensanche solo a ese lado)' : ' (borde)') : ''}`;
+      const [bl, , br] = d.querySelectorAll('.bo-btns button');
+      bl.title = wide ? 'El tramo se ensancha solo hacia la izquierda (su borde derecho sigue el de la pista)' : 'Alinear el tramo con el borde izquierdo de la pista';
+      br.title = wide ? 'El tramo se ensancha solo hacia la derecha (su borde izquierdo sigue el de la pista)' : 'Alinear el tramo con el borde derecho de la pista';
       d.querySelector('.boBox').classList.toggle('disabled', maxOff < 0.05 || !!b.sameWidth);
     };
     offLabel();
@@ -2813,7 +2898,7 @@ function forkSelection(side, sepM) {
     if (flip) { [s0, s1] = [s1, s0]; len = wrap(s1 - s0); swapped = true; }
   } else if (len < 0) { [s0, s1] = [s1, s0]; len = -len; swapped = true; }
   const wTrack = state.geom.width;
-  if (len < wTrack * 4) { toast('El tramo seleccionado es muy corto para una bifurcación: elige puntos más separados.'); return; }
+  if (len < wTrack * 4) { toastErr('El tramo seleccionado es muy corto para una bifurcación: elige puntos más separados.'); return; }
   const center = side === 0;
   const sep = Math.max(sepM, wTrack * 2.2);
   const N = Math.max(5, Math.ceil(len / Math.max(state.geom.detail, 12)));
@@ -2854,7 +2939,7 @@ function forkSelection(side, sepM) {
   const dMain = center ? profile(-1, sep / 2) : null;
   const maxAlt = Math.max(...dAlt), maxMain = dMain ? Math.max(...dMain) : 0;
   const total = maxAlt + maxMain;
-  if (total < wTrack * 1.6) { toast('Ese lado es el interior de una curva cerrada: no hay espacio para separar la bifurcación. Prueba el otro lado, el centro o un tramo más largo.'); return; }
+  if (total < wTrack * 1.6) { toastErr('Ese lado es el interior de una curva cerrada: no hay espacio para separar la bifurcación. Prueba el otro lado, el centro o un tramo más largo.'); return; }
   pushUndo();
   const pts = offsetPts(dAlt, altSide);
   const na = p.alts.length + 1;
@@ -3048,7 +3133,7 @@ async function loadRefBlob(blob) {
     setTool('ref');
     toast('Imagen de referencia agregada: arrástrala para moverla y usa la esquina (o el control Escala) para cambiar su tamaño.');
     editor.draw();
-  } catch (err) { toast('No se pudo leer la imagen: ' + err.message); }
+  } catch (err) { toastErr('No se pudo leer la imagen: ' + err.message); }
 }
 
 // ---------- extender / corregir la ruta principal con un trazo ----------
@@ -3091,7 +3176,7 @@ function extendMain(strokeIn, tol) {
     };
     const a = nearest(S0), b = nearest(S1);
     if (a.d > tol * 1.5 || b.d > tol * 1.5 || a.i === b.i) {
-      toast(closed ? 'Empieza y termina el trazo sobre la pista para redibujar ese tramo.' : 'Empieza el trazo en un extremo (círculo verde) para continuar la pista, o sobre la pista para redibujar un tramo.');
+      toastErr(closed ? 'Empieza y termina el trazo sobre la pista para redibujar ese tramo.' : 'Empieza el trazo en un extremo (círculo verde) para continuar la pista, o sobre la pista para redibujar un tramo.');
       return;
     }
     let ia = a.i, ib = b.i;
@@ -3382,7 +3467,7 @@ function tick() {
       } catch (err) {
         console.error(err);
         state.layout = null;
-        toast('Error al construir el trazado: ' + err.message);
+        toastErr('Error al construir el trazado: ' + err.message);
       }
       fit3d = !hadLayout;
       if (state.tool === 'edit' && state.layout && ensureCtrl()) {
@@ -3431,7 +3516,7 @@ function tick() {
         } catch (err) {
           console.error(err);
           state.result = null;
-          toast('Error en la elevación: ' + err.message);
+          toastErr('Error en la elevación: ' + err.message);
         }
       } else state.result = null;
       refreshPanels();
@@ -3579,7 +3664,7 @@ function bindItemsPanel() {
         cv.getContext('2d').drawImage(bmp, 0, 0, cv.width, cv.height);
         state.itemTex[key] = cv;
         refreshItemTex(); itemsChanged();
-      } catch (err) { toast('No se pudo leer la textura: ' + err.message); }
+      } catch (err) { toastErr('No se pudo leer la textura: ' + err.message); }
     });
     $(`btnItemTexRemove-${key}`).addEventListener('click', () => { state.itemTex[key] = null; refreshItemTex(); itemsChanged(); });
   }
@@ -3853,7 +3938,7 @@ function refreshPanels() {
     const sr = fz[i];
     const div = document.createElement('div');
     div.className = 'item';
-    div.innerHTML = `<div class="head"><span>Zona plana ${i + 1}${sr ? ` · s ${sr[0].toFixed(0)}–${sr[1].toFixed(0)} m` : ''}</span><button class="x" title="Quitar">✕</button></div>`;
+    div.innerHTML = `<div class="head"><span>Zona plana ${i + 1} (de un proyecto anterior)${sr ? ` · s ${sr[0].toFixed(0)}–${sr[1].toFixed(0)} m` : ''}</span><button class="x" title="Quitar">✕</button></div>`;
     div.querySelector('button').addEventListener('click', () => { pushUndo(); state.flatZones.splice(i, 1); scheduleElev(); });
     fl.appendChild(div);
   });
@@ -3864,7 +3949,22 @@ function refreshPanels() {
   const msgs = [];
   if (L) msgs.push(...L.warnings.filter((w) => !(w.overlap && E && stackedOK(L, E, w.overlap)))); // tramos apilados (helix) con altura libre: no es problema
   if (E) msgs.push(...E.validation.msgs);
-  if (L && E && msgs.length === 0) msgs.push({ level: 'info', msg: 'Sin problemas: pendientes, radios verticales y holguras dentro de los límites.' });
+  // «Eliminar avisos»: los ya vistos se ocultan; vuelve a salir uno nuevo o distinto (otro texto)
+  const vkey = (m) => `${m.level}|${m.msg}`;
+  const dismissed = state.valDismissed || (state.valDismissed = new Set());
+  const all = msgs.length;
+  for (let q = msgs.length - 1; q >= 0; q--) if (dismissed.has(vkey(msgs[q]))) msgs.splice(q, 1);
+  if (L && E && all === 0) msgs.push({ level: 'info', msg: 'Sin problemas: pendientes, radios verticales y holguras dentro de los límites.' });
+  if (msgs.some((m) => m.level !== 'info')) {
+    const bt = document.createElement('button');
+    bt.className = 'vclear';
+    bt.textContent = 'Eliminar avisos';
+    bt.title = 'Oculta estos errores y avisos. Si aparece uno nuevo o distinto, se vuelve a mostrar.';
+    bt.dataset.icon = 'trash';
+    bt.addEventListener('click', () => { for (const m of msgs) if (m.level !== 'info') dismissed.add(vkey(m)); refreshPanels(); });
+    val.appendChild(bt);
+    decorateButton(bt); // icono de basurero
+  }
   for (const m of msgs) {
     const d = document.createElement('div');
     d.className = `vmsg ${m.level}`;
@@ -4163,7 +4263,7 @@ function bindControls() {
   $('btnTbRadius').addEventListener('click', () => {
     focusPanel('spline');
     const sel = state.selSet, run = sel ? contiguousRun(sel.key) : null;
-    if (!run || run.length < 3) { toast('Para una curva de radio fijo selecciona 3 o más puntos seguidos con Shift+arrastrar.'); return; }
+    if (!run || run.length < 3) { toastErr('Para una curva de radio fijo selecciona 3 o más puntos seguidos con Shift+arrastrar.'); return; }
     onRadius($('arcRadiusNum').value);
   });
   $('openOnDelete').addEventListener('change', (e) => { state.openOnDelete = e.target.checked; });
@@ -4186,7 +4286,7 @@ function bindControls() {
   // suavizar tramo: barra en vivo desde la forma original de la selección (cada gesto es un paso de deshacer)
   $('btnSmooth').addEventListener('click', () => {
     setFeature(state.feature === 'smooth' ? null : 'smooth');
-    if (state.feature === 'smooth' && !smoothRun()) toast('Suavizar: selecciona 3 o más puntos seguidos (Shift + clic o caja) y mueve la barra.');
+    if (state.feature === 'smooth' && !smoothRun()) toastErr('Suavizar: selecciona 3 o más puntos seguidos (Shift + clic o caja) y mueve la barra.');
     refreshSmoothInfo();
   });
   let smGesture = false;
@@ -4200,7 +4300,7 @@ function bindControls() {
   // recta: el botón alinea al tiro la selección entre sus extremos y muestra las opciones (eje X, eje Y, ángulo)
   $('btnLine').addEventListener('click', () => {
     if (lineRun()) { setFeature('line'); alignSelection('chord'); }
-    else { setFeature(state.feature === 'line' ? null : 'line'); if (state.feature === 'line') toast('Recta: selecciona 2 o más puntos (Shift o arrastrando) y vuelve a apretar «Recta», o elige una dirección.'); }
+    else { setFeature(state.feature === 'line' ? null : 'line'); if (state.feature === 'line') toastErr('Recta: selecciona 2 o más puntos (Shift o arrastrando) y vuelve a apretar «Recta», o elige una dirección.'); }
     refreshLineInfo();
   });
   $('btnLineChord').addEventListener('click', () => alignSelection('chord'));
@@ -4242,6 +4342,8 @@ function bindControls() {
   app.loadFeatureParams = loadFeatureParams;
   // aplanar (en la barra del perfil): una sola vez, los puntos siguen editables
   $('btnFlatten').addEventListener('click', () => { app.flattenSelected(); });
+  $('smoothZ').addEventListener('input', (e) => { const v = parseFloat(e.target.value) || 0; $('smoothZVal').textContent = String(v); if (!app.smoothSelHeights(v)) { e.target.value = 0; $('smoothZVal').textContent = '0'; } });
+  $('smoothZ').addEventListener('change', () => { state.smoothZWarned = false; if (state.smoothZ) toast(`Alturas suavizadas al ${$('smoothZ').value} % (Ctrl+Z lo deshace).`); });
   $('btnProfileFit').addEventListener('click', () => profile.resetView());
   // rizo: el botón de la barra muestra sus parámetros; «Añadir rizo» lo crea en los puntos seleccionados
   $('btnLoop').addEventListener('click', () => {
@@ -4293,7 +4395,7 @@ function bindControls() {
   $('btnTbFork').addEventListener('click', () => {
     focusPanel('spline');
     const sel = state.selSet;
-    if (!sel || sel.key !== 'main' || sel.idxs.size < 2) { toast('Para bifurcar selecciona 2 o más puntos de la ruta principal con Shift: sale en el primero y vuelve en el último.'); return; }
+    if (!sel || sel.key !== 'main' || sel.idxs.size < 2) { toastErr('Para bifurcar selecciona 2 o más puntos de la ruta principal con Shift: sale en el primero y vuelve en el último.'); return; }
     forkSelection({ right: -1, left: 1, center: 0 }[$('forkSide').value], parseFloat($('forkSep').value));
   });
   $('btnFork').addEventListener('click', () => forkSelection({ right: -1, left: 1, center: 0 }[$('forkSide').value], parseFloat($('forkSep').value)));
@@ -4338,7 +4440,7 @@ function bindControls() {
   $('btnNew').addEventListener('click', () => {
     pushUndo();
     state.project = { main: null, alts: [], start: null, reverse: false };
-    state.flatZones = []; state.profileZones = []; state.profileSel = null; state.suspZones = []; state.cutZones = []; state.overrides = []; state.image = null;
+    state.flatZones = []; state.profileZones = []; state.profileSel = null; state.suspZones = []; state.cutZones = []; state.overrides = []; state.image = null; state.valDismissed = null;
     syncControls(); scheduleBuild(); setTool('draw');
     setTimeout(() => editor.fit(), 0);
   });
@@ -4449,7 +4551,7 @@ function bindControls() {
     if (!item) {
       // sin imagen: dejar que el texto se pegue normalmente en campos de texto
       const tag = (e.target && e.target.tagName) || '';
-      if (tag !== 'INPUT' && tag !== 'TEXTAREA') toast('El portapapeles no tiene una imagen. Copia el minimapa (clic derecho → Copiar imagen, o una captura) y vuelve a pegar.');
+      if (tag !== 'INPUT' && tag !== 'TEXTAREA') toastErr('El portapapeles no tiene una imagen. Copia el minimapa (clic derecho → Copiar imagen, o una captura) y vuelve a pegar.');
       return;
     }
     e.preventDefault();
@@ -4512,6 +4614,8 @@ function setTool(t) {
   if (eraseLbl) eraseLbl.hidden = t === 'sculpt';
   const subLbl = document.getElementById('paintSubdivLbl');
   if (subLbl) subLbl.hidden = t !== 'paint';
+  const subMode = document.getElementById('paintSubMode'); // «Aumentar / Disminuir subd.»: solo en «Pintar subdivisión»
+  if (subMode) subMode.hidden = t !== 'paint';
   const sb = document.getElementById('sculptBox');
   if (sb) sb.hidden = t !== 'sculpt';
   if (t !== 'itemPaint' && state.itemPaintTarget) { const wasDeco = state.itemPaintTarget.type === 'deco'; state.itemPaintTarget = null; if (typeof renderItemsPanel === 'function') renderItemsPanel(); if (wasDeco && typeof renderDecoPanel === 'function') renderDecoPanel(); }
@@ -4548,7 +4652,7 @@ async function loadImageBlob(blob, origin = 'cargada') {
     toast(`Imagen ${origin} (${bmp.width}×${bmp.height} px). Trazando…`);
     runTrace();
   } catch (err) {
-    toast('No se pudo leer la imagen: ' + err.message);
+    toastErr('No se pudo leer la imagen: ' + err.message);
   }
 }
 
@@ -4574,8 +4678,8 @@ function runTrace() {
   worker.onmessage = (e) => {
     if (e.data.id !== id) return;
     $('busy').hidden = true;
-    if (!e.data.ok) { toast('No se pudo trazar: ' + e.data.error.split('\n')[0]); return; }
-    if (!e.data.main) { toast('No se encontró un trazado en la imagen. Ajusta el umbral o el tipo de pista.'); return; }
+    if (!e.data.ok) { toastErr('No se pudo trazar: ' + e.data.error.split('\n')[0]); return; }
+    if (!e.data.main) { toastErr('No se encontró un trazado en la imagen. Ajusta el umbral o el tipo de pista.'); return; }
     pushUndo();
     state.project = { main: e.data.main, alts: e.data.alts, start: null, reverse: false };
     state.closed = e.data.main.closed;
@@ -4702,9 +4806,9 @@ async function showOpenDialog(files, dirName = null) {
       const list = [];
       for await (const [name, h] of dh.entries()) if (h.kind === 'file' && /\.json$/i.test(name)) list.push(await h.getFile());
       close();
-      if (!list.length) { toast('No hay archivos .json en esa carpeta.'); return; }
+      if (!list.length) { toastErr('No hay archivos .json en esa carpeta.'); return; }
       showOpenDialog(list, dh.name);
-    } catch (err) { if (err.name !== 'AbortError') toast('No se pudo leer la carpeta: ' + err.message); }
+    } catch (err) { if (err.name !== 'AbortError') toastErr('No se pudo leer la carpeta: ' + err.message); }
   });
   let chosen = null;
   const entries = [];
@@ -4756,11 +4860,12 @@ async function showOpenDialog(files, dirName = null) {
 async function openProject(text) {
   let d;
   if (typeof text === 'object' && text) d = text;
-  else try { d = JSON.parse(text); } catch { toast('Archivo no válido.'); return; }
+  else try { d = JSON.parse(text); } catch { toastErr('Archivo no válido.'); return; }
+  state.valDismissed = null; // los avisos eliminados son de cada proyecto
   if (d.format !== 'track-spline-generator') {
     // también acepta un JSON exportado (trae "project")
     if (d.project && d.project.main) d = { project: d.project, geom: d.params?.geom, elev: d.params?.elev };
-    else { toast('No es un proyecto de Track Spline Generator.'); return; }
+    else { toastErr('No es un proyecto de Track Spline Generator.'); return; }
   }
   pushUndo();
   state.project = d.project;
@@ -4852,8 +4957,8 @@ async function openProject(text) {
   // biblioteca de assets y sets de decoración
   state.assets = [];
   for (const a of d.assets || []) {
-    if (!a.data) { toast(`«${a.name}» era muy grande para guardarse dentro del proyecto: vuelve a cargarlo.`); continue; }
-    try { state.assets.push(await loadAsset(b64ToBuf(a.data), a.name, a.id)); } catch (err) { toast(`No se pudo cargar ${a.name}: ${err.message}`); }
+    if (!a.data) { toastErr(`«${a.name}» era muy grande para guardarse dentro del proyecto: vuelve a cargarlo.`); continue; }
+    try { state.assets.push(await loadAsset(b64ToBuf(a.data), a.name, a.id)); } catch (err) { toastErr(`No se pudo cargar ${a.name}: ${err.message}`); }
   }
   state.decoSets = d.decoSets || [];
   state.rivers = d.rivers || []; state.selRiver = null; renderRiverPanel();
@@ -4861,8 +4966,8 @@ async function openProject(text) {
   renderAssetList(); renderVegAssetLists(); renderDecoPanel();
   // modelo de referencia 3D guardado con el proyecto
   if (state.ref3d) { state.ref3d = null; preview.setReference(null); }
-  if (d.ref3d && d.ref3d.data) { try { await loadRef3d(b64ToBuf(d.ref3d.data), d.ref3d.name, { ...d.ref3d.settings, sel: false }); } catch (err) { toast('No se pudo cargar el modelo de referencia: ' + err.message); } }
-  else if (d.ref3d) toast(`El proyecto usaba «${d.ref3d.name}» como referencia 3D, pero era muy grande para guardarse dentro: vuelve a importarlo.`);
+  if (d.ref3d && d.ref3d.data) { try { await loadRef3d(b64ToBuf(d.ref3d.data), d.ref3d.name, { ...d.ref3d.settings, sel: false }); } catch (err) { toastErr('No se pudo cargar el modelo de referencia: ' + err.message); } }
+  else if (d.ref3d) toastErr(`El proyecto usaba «${d.ref3d.name}» como referencia 3D, pero era muy grande para guardarse dentro: vuelve a importarlo.`);
   syncRef3dControls();
   state.hills = d.hills || (d.hillPaint ? migrateHillPaint(d.hillPaint) : []);
   state.selHill = null;
@@ -4909,20 +5014,25 @@ function download(name, text, type) {
 }
 
 let toastTimer = null;
-function toast(msg) {
+/**
+ * Mensaje breve. Los informativos salen abajo; los de error o instrucción (toastErr) salen al centro de la pantalla,
+ * más grandes, para que se vean.
+ */
+function toast(msg, kind = 'info') {
   let t = document.getElementById('toast');
   if (!t) {
     t = document.createElement('div');
     t.id = 'toast';
     t.className = 'tooltip';
-    Object.assign(t.style, { left: '50%', bottom: '24px', transform: 'translateX(-50%)', padding: '8px 14px', borderColor: '#f2a93b' });
     document.body.appendChild(t);
   }
+  t.classList.toggle('toast-err', kind === 'err');
   t.textContent = msg;
   t.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (t.hidden = true), 4500);
+  toastTimer = setTimeout(() => (t.hidden = true), kind === 'err' ? 5500 : 4500);
 }
+function toastErr(msg) { toast(msg, 'err'); }
 
 
 // ---------- escena 3D: terreno, árboles y texturas ----------
@@ -5092,7 +5202,7 @@ function syncSceneControls() {
   $('treeDensityVal').textContent = `${sc.treeDensity}`;
   set('paintSubdiv', sc.paintSubdiv ?? 1); set('paintSubdivP', sc.paintSubdiv ?? 1);
   set('paintBrush', Math.min(200, sc[brushKey(state.tool)]));
-  set('paintSubMode', sc.paintSubMode === 'dec' ? 'dec' : 'inc'); set('sculptMode', sc.sculptMode === 'smooth' ? 'smooth' : 'raise');
+  set('paintSubMode', sc.paintSubMode === 'dec' ? 'dec' : 'inc'); document.querySelectorAll('#sculptMode button').forEach((b) => b.classList.toggle('on', b.dataset.smode === (sc.sculptMode === 'smooth' ? 'smooth' : 'raise')));
   if ($('sculptHint')) $('sculptHint').textContent = sc.sculptMode === 'smooth' ? 'clic: suaviza el relieve' : 'clic izq. eleva · clic der. hunde';
   set('sculptStrength', sc.sculptStrength); set('sculptStrengthP', sc.sculptStrength); set('sculptBrushP', Math.min(200, sc.sculptBrush));
   set('sculptDetail', sc.sculptDetail !== false);
@@ -5223,7 +5333,7 @@ async function importRef3dFile(file) {
     const R = state.ref3d;
     selectRef3d(true);
     toast(`Referencia cargada: ${R.name}, ${R.tris.toLocaleString('es')} triángulos, ${R.bbox[0].toFixed(0)} × ${R.bbox[1].toFixed(0)} m. Si no coincide con la pista, usa «Centrar en la pista» o revisa unidades y eje.`);
-  } catch (err) { console.warn(err); toast('No se pudo leer el modelo: ' + err.message); }
+  } catch (err) { console.warn(err); toastErr('No se pudo leer el modelo: ' + err.message); }
 }
 /** Mueve el modelo para que su centro en planta quede en el centro de la pista (conserva Z y giro). */
 function centerRef3d() {
@@ -5309,7 +5419,7 @@ function renderAssetList() {
 async function loadAssetFiles(files) {
   let ok = 0;
   for (const f of files) {
-    try { const A = await loadAsset(await f.arrayBuffer(), f.name); state.assets.push(A); ok++; } catch (err) { console.warn(err); toast(`No se pudo leer ${f.name}: ${err.message}`); }
+    try { const A = await loadAsset(await f.arrayBuffer(), f.name); state.assets.push(A); ok++; } catch (err) { console.warn(err); toastErr(`No se pudo leer ${f.name}: ${err.message}`); }
   }
   if (ok) toast(`${ok} modelo(s) en la biblioteca. Elígelos en los árboles, la hierba o en un set de decoración.`);
   renderAssetList(); renderVegAssetLists(); renderDecoPanel();
@@ -5546,7 +5656,7 @@ async function loadTexture(file, which) {
     syncSceneControls();
     sceneChanged();
     editor.draw();
-  } catch (err) { toast('No se pudo leer la textura: ' + err.message); }
+  } catch (err) { toastErr('No se pudo leer la textura: ' + err.message); }
 }
 const TERRAIN_KEYS = ['terrainMargin', 'terrainDensity', 'terrainMaxPolys', 'terrainGap', 'terrainFalloff', 'terrainTexRepX', 'terrainTexRepY', 'paintFactor', 'skirts'];
 const TREE_KEYS = ['treeSide', 'treeDensity', 'treeScale', 'treeOffset', 'treeSpread', 'treeOnSlopes', 'treeOnTops', 'treeHillDensity', 'treeTilt'];
@@ -5577,7 +5687,7 @@ function focusPanel(id, sub = null) {
 /** Botones (fuera de la barra lateral) con parámetros asociados: a qué sección llevan. */
 const PANEL_FOR_BUTTON = {
   'tool:edit': 'spline', 'tool:draw': 'trace', 'tool:extend': 'trace', 'tool:alt': 'alts', 'tool:start': 'gate', 'tool:ref': 'ref',
-  btnDecoNew: 'deco', 'tool:hill': 'hills', 'tool:river': 'rivers', 'tool:paint': 'relief', 'tool:sculpt': 'relief', 'tool:flat': 'elev', 'tool:profile': 'elev', btnSculptTool: 'relief', btnRef3dTop: 'ref3d',
+  btnDecoNew: 'deco', 'tool:hill': 'hills', 'tool:river': 'rivers', 'tool:paint': 'relief', 'tool:sculpt': 'relief', 'tool:profile': 'elev', btnSculptTool: 'relief', btnRef3dTop: 'ref3d',
   btnGame: 'sky', btnExportBlender: 'export', btnExportMax: 'export', btnExportJSON: 'export', btnExportOBJ: 'export',
   btnExportGLB2: 'export', btnExportFBX2: 'export', btnTbRadius: 'spline', btnTbFork: 'spline', btnTbBridge: 'bridges', btnGenTerrain: 'terrain', btnGenTrees: 'trees',
 };
@@ -5603,17 +5713,8 @@ function generateFromToolbar(kind) {
   if (kind === 'terrain') {
     if (!sc.terrain) { for (const k of TERRAIN_KEYS) sc[k] = DEFAULT_SCENE[k]; sc.terrain = true; syncSceneControls(); sceneChanged(); toast('Terreno generado con los valores por defecto.'); }
     focusPanel('terrain');
-  } else { // «Generar árboles y decoración»: árboles y, si no hay ninguno, un set de decoración con los valores por defecto
-    const made = [];
-    if (!sc.trees) { for (const k of TREE_KEYS) sc[k] = DEFAULT_SCENE[k]; sc.trees = true; syncSceneControls(); sceneChanged(); made.push('árboles'); }
-    if (!state.decoSets.length) {
-      pushUndo();
-      const set = defaultDecoSet(`d${Date.now().toString(36)}1`, 1);
-      state.decoSets.push(set);
-      renderDecoPanel(); decoChanged();
-      made.push('un set de decoración');
-    }
-    if (made.length) toast(`Generados ${made.join(' y ')} con los valores por defecto.`);
+  } else { // «Generar árboles y decoración»: solo los árboles (la decoración se genera al agregar sets en «Decoración»)
+    if (!sc.trees) { for (const k of TREE_KEYS) sc[k] = DEFAULT_SCENE[k]; sc.trees = true; syncSceneControls(); sceneChanged(); toast('Árboles generados con los valores por defecto. La decoración se agrega con «+ Nuevo set» en «Decoración».'); }
     focusPanel('trees');
   }
 }
@@ -5714,7 +5815,7 @@ function bindSceneControls() {
   $('btnSculptClear').addEventListener('click', () => { if (!state.terrainSculpt.length) return; pushUndo(); state.terrainSculpt = []; state.sculptCurves = []; refreshSculptInfo(); editor.draw(); sceneChanged(); });
   const sStr = (v) => { if (!(v > 0)) return; sc.sculptStrength = Math.round(Math.min(50, v) * 100) / 100; syncSceneControls(); };
   $('sculptStrength').addEventListener('input', (e) => sStr(parseFloat(e.target.value)));
-  $('sculptMode').addEventListener('change', (e) => { sc.sculptMode = e.target.value; syncSceneControls(); });
+  document.querySelectorAll('#sculptMode button').forEach((b) => b.addEventListener('click', () => { sc.sculptMode = b.dataset.smode; syncSceneControls(); }));
   $('paintSubMode').addEventListener('change', (e) => { sc.paintSubMode = e.target.value; syncSceneControls(); });
   $('sculptStrengthP').addEventListener('input', (e) => sStr(parseFloat(e.target.value)));
   $('sculptBrushP').addEventListener('input', (e) => { sc.sculptBrush = Math.round(parseFloat(e.target.value)); syncSceneControls(); editor.draw(); });
@@ -5756,7 +5857,7 @@ function bindSceneControls() {
   $('ref3dRot').addEventListener('input', (e) => rotSet(parseFloat(e.target.value)));
   $('ref3dRotNum').addEventListener('change', (e) => rotSet(parseFloat(e.target.value)));
   $('ref3dScale').addEventListener('change', (e) => { const v = parseFloat(e.target.value); if (v > 0) refSet('scale', v); });
-  const reparse = async (k, v) => { const R = state.ref3d; if (!R) return; const keep = { ...ref3dSettings(), [k]: v, sel: R.sel }; try { await loadRef3d(R.buffer, R.name, keep); } catch (err) { toast('No se pudo volver a leer el modelo: ' + err.message); } };
+  const reparse = async (k, v) => { const R = state.ref3d; if (!R) return; const keep = { ...ref3dSettings(), [k]: v, sel: R.sel }; try { await loadRef3d(R.buffer, R.name, keep); } catch (err) { toastErr('No se pudo volver a leer el modelo: ' + err.message); } };
   $('ref3dUnit').addEventListener('change', (e) => reparse('unitOpt', e.target.value));
   $('ref3dUp').addEventListener('change', (e) => reparse('upOpt', e.target.value));
   syncRef3dControls();
@@ -5812,7 +5913,7 @@ function bindSceneControls() {
   };
   $('btnGame').addEventListener('click', () => {
     if (game.active) { exitGame(); return; }
-    if (!game.start()) { toast('Primero crea o carga una pista.'); return; }
+    if (!game.start()) { toastErr('Primero crea o carga una pista.'); return; }
     $('gameBar').hidden = false;
     $('btnGame').classList.add('active');
     preview.setHover(state.hover); // sin «Mostrar guía», la esfera blanca no aparece en el juego
@@ -5843,7 +5944,7 @@ function bindSceneControls() {
   $('gameSpeedNum').addEventListener('change', (e) => setSpeed(parseFloat(e.target.value), 'num'));
   $('btnGamePause').addEventListener('click', () => { game.paused = !game.paused; $('btnGamePause').textContent = game.paused ? 'Seguir' : 'Pausa'; });
   $('btnGameRestart').addEventListener('click', () => { game.s = 0; game.lapTime = 0; game.snapCamera = true; });
-  $('btnGameFull').addEventListener('click', () => { const el = document.querySelector('.view3d'); if (document.fullscreenElement) document.exitFullscreen(); else el.requestFullscreen?.().catch(() => toast('El navegador no permitió la pantalla completa.')); });
+  $('btnGameFull').addEventListener('click', () => { const el = document.querySelector('.view3d'); if (document.fullscreenElement) document.exitFullscreen(); else el.requestFullscreen?.().catch(() => toastErr('El navegador no permitió la pantalla completa.')); });
   $('btnGameExit').addEventListener('click', exitGame);
   // «Mostrar guía»: la esfera blanca que marca en 3D el punto de la pista bajo el cursor (apagada por defecto)
   $('gameGuide').checked = !!state.game.showGuide;
@@ -5870,7 +5971,7 @@ function bindSceneControls() {
       cv.getContext('2d').drawImage(bmp, 0, 0, cv.width, cv.height);
       state.skyTex = cv; state.skyCustom = true;
       refreshSkyThumb(); game.applySky();
-    } catch (err) { toast('No se pudo leer el cielo: ' + err.message); }
+    } catch (err) { toastErr('No se pudo leer el cielo: ' + err.message); }
   });
   $('btnSkyReset').addEventListener('click', () => { state.skyTex = makeDefaultSky(); state.skyCustom = false; refreshSkyThumb(); game.applySky(); });
   $('terrainMaxPolys').addEventListener('change', () => { sc.terrainMaxPolys = Math.max(500, parseInt($('terrainMaxPolys').value, 10) || 200000); syncSceneControls(); sceneChanged(); });
@@ -5998,7 +6099,7 @@ function bindSceneControls() {
       const { buffer, info } = await exportGLB(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas() }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
       download('track_scene.glb', buffer, 'model/gltf-binary');
       toast(`Escena exportada: pista ${info.trackTris.toLocaleString('es')} triángulos${info.terrainTris ? `, terreno ${info.terrainTris.toLocaleString('es')}` : ''}${info.hills ? `, ${info.hills} cerro(s)` : ''}${info.tunnels ? `, ${info.tunnels} túnel(es)` : ''}${info.gateTris ? ', pórtico de salida' : ''}${info.items ? `, ${info.items} elementos de pista` : ''}${info.trees ? `, ${info.trees} árboles` : ''}. Todo como objetos separados.`);
-    } catch (err) { console.error(err); toast('No se pudo exportar la escena: ' + err.message); }
+    } catch (err) { console.error(err); toastErr('No se pudo exportar la escena: ' + err.message); }
   };
   $('btnExportGLB').addEventListener('click', glb);
   // menús desplegables: «Exportar ▾» (encabezado) y «Elementos de pista ▾» (barra del mapa)
@@ -6013,7 +6114,7 @@ function bindSceneControls() {
       const { buffer, info } = await exportFBX(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas() }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
       download('track_scene.fbx', buffer, 'application/octet-stream');
       toast(`FBX exportado (${(buffer.length / 1048576).toFixed(1)} MB): pista${info.terrainTris ? ', terreno' : ''}${info.hills ? `, ${info.hills} cerro(s)` : ''}${info.tunnels ? `, ${info.tunnels} túnel(es)` : ''}${info.gateTris ? ', pórtico' : ''}${info.items ? `, ${info.items} elementos de pista` : ''}${info.trees ? `, ${info.trees} árboles` : ''}${info.grass ? ', hierba' : ''}. Z arriba, en metros, con texturas incrustadas.`);
-    } catch (err) { console.error(err); toast('No se pudo exportar el FBX: ' + err.message); }
+    } catch (err) { console.error(err); toastErr('No se pudo exportar el FBX: ' + err.message); }
   };
   $('btnExportFBX').addEventListener('click', fbx);
   $('btnExportFBX2').addEventListener('click', fbx);
@@ -6424,4 +6525,4 @@ setTool('pan');
 loadSample('figure8');
 undoStack.length = 0;
 $('btnUndo').disabled = true;
-window.__tsg = { state, app, editor, preview, profile, openProject }; // para depuración
+window.__tsg = { state, app, editor, preview, profile, openProject, scheduleBuild, refreshBridgeList, refreshPanels }; // para depuración

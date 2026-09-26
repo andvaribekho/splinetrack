@@ -122,6 +122,26 @@ for (const [key, s] of Object.entries(SAMPLES)) {
       const g = HS.tunnelGeo[0];
       check(g && g.walls.indices.length && g.ceiling.indices.length && g.portals.length === 2 && g.portals.every((p) => p.geo.indices.length), `${key}: túnel con paredes, techo y bocas`);
     }
+    // «Quitar cerro»: el cerro del túnel no se genera, el túnel sigue y tiene cáscara exterior
+    {
+      const sp0 = { terrain: true, terrainDensity: 45, terrainMaxPolys: 80000, tunnelOpen: 'none' };
+      const T = buildTerrain(L, E, sp0);
+      const H0 = buildHills(L, E, sp0, T, hills);
+      if (H0.tunnels.length) {
+        const t0 = H0.tunnels[0], g0 = H0.tunnelGeo.find((g) => g.id === t0.id);
+        const H1 = buildHills(L, E, { ...sp0, tunnelOverrides: [{ k: t0.k, s: (t0.s0 + t0.s1) / 2, noHill: true }] }, T, hills);
+        const g1 = H1.tunnelGeo.find((g) => g.id === t0.id);
+        check(H1.hiddenHills.length === 1 && H1.hills.length === H0.hills.length - 1 && g0.hillIds.includes(H1.hiddenHills[0]), `${key}: quitar cerro (ocultos ${H1.hiddenHills}, cerros ${H0.hills.length} → ${H1.hills.length})`);
+        check(H1.tunnels.length === H0.tunnels.length && g1 && g1.noHill && g1.shell && g1.shell.indices.length > 0 && !g0.shell, `${key}: el túnel sigue y tiene cáscara (${g1 && g1.shell ? g1.shell.indices.length / 3 : 0} tri.)`);
+        // la cáscara queda por fuera de las paredes: todos sus vértices lejos del eje de la pista
+        let minD = Infinity;
+        const P = g1.shell.positions, rr = L.routes[t0.k];
+        for (let v = 0; v < P.length; v += 9) { const q = nearestOnSamples(rr, P[v], P[v + 1]); const dz = P[v + 2] - (q.i != null ? E.routes[t0.k].z[q.i] : 0); minD = Math.min(minD, Math.hypot(q.d, Math.max(0, dz))); }
+        check(minD > rr.w[0] / 2, `${key}: cáscara por fuera de la calzada (${minD.toFixed(2)} m)`);
+        const HS2 = H1;
+        check(Number.isFinite(HS2.sample(rr.x[0], rr.y[0])) || HS2.sample(rr.x[0], rr.y[0]) === -Infinity, `${key}: suelo sin el cerro quitado`);
+      }
+    }
     // costado abierto y pilares propios de cada túnel (el general queda cerrado)
     {
       const sp0 = { terrain: true, terrainDensity: 45, terrainMaxPolys: 80000, tunnelOpen: 'none', tunnelPillars: 8 };
@@ -872,6 +892,29 @@ for (const [key, s] of Object.entries(SAMPLES)) {
   let dev = 0;
   for (let i = 0; i < r.n; i += 5) dev = Math.max(dev, nearestOnSamples(LN, r.x[i], r.y[i]).d);
   check(b && Math.abs(b.w - 14) < 1e-6 && r.w.every((w) => Math.abs(w - 14) < 1e-6) && dev < 0.05 && b.s1 - b.s0 > 40, `puente con el mismo ancho que la pista (ancho ${b && b.w}, desvío ${dev.toFixed(3)})`);
+}
+
+// tramo más ancho que la pista con desplazamiento: el ensanche va hacia un solo lado (el borde opuesto sigue el de la pista)
+{
+  const proj = SAMPLES.oval.build();
+  const L0 = buildLayout(proj, { lapLength: 1000 });
+  proj.main.ctrl = deriveControlPoints(proj.main.pts, true, 30 / L0.scale, 3);
+  const c = proj.main.ctrl;
+  const LN = buildLayout({ ...proj, main: { ...proj.main, bridges: [] } }, { lapLength: 1000 }).routes[0];
+  const edgeDev = (off) => {
+    proj.main.bridges = [{ a: c[5].slice(0, 2), b: c[9].slice(0, 2), w: 24, off, type: 'track' }];
+    const L = buildLayout(proj, { lapLength: 1000 }), r = L.routes[0], b = r.bridges[0];
+    const i = Math.round(((b.s0 + b.s1) / 2) / r.ds) % r.n;
+    const q = nearestOnSamples(LN, r.x[i], r.y[i]);
+    // lateral respecto del eje original (+ = izquierda)
+    const j = q.i ?? Math.round(q.s / LN.ds) % LN.n;
+    const lat = (r.x[i] - LN.x[j]) * -LN.ty[j] + (r.y[i] - LN.y[j]) * LN.tx[j];
+    return { lat, w: r.w[i], half0: LN.w[j] / 2 };
+  };
+  const R = edgeDev(1), Lf = edgeDev(-1), C = edgeDev(0);
+  // off = 1 (derecha): el eje se corre (24 - 14) / 2 = 5 m a la derecha; el borde izquierdo queda en el de la pista
+  check(Math.abs(R.lat + 5) < 0.4 && Math.abs((R.lat + R.w / 2) - R.half0) < 0.4, `tramo ancho a la derecha: eje ${R.lat.toFixed(2)} m, borde izq. ${(R.lat + R.w / 2).toFixed(2)} vs ${R.half0.toFixed(2)}`);
+  check(Math.abs(Lf.lat - 5) < 0.4 && Math.abs(C.lat) < 0.2, `tramo ancho a la izquierda (${Lf.lat.toFixed(2)}) y centrado (${C.lat.toFixed(2)})`);
 }
 
 // bajo un puente el terreno no se adapta: queda su relieve natural (no sube hasta el tablero) y lleva pilares

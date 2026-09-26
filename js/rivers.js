@@ -158,7 +158,7 @@ export function buildRivers(T, HS, rivers) {
     if (!F) continue;
     let geo = null;
     if (rv.kind === 'fall') {
-      if (!HS || !HS.hillSample) continue;
+      if (!HS || !HS.hillSample || (HS.hiddenHills && HS.hiddenHills.includes(rv.hill))) continue; // cascada de un cerro quitado
       geo = buildRiverWater(F, (x, y) => HS.hillSample(rv.hill, x, y), (x, y) => HS.hillOrig(rv.hill, x, y), skip);
     } else {
       geo = buildRiverWater(F, (x, y) => T.sample(x, y), (x, y) => (T.ctx && T.ctx.origAt ? T.ctx.origAt(x, y) : T.sample(x, y)), skip);

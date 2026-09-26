@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Track Spline Generator v0.53</title>
+  <title>Track Spline Generator v0.55</title>
   <link rel="stylesheet" href="styles.css">
   <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.53</span></div>
+    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.55</span></div>
     <div class="top-actions">
       <button id="btnNew" title="Empezar de cero">Nuevo</button>
       <button id="btnOpen" title="Abrir proyecto .tsg.json">Abrir</button>
@@ -207,7 +207,7 @@
         <div class="field"><label>Radio vertical mín. en cresta <span class="val" id="rCrestVal"></span></label><input type="range" id="rCrest" min="15" max="300" step="5"></div>
         <div class="field"><label>Radio vertical mín. en valle <span class="val" id="rSagVal"></span></label><input type="range" id="rSag" min="10" max="300" step="5"></div>
         <div class="field"><label>Plano a cada lado de la meta <span class="val" id="startFlatVal"></span></label><input type="range" id="startFlat" min="0" max="150" step="5"></div>
-        <p class="hint">Usa la herramienta «Zona plana» para aplanar otros tramos.</p>
+        <p class="hint">Para dejar plano otro tramo: selecciona sus puntos y usa «Aplanar» (barra del perfil).</p>
         <div id="flatZoneList" class="list"></div>
         <h3 class="subhead" id="profileZonesHead">Perfil de tramo y aplanar</h3>
         <p class="hint">Con <b>Perfil de tramo</b> (en la barra del gráfico de perfil): arrastra sobre la pista en el mapa (o con Shift en el gráfico de perfil) para elegir un tramo y dibuja en el gráfico de perfil la forma de la elevación: los puntos del tramo quedan a esa altura (el perfil no se guarda) y después se editan a mano libremente. Con <b>Editar puntos</b>, <b>Aplanar</b> (barra del gráfico de perfil) deja los puntos seleccionados a su altura promedio, plano estricto entre el primero y el último; después puedes volver a editarlos.</p>
@@ -620,7 +620,7 @@
           </span>
           <span id="sculptBox" class="row" hidden>
             <label class="small">Fuerza <input type="range" id="sculptStrength" min="0.1" max="10" step="0.1" style="width:80px"> <span class="val" id="sculptStrengthVal"></span></label>
-            <select id="sculptMode" title="Elevar / hundir: clic izquierdo eleva, clic derecho hunde. Suavizar: el pincel no eleva ni hunde, solo suaviza el relieve esculpido bajo él"><option value="raise">Elevar / hundir</option><option value="smooth">Suavizar</option></select>
+            <span class="seg seg-bar" id="sculptMode" role="group" aria-label="Modo del pincel"><button data-smode="raise" data-icon="sculpt" title="Clic izquierdo eleva, clic derecho (o Alt) hunde">Elevar / hundir</button><button data-smode="smooth" data-icon="smooth" title="El pincel no eleva ni hunde: solo suaviza el relieve esculpido bajo él">Suavizar</button></span>
             <span class="small muted" id="sculptHint">clic izq. eleva · clic der. hunde</span>
           </span>
           <span id="hillBox" class="row" hidden>
@@ -762,7 +762,7 @@
           <span class="label">Perfil de elevación z(s)</span>
           <button id="btnProfileFit" title="Encuadra el perfil: vuelve a ver toda la pista y todos los puntos. En el gráfico: rueda = zoom horizontal, Shift + rueda = zoom vertical, botón medio = desplazar">Encuadrar</button>
           <button id="btnFlatten" title="Aplana los puntos seleccionados (Editar puntos) a su elevación promedio: plano estricto entre el primero y el último. Es una sola vez: después puedes volver a editarlos">Aplanar</button>
-          <button data-tool="flat" title="Arrastra sobre la pista para marcar un tramo plano">Zona plana</button>
+          <span class="zsmooth" title="Suaviza las alturas de los puntos seleccionados (Editar puntos, 3 o más): los extremos quedan fijos para empalmar con el resto. 0 = sin cambio, 100 = rampa lisa entre los extremos. Se ve mientras mueves la barra; Ctrl+Z lo deshace de una vez"><label class="small" for="smoothZ">Suavizar alturas</label><input type="range" id="smoothZ" min="0" max="100" step="1" value="0"><span class="val small" id="smoothZVal">0</span></span>
           <button data-tool="profile" id="btnProfileTool" title="Elige un tramo (arrastrando sobre la pista en el mapa, o con Shift en el gráfico de perfil) y dibuja en el gráfico de perfil cómo varía su elevación: sus puntos quedan a esa altura (se pueden seguir editando)">Perfil de tramo</button>
           <label class="check small"><input type="checkbox" id="pinLocal" checked> Editar solo este punto</label>
           <span class="stats" id="stats"></span>

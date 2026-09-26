@@ -906,7 +906,7 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
  */
 export function buildHills(layout, elev, spIn, T, hills) {
   const sp = { ...DEFAULT_SCENE, ...spIn };
-  const res = { hills: [], tunnels: [], tunnelGeo: [], sample: () => -Infinity, tris: 0 };
+  const res = { hills: [], tunnels: [], tunnelGeo: [], hiddenHills: [], sample: () => -Infinity, tris: 0 };
   if (!T || !hills || !hills.length) return res;
   const { S, maxW, gap, zoneAt } = T.ctx;
   const fields = [];
@@ -966,12 +966,32 @@ export function buildHills(layout, elev, spIn, T, hills) {
     return c;
   });
   if (tun.runs.length) res.tunnelGeo = buildTunnelGeometry(layout, elev, sp, tun.runs, { collarIn: 1.5 * maxCell + 1 });
+  // «Quitar cerro» en un túnel: los cerros que lo contienen no se generan (siguen definiendo el túnel)
+  const hidden = new Set();
+  for (const t of tun.runs) {
+    if (!t.noHill) continue;
+    const r = layout.routes[t.k];
+    for (let ss = t.s0; ss <= t.s1; ss += Math.max(1, r.ds * 2)) {
+      const i = ((Math.round(ss / r.ds) % r.n) + r.n) % r.n, x = r.x[i], y = r.y[i];
+      for (const { h, f } of fields) if (!hidden.has(h.id) && x >= f.minX && y >= f.minY && x <= f.maxX && y <= f.maxY && f.sample(x, y) > 0) hidden.add(h.id);
+    }
+  }
+  res.hiddenHills = [...hidden];
+  for (const g of res.tunnelGeo) { // cerros que contienen a cada túnel (para la tarjeta: «afecta a …»)
+    const t = runById.get(g.id), r = layout.routes[t.k], ids = new Set();
+    for (let ss = t.s0; ss <= t.s1; ss += Math.max(1, r.ds * 2)) {
+      const i = ((Math.round(ss / r.ds) % r.n) + r.n) % r.n, x = r.x[i], y = r.y[i];
+      for (const { h, f } of fields) if (x >= f.minX && y >= f.minY && x <= f.maxX && y <= f.maxY && f.sample(x, y) > 0) ids.add(h.id);
+    }
+    g.hillIds = [...ids];
+  }
   const boxById = new Map(res.tunnelGeo.map((g) => [g.id, g.box]));
   const boxA = Math.max(box.A, ...res.tunnelGeo.map((g) => (g.box ? g.box.A : 0)));
   const { minX: bx0, minY: by0, maxX: bx1, maxY: by1 } = T.bounds;
   const sink = 0.4;
   const samplers = [];
   fields.forEach(({ h, f }, hi) => {
+    if (hidden.has(h.id)) return; // cerro quitado: queda solo el túnel
     let c0 = cells[hi];
     const x0 = f.minX, y0 = f.minY;
     // cascadas socavadas de este cerro (hunden su superficie) y zonas con más subdivisión (pintadas o paredes de cascada)

@@ -138,6 +138,7 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
         put('techo', t.ceiling, tm.ceil);
         put('veredas', t.walkways, walkMat);
         for (const pt of t.portals) put(pt.suffix, pt.geo, tm.portal);
+        if (t.shell) put('cascara', t.shell, tm.portal); // «Quitar cerro»: exterior del túnel
         // rocas y estalactitas: una malla por tipo (single mesh) o cada una como objeto propio con su pivote
         // (la roca en el piso, la estalactita en su base pegada al techo)
         const items = (list, nm) => list.forEach((it, i) => {
