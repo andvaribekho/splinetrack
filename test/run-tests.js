@@ -762,6 +762,29 @@ for (const [key, s] of Object.entries(SAMPLES)) {
   check(bp && Math.abs(zmin - b.s0) < 0.6 && Math.abs(zmax - b.s1) < 0.6, `puente: tablero exacto con pista optimizada (${zmin.toFixed(1)}–${zmax.toFixed(1)} vs ${b.s0.toFixed(1)}–${b.s1.toFixed(1)})`);
 }
 
+// tramo seleccionado convertido en puente: sigue la forma original; con punto intermedio puede ser el tramo largo
+{
+  const proj = SAMPLES.oval.build();
+  const L0 = buildLayout(proj, { lapLength: 1000 });
+  proj.main.ctrl = deriveControlPoints(proj.main.pts, true, 30 / L0.scale, 3);
+  const c = proj.main.ctrl, n = c.length;
+  const LN = buildLayout(proj, { lapLength: 1000 });
+  const ia = 4, ib = Math.floor(n * 0.75);
+  proj.main.bridges = [{ a: c[ia].slice(0, 2), b: c[ib].slice(0, 2), mid: c[Math.floor((ia + ib) / 2)].slice(0, 2), w: 20 }];
+  const LL = buildLayout(proj, { lapLength: 1000 });
+  proj.main.bridges = [{ a: c[ib].slice(0, 2), b: c[ia].slice(0, 2), mid: c[(ib + Math.floor((n - ib + ia) / 2)) % n].slice(0, 2), w: 20 }];
+  const LW = buildLayout(proj, { lapLength: 1000 });
+  const bl = LL.routes[0].bridges[0], bw = LW.routes[0].bridges[0];
+  const Lm = LN.routes[0].L;
+  check(bl && bw && Math.abs((bl.s1 - bl.s0) + (bw.s1 - bw.s0) - Lm) < 8 && bl.s1 - bl.s0 > Lm * 0.55, `puente de tramo: el sentido lo da el punto intermedio (${bl && (bl.s1 - bl.s0).toFixed(0)} + ${bw && (bw.s1 - bw.s0).toFixed(0)} de ${Lm.toFixed(0)} m)`);
+  // la forma del eje no cambia (solo el ancho)
+  const r0 = LN.routes[0], r1 = LL.routes[0];
+  let dev = 0;
+  for (let i = 0; i < r1.n; i += 5) { const q = nearestOnSamples(r0, r1.x[i], r1.y[i]); dev = Math.max(dev, q.d); }
+  const midI = Math.round(((bl.s0 + bl.s1) / 2) / r1.ds) % r1.n;
+  check(dev < 0.05 && Math.abs(r1.w[midI] - 20) < 0.01, `puente de tramo: misma forma (desvío ${dev.toFixed(3)} m) y ancho propio`);
+}
+
 // puentes desplazados hacia un borde: el borde del puente sigue el borde de la pista
 {
   const proj = SAMPLES.oval.build();

@@ -2360,21 +2360,34 @@ function openEndsSelected() {
   const n = m.ctrl.length;
   return sel.idxs.size === 2 && sel.idxs.has(0) && sel.idxs.has(n - 1);
 }
+/**
+ * Tramo seleccionado que se puede convertir en puente: 2 o más puntos seguidos de la ruta principal (abierta o
+ * cerrada), sin ser el circuito entero. Devuelve los índices en orden de marcha (o null).
+ */
+function bridgeRunSelected() {
+  const sel = state.selSet, m = state.project.main;
+  if (!sel || sel.key !== 'main' || !m || !m.ctrl || sel.idxs.size < 2 || openEndsSelected()) return null;
+  const run = contiguousRun('main');
+  if (!run || run.length !== sel.idxs.size || run.length >= m.ctrl.length) return null;
+  return run;
+}
 function refreshBridgeBox() {
   const bc = $('bridgeControls');
   if (!bc) return;
-  const ok = state.tool === 'edit' && openEndsSelected();
+  const ends = openEndsSelected(), run = !ends && bridgeRunSelected();
+  const ok = state.tool === 'edit' && (ends || !!run);
   bc.classList.toggle('disabled', !ok);
   bc.querySelectorAll('input,button').forEach((el) => (el.disabled = !ok));
   if ($('btnTbBridge')) $('btnTbBridge').classList.toggle('ready', !!ok);
   if (!$('bridgeWidthNum').value) { $('bridgeWidthNum').value = state.geom.width; $('bridgeWidth').value = Math.min(40, state.geom.width); }
-  $('bridgeInfo').textContent = ok
-    ? 'Une los dos extremos con un puente que cierra el circuito, con su propio ancho. Si queda en altura, lleva pilares.'
-    : 'Abre el circuito borrando un punto con «Abrir» activado (barra de «Editar puntos») y selecciona los dos extremos con Shift para crear un puente.';
+  $('bridgeInfo').textContent = !ok
+    ? 'Dos formas de crear un puente: selecciona con Shift varios puntos seguidos de la ruta principal (ese tramo se vuelve puente, con la misma forma), o abre el circuito borrando un punto con «Abrir» activado y selecciona los dos extremos (el puente los une y cierra el circuito).'
+    : ends ? 'Une los dos extremos con un puente que cierra el circuito, con su propio ancho. Si queda en altura, lleva pilares.'
+      : `Convierte en puente el tramo de los ${run.length} puntos seleccionados, con la misma forma y su propio ancho. Si queda en altura, lleva pilares.`;
 }
 function createBridge(w) {
   const m = state.project.main;
-  if (!openEndsSelected()) { toast('Selecciona con Shift los dos extremos abiertos de la ruta principal.'); return; }
+  if (!openEndsSelected()) { bridgeFromRun(w); return; }
   pushUndo();
   const n = m.ctrl.length;
   m.bridges = m.bridges || [];
@@ -2387,6 +2400,42 @@ function createBridge(w) {
   refreshArcBox();
   scheduleBuild();
   toast(`Puente creado (${w.toFixed(1)} m de ancho): el circuito vuelve a estar cerrado.`);
+}
+/** Convierte en puente el tramo de puntos seguidos seleccionado (mantiene la forma; reemplaza puentes superpuestos). */
+function bridgeFromRun(w) {
+  const m = state.project.main;
+  const run = bridgeRunSelected();
+  if (!run) { toast('Para un puente: selecciona con Shift varios puntos seguidos de la ruta principal, o los dos extremos de la ruta abierta.'); return false; }
+  w = Math.max(2, w || state.geom.width);
+  const P = (i) => m.ctrl[i].slice(0, 2);
+  const br = { a: P(run[0]), b: P(run[run.length - 1]), w };
+  if (run.length >= 3) br.mid = P(run[Math.floor(run.length / 2)]);
+  else if (m.closed !== false) { // dos puntos: el punto medio del tramo entre ellos (sentido de marcha)
+    const L = state.layout, cp = app.ctrlPoints().filter((q) => q.key === 'main');
+    const sA = cp.find((c) => c.idx === run[0]).s, sB = cp.find((c) => c.idx === run[1]).s;
+    const Lm = L.routes[0].L, sm = (sA + (((sB - sA) % Lm) + Lm) % Lm / 2) % Lm;
+    br.mid = app.mainLayoutAt(sm);
+  }
+  // los puentes que ya ocupaban parte del tramo se reemplazan
+  const L = state.layout;
+  const cp = app.ctrlPoints().filter((q) => q.key === 'main');
+  const sOf = (i) => cp.find((c) => c.idx === i).s;
+  const Lm = L ? L.routes[0].L : 0, closed = m.closed !== false;
+  const r0 = sOf(run[0]), r1 = sOf(run[run.length - 1]);
+  const span = (a, b) => (closed && b < a ? [[a, Lm], [0, b]] : [[Math.min(a, b), Math.max(a, b)]]);
+  const runSp = span(r0, r1);
+  const info = (L && L.routes[0].bridges) || [];
+  const hits = new Set();
+  for (const bi of info) for (const [a, b] of span(bi.s0 % (Lm || 1), bi.s1 % (Lm || 1))) for (const [c, d] of runSp) if (a < d - 0.5 && c < b - 0.5) hits.add(bi.idx);
+  pushUndo();
+  m.bridges = (m.bridges || []).filter((_, i) => !hits.has(i));
+  m.bridges.push(br);
+  state.selSet = null; state.sel = null;
+  endArc();
+  refreshArcBox();
+  scheduleBuild();
+  toast(`Tramo convertido en puente (${w.toFixed(1)} m de ancho, ${run.length} puntos)${hits.size ? `; reemplaza ${hits.size} puente(s) que se superponían` : ''}. Se ajusta en «Spline → Puentes».`);
+  return true;
 }
 /** Selecciona un puente (se ilumina en el mapa y en 3D). */
 function selectBridge(i) {
@@ -2412,7 +2461,7 @@ function refreshBridgeList() {
   const bl = (m && m.bridges) || [];
   const L = state.layout;
   const infoArr = L && L.routes[0] ? L.routes[0].bridges || [] : [];
-  el.innerHTML = bl.length ? '' : '<div class="meta">Sin puentes. Se crean uniendo los dos extremos de la ruta abierta.</div>';
+  el.innerHTML = bl.length ? '' : '<div class="meta">Sin puentes. Se crean con «Puente» (barra de «Editar puntos»): con varios puntos seguidos seleccionados ese tramo se vuelve puente, o con los dos extremos de la ruta abierta se unen.</div>';
   bl.forEach((b, i) => {
     const d = document.createElement('div');
     d.className = 'item' + (state.selBridge === i ? ' sel' : '');
@@ -3896,8 +3945,7 @@ function bindControls() {
   $('btnBridge').addEventListener('click', () => createBridge(parseFloat($('bridgeWidthNum').value)));
   $('btnTbBridge').addEventListener('click', () => {
     focusPanel('spline', $('bridgeControls'));
-    if (!openEndsSelected()) { toast('Para un puente: abre el circuito (borra un punto con «Abrir» activado) y selecciona los dos extremos con Shift.'); return; }
-    createBridge(parseFloat($('bridgeWidthNum').value) || state.geom.width);
+    createBridge(parseFloat($('bridgeWidthNum').value) || state.geom.width); // extremos abiertos o tramo seleccionado
   });
   // sección socavada: botón de la barra con sus opciones; «Socavar selección» la crea sobre los puntos seleccionados
   $('btnCut').addEventListener('click', () => setFeature(state.feature === 'cut' ? null : 'cut'));
@@ -5754,7 +5802,7 @@ const HINTS = {
   trackMaxTrisNum: 'Tope exacto de triángulos de la pista (puede superar el máximo del control deslizante).',
   trackAdapt: 'Solo en «Optimizado»: al mínimo, las curvas tienen apenas algo más de geometría que las rectas; al máximo, las rectas tienen mucho menos que las curvas.',
   trackTexOpacity: 'Opacidad de la textura de la pista en las vistas 2D y 3D: bájala para ver los colores por altura que hay debajo. No cambia la exportación.',
-  btnTbBridge: 'Crea un puente entre los dos extremos abiertos seleccionados (cierra el circuito), con el ancho del panel «Spline».',
+  btnTbBridge: 'Crea un puente con el ancho de la sección «Spline»: con varios puntos seguidos seleccionados, ese tramo se vuelve puente (misma forma); con los dos extremos de la ruta abierta seleccionados, los une y cierra el circuito.',
   openOnDelete: 'Si está activado, al borrar un punto de un circuito cerrado el circuito queda abierto en ese lugar (en vez de cerrarse con un punto menos).',
   bridgeWidth: 'Ancho propio del puente (con una transición suave en sus extremos).',
   btnBridge: 'Une los dos extremos seleccionados con un puente de ancho propio.',

@@ -148,7 +148,11 @@ export function buildLayout(project, gpIn = {}) {
       if (!b || !b.a || !b.b || !(b.w > 0)) return;
       const ja = nearestUni(b.a), jb = nearestUni(b.b);
       let f = closed ? (jb - ja + n) % n : jb - ja, j0 = ja;
-      if (closed) { const g = (ja - jb + n) % n; if (g < f) { f = g; j0 = jb; } } // el tramo corto entre ambos puntos
+      if (closed && b.mid) {
+        // tramo convertido en puente: el sentido que pasa por su punto intermedio (puede ser el tramo largo)
+        const jm = nearestUni(b.mid);
+        if ((jm - ja + n) % n > f) { f = (ja - jb + n) % n; j0 = jb; }
+      } else if (closed) { const g = (ja - jb + n) % n; if (g < f) { f = g; j0 = jb; } } // el tramo corto entre ambos puntos
       else if (f < 0) { f = -f; j0 = jb; }
       if (f < 1) return;
       // con desplazamiento lateral la transición se alarga para que el eje no se quiebre (borde sin pliegues)
