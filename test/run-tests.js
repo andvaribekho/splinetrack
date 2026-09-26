@@ -12,7 +12,8 @@ import { nearestOnSamples } from '../js/geometry.js';
 import { buildEdgeMeshes } from '../js/edges.js';
 import { edgeExtents } from '../js/tunnels.js';
 import { buildRivers } from '../js/rivers.js';
-import { sculptField } from '../js/scene.js';
+import { sculptField, bakeTreeList, bakeDecoList, moveTree, treeConeVerts, vegPlace } from '../js/scene.js';
+import { treeModelItems, decoSetItems } from '../js/deco.js';
 import { buildShadows, shadowCasters, sunShadowDir } from '../js/shadows.js';
 import { SCULPT_PRESETS, curveLUT, curveEval, normCurve, presetOf } from '../js/sculptcurve.js';
 
@@ -1134,6 +1135,57 @@ for (const [key, s] of Object.entries(SAMPLES)) {
     `pendientes máx.: suave ${maxSlope(SCULPT_PRESETS.gentle.pts).toFixed(2)} < campana ${maxSlope(SCULPT_PRESETS.bell.pts).toFixed(2)} < meseta ${maxSlope(SCULPT_PRESETS.mesa.pts).toFixed(2)}`);
   const Fs = sculptField([{ x: 0, y: 0, r: 20, h: -3, lut: curveLUT(SCULPT_PRESETS.mesa.pts) }]);
   check(Math.abs(Fs.sample(10, 0) + 3) < 0.05, 'meseta hundida: fondo plano');
+}
+
+// ---- árboles y adornos sin «single mesh»: lista fija, mover apoyado en el suelo y borrar ----
+{
+  const L = buildLayout(SAMPLES.oval.build(), { lapLength: 1000 });
+  const E = computeElevation(L, { hills: 0.5 });
+  const T = buildTerrain(L, E, { terrain: true, terrainDensity: 35 });
+  const G = makeGround(T, null);
+  const sp = { treeDensity: 10, treeScale: 1.2, treeTilt: 40 };
+  const tr = buildTrees(L, E, sp, G);
+  const bake = bakeTreeList(L, tr.trees, sp.treeScale);
+  check(bake.length === tr.count && bake.every((b) => b.length === 8), `árboles: lista fija de ${bake.length}`);
+  const tb = buildTrees(L, E, { ...sp, treeBake: bake }, G);
+  let dmax = 0, hmax = 0;
+  tb.trees.forEach((t, i) => { dmax = Math.max(dmax, Math.hypot(t.x - tr.trees[i].x, t.y - tr.trees[i].y), Math.abs(t.z - tr.trees[i].z)); hmax = Math.max(hmax, Math.abs(t.h - tr.trees[i].h)); });
+  check(tb.count === tr.count && dmax < 0.02 && hmax < 0.01, `árboles: la lista fija reproduce la distribución (Δ ${dmax.toFixed(4)} m)`);
+  let vmax = 0;
+  for (let i = 0; i < tb.positions.length; i++) vmax = Math.max(vmax, Math.abs(tb.positions[i] - tr.positions[i]));
+  check(vmax < 0.05 && tb.indices.length === tr.indices.length, `árboles: misma malla combinada (Δ ${vmax.toFixed(4)} m)`);
+  // otros parámetros de reparto no la cambian; la escala sí
+  const td = buildTrees(L, E, { ...sp, treeBake: bake, treeDensity: 30, treeSeed: 99 }, G);
+  check(td.count === tr.count, 'árboles: con lista fija la densidad y la semilla no cambian el reparto');
+  const ts = buildTrees(L, E, { ...sp, treeBake: bake, treeScale: 2.4 }, G);
+  check(Math.abs(ts.trees[0].h - 2 * tb.trees[0].h) < 0.02, 'árboles: con lista fija la escala sigue aplicándose');
+  // mover: queda apoyado en el suelo, mismo tamaño y giro; los vértices del cono siguen la base
+  const t0 = tb.trees[3], nx = t0.x + 7, ny = t0.y - 5;
+  const mv = moveTree(t0, G, nx, ny, sp.treeTilt);
+  check(Math.abs(mv.z - G.sample(nx, ny)) < 1e-6 && mv.h === t0.h && mv.yaw === t0.yaw && mv.bi === t0.bi, 'árboles: mover lo apoya en el suelo nuevo');
+  const vv = treeConeVerts(mv);
+  check(Math.abs(vv[27] - mv.basePos[0]) < 1e-4 && Math.abs(vv[29] - mv.basePos[2]) < 1e-4 && vv[26] > mv.basePos[2] + mv.h * 0.8, 'árboles: vértices del cono en la nueva base');
+  // borrar uno: la lista fija se acorta y los modelos de los demás no cambian
+  const bake2 = bake.filter((_, i) => i !== 2);
+  const tc = buildTrees(L, E, { ...sp, treeBake: bake2 }, G);
+  const has = () => true;
+  const m1 = treeModelItems(tb.trees, ['a', 'b', 'c'], has), m2 = treeModelItems(tc.trees, ['a', 'b', 'c'], has);
+  check(tc.count === tr.count - 1 && m2.slice(2).every((it, k) => it.asset === m1[k + 3].asset), 'árboles: al borrar uno, los demás conservan su modelo');
+  // adornos
+  const set = { mode: 'road', side: 'both', density: 10, offset: 4, spread: 25, spacing: 2, size: 1, sizeVar: 0.3, rot: 360, tilt: 50, seed: 3, max: 400 };
+  const a = buildDecoInstances(L, E, {}, G, set);
+  const db = bakeDecoList(L, a);
+  const b = buildDecoInstances(L, E, {}, G, { ...set, bake: db, density: 40, seed: 8 });
+  let dd = 0;
+  b.forEach((it, i) => { dd = Math.max(dd, Math.hypot(it.x - a[i].x, it.y - a[i].y), Math.abs(it.z - a[i].z), Math.abs(it.yaw - a[i].yaw), Math.abs(it.s - a[i].s)); });
+  check(b.length === a.length && dd < 0.02 && b.every((it, i) => it.bi === i), `decoración: la lista fija reproduce el set (Δ ${dd.toFixed(4)})`);
+  const res = decoSetItems(L, E, {}, G, [{ ...set, bake: db.slice(0, 10), color: '#ff0000', assets: [] }], null, () => false);
+  check(res[0].items.length === 10 && res[0].items.every((it, i) => it.bi === i && it.asset === 'cube:#ff0000'), 'decoración: lista fija editada (10 elementos)');
+  const P = vegPlace(G, a[0].x + 3, a[0].y, 100);
+  check(Math.abs(P.z - G.sample(a[0].x + 3, a[0].y)) < 1e-6 && Math.abs(Math.hypot(...P.up) - 1) < 1e-6, 'decoración: vegPlace apoya en el suelo con eje unitario');
+  // sin terreno: se apoyan a la altura de la calzada más cercana
+  const nb = buildTrees(L, E, { ...sp, treeBake: bake.slice(0, 5) }, null);
+  check(nb.count === 5 && nb.trees.every((t) => Number.isFinite(t.z)), 'árboles: lista fija sin terreno');
 }
 
 function hillsZeroFlat(L) {

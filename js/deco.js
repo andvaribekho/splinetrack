@@ -12,6 +12,7 @@ export function defaultDecoSet(id, index) {
     shape: 'cube', rotMode: 'random', rotLeft: 0, rotRight: 0, collapsed: false,
     size: 1.2, sizeVar: 0.3, rot: 360, tilt: 60, onSlopes: false, onTops: false, hillDensity: 5, seed: index * 13,
     modelScale: 1, assets: [], paint: [], visible: true,
+    single: true, bake: null, // «single mesh» (sin marcar: lista fija editable a mano en «bake»)
   };
 }
 
@@ -43,10 +44,12 @@ export function decoSetItems(layout, elev, sp, ground, sets, paintFor, hasAsset)
 export function treeModelItems(trees, assetIds, hasAsset) {
   const models = (assetIds || []).filter((a) => hasAsset(a));
   if (!models.length) return null;
-  return trees.map((t, i) => {
-    const u = (((i + 1) * 2654435761) >>> 0) / 4294967296;
-    return { x: t.x - t.up[0] * 0.1, y: t.y - t.up[1] * 0.1, z: t.z - t.up[2] * 0.1, up: t.up, yaw: t.yaw || 0, scale: t.h / 9, asset: pickOf(models, u) };
-  });
+  return trees.map((t, i) => treeModelItem(t, i, models));
+}
+/** Instancia de modelo de un árbol (i = su número en la lista: decide qué modelo le toca). */
+export function treeModelItem(t, i, models) {
+  const u = ((((t.mi ?? i) + 1) * 2654435761) >>> 0) / 4294967296; // mi: su número original (no cambia al borrar otros)
+  return { x: t.x - t.up[0] * 0.1, y: t.y - t.up[1] * 0.1, z: t.z - t.up[2] * 0.1, up: t.up, yaw: t.yaw || 0, scale: t.h / 9, asset: pickOf(models, u), bi: t.bi ?? i };
 }
 
 /** Hierba con modelos: escala = altura / 0.9 m. */

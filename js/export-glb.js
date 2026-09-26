@@ -6,7 +6,7 @@ import { buildRivers } from './rivers.js';
 import { buildTrackMesh, coveredRanges, terrainTint, buildTerrain, buildTrees, buildHills, buildStartGate, buildGrass, makeGround, bridgePillars, suspPillars } from './scene.js';
 import { pillarGeometry } from './tunnels.js';
 import { buildEdgeMeshes } from './edges.js';
-import { assetObject, builtinAsset } from './assets.js';
+import { assetObject, builtinAsset, mergedAssetMeshes } from './assets.js';
 import { decoSetItems, treeModelItems, grassModelItems } from './deco.js';
 import { buildShadows, shadowCasters } from './shadows.js';
 import { makeBannerCanvas, makeCheckerCanvas, makeGrassCanvas, makePadCanvas, makeGlowCanvas } from './gatetex.js';
@@ -267,7 +267,7 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
     grp.add(mesh('linea_salida', G.line.positions, G.line.indices, G.line.uvs, new THREE.MeshStandardMaterial({ name: 'linea_salida', map: ct, roughness: 0.8 })));
     gateTris = G.tris;
   }
-  // árboles: un objeto por árbol, con el pivote en el centro de la base
+  // árboles: una sola malla («single mesh») o un objeto por árbol, con el pivote en el centro de la base
   let treeCount = 0;
   const ground = makeGround(terrain, HS);
   // pilares de los tramos suspendidos: suspendido_NN_pilar_MM, pivote en la base
@@ -298,29 +298,34 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
     shadowTrees = tr.trees;
     treeCount = tr.count;
     const tItems = treeModelItems(tr.trees, sp.treeAssets, hasAsset);
-    if (tItems) { // árboles con modelos: un objeto por árbol, pivote del modelo
+    const single = sp.treeSingle !== false; // «single mesh»: todos los árboles en una malla (una por material con modelos)
+    if (tItems) { // árboles con modelos: un objeto por árbol (pivote del modelo) o combinados
       const grp = new THREE.Group();
       grp.name = 'arboles';
       root.add(grp);
-      putItems(grp, tItems, 'arbol');
+      if (single) for (const m of mergedAssetMeshes(byId, tItems, 'arboles_malla')) grp.add(m);
+      else putItems(grp, tItems, 'arbol');
     } else if (tr.count) {
       const grp = new THREE.Group();
       grp.name = 'arboles';
       root.add(grp);
-      const geo = unitCone(8);
       const mat = new THREE.MeshStandardMaterial({ name: 'arbol', color: 0x2e6b34, roughness: 0.9, flatShading: true });
-      tr.trees.forEach((t, i) => {
-        // geometría propia con escala 1: el origen del objeto es el centro de la base del cono
-        const g = geo.clone();
-        g.scale(t.r * (t.ex || 1), t.r * (t.ey || 1), t.h);
-        g.computeVertexNormals();
-        const m = new THREE.Mesh(g, mat);
-        m.name = `arbol_${String(i + 1).padStart(4, '0')}`;
-        m.position.set(...t.basePos);
-        // inclinación según el suelo y giro aleatorio sobre su eje: rotación del objeto (geometría recta en su espacio local)
-        m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3(...t.up)).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), t.yaw || 0));
-        grp.add(m);
-      });
+      if (single) grp.add(mesh('arboles_malla', tr.positions, tr.indices, null, mat));
+      else {
+        const geo = unitCone(8);
+        tr.trees.forEach((t, i) => {
+          // geometría propia con escala 1: el origen del objeto es el centro de la base del cono
+          const g = geo.clone();
+          g.scale(t.r * (t.ex || 1), t.r * (t.ey || 1), t.h);
+          g.computeVertexNormals();
+          const m = new THREE.Mesh(g, mat);
+          m.name = `arbol_${String(i + 1).padStart(4, '0')}`;
+          m.position.set(...t.basePos);
+          // inclinación según el suelo y giro aleatorio sobre su eje: rotación del objeto (geometría recta en su espacio local)
+          m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3(...t.up)).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), t.yaw || 0));
+          grp.add(m);
+        });
+      }
     }
   }
   // elementos de pista: un objeto por elemento (puddlesA-1, turbopadA-1, nitrostripA-1…), pivote en la base sobre la calzada
@@ -384,7 +389,7 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
       root.add(m);
     }
   }
-  // sets de decoración: decoracion/<set>/<set>_0001… (cubos de color o modelos), pivote en la base
+  // sets de decoración: decoracion/<set>/<set>_malla («single mesh») o <set>_0001… (cubos de color o modelos), pivote en la base
   let decoCount = 0;
   if (DC && DC.sets && DC.sets.length) {
     const res = decoSetItems(layout, elev, sp, ground, DC.sets, DC.paintFor, hasAsset);
@@ -395,8 +400,10 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
       const sg = new THREE.Group();
       sg.name = set.name;
       dg.add(sg);
-      items.forEach((it, i) => {
-        const A = builtinAsset(it.asset) || byId(it.asset);
+      const assetOf = (id) => builtinAsset(id) || byId(id);
+      if (set.single !== false) for (const m of mergedAssetMeshes(assetOf, items, `${set.name}_malla`)) sg.add(m); // «single mesh»: una malla por material
+      else items.forEach((it, i) => {
+        const A = assetOf(it.asset);
         if (A) sg.add(assetObject(A, it, `${set.name}_${String(i + 1).padStart(4, '0')}`));
       });
       decoCount += items.length;

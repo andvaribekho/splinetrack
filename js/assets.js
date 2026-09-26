@@ -73,6 +73,7 @@ export function instancedGroup(assetsById, items, zOf = null) {
       im.instanceMatrix.needsUpdate = true;
       im.computeBoundingSphere();
       im.userData.instItems = list;
+      im.userData.partMatrix = part.matrix;
       grp.add(im);
     }
   }
@@ -99,4 +100,61 @@ export function assetObject(A, it, name) {
   });
   instanceMatrix(it, it.scale).decompose(g.position, g.quaternion, g.scale);
   return g;
+}
+
+/**
+ * «Single mesh» al exportar: todas las instancias en mallas combinadas, una por material (pivote en el origen).
+ * items: [{..., asset, scale}]. Devuelve [THREE.Mesh] con nombre `${name}` (o `${name}_<material>` si hay varios).
+ */
+export function mergedAssetMeshes(assetsById, items, name) {
+  const byMat = new Map(); // material -> {mat, pos:[], nor:[], uv:[], idx:[], n}
+  const M = new THREE.Matrix4(), N = new THREE.Matrix3(), v = new THREE.Vector3();
+  const add = (mat, geo, start, count, matrix) => {
+    let b = byMat.get(mat);
+    if (!b) byMat.set(mat, (b = { mat, pos: [], nor: [], uv: [], idx: [], n: 0 }));
+    const P = geo.getAttribute('position'), Nr = geo.getAttribute('normal'), U = geo.getAttribute('uv'), I = geo.getIndex();
+    N.getNormalMatrix(matrix);
+    const base = b.n, map = new Map();
+    const vert = (k) => {
+      let o = map.get(k);
+      if (o !== undefined) return o;
+      o = base + map.size;
+      map.set(k, o);
+      v.fromBufferAttribute(P, k).applyMatrix4(matrix); b.pos.push(v.x, v.y, v.z);
+      if (Nr) { v.fromBufferAttribute(Nr, k).applyMatrix3(N).normalize(); b.nor.push(v.x, v.y, v.z); } else b.nor.push(0, 0, 1);
+      if (U) b.uv.push(U.getX(k), U.getY(k)); else b.uv.push(0, 0);
+      return o;
+    };
+    for (let j = start; j < start + count; j++) b.idx.push(vert(I ? I.getX(j) : j));
+    b.n = base + map.size;
+  };
+  for (const it of items) {
+    const A = assetsById(it.asset);
+    if (!A) continue;
+    const IM = instanceMatrix(it, it.scale);
+    for (const part of A.parts) {
+      M.multiplyMatrices(IM, part.matrix);
+      const g = part.geometry, total = g.getIndex() ? g.getIndex().count : g.getAttribute('position').count;
+      if (Array.isArray(part.material)) {
+        const groups = g.groups.length ? g.groups : [{ start: 0, count: total, materialIndex: 0 }];
+        for (const gr of groups) { const m = part.material[gr.materialIndex || 0]; if (m) add(m, g, gr.start, Math.min(gr.count, total - gr.start), M); }
+      } else add(part.material, g, 0, total, M);
+    }
+  }
+  const out = [], used = new Set();
+  for (const b of byMat.values()) {
+    if (!b.idx.length) continue;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(b.pos, 3));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(b.nor, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(b.uv, 2));
+    g.setIndex(b.n > 65535 ? new THREE.Uint32BufferAttribute(b.idx, 1) : new THREE.Uint16BufferAttribute(b.idx, 1));
+    const m = new THREE.Mesh(g, b.mat);
+    let nm = byMat.size > 1 ? `${name}_${(b.mat && b.mat.name) || 'material'}` : name;
+    if (used.has(nm)) nm += `_${out.length + 1}`;
+    used.add(nm);
+    m.name = nm;
+    out.push(m);
+  }
+  return out;
 }

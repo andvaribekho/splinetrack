@@ -13,7 +13,7 @@ import { initSplitters } from './splitters.js';
 import { initHotkeys, comboOf } from './hotkeys.js';
 import { VERSION } from './version.js';
 import { ACTIONS, FIXED, bindingOf, isDefault, setBinding, resetAll as resetKeymap, matchAction, comboLabel } from './keymap.js';
-import { DEFAULT_SCENE, terrainCell } from './scene.js';
+import { DEFAULT_SCENE, terrainCell, buildTrees, buildDecoInstances, bakeTreeList, bakeDecoList } from './scene.js';
 import { makeShadowCanvas, sunShadowDir } from './shadows.js';
 import { SCULPT_PRESETS, DEFAULT_SCULPT_CURVE, normCurve, curveEval, curveLUT, presetOf } from './sculptcurve.js';
 import { makeTrackThumbnail } from './thumbnail.js';
@@ -103,7 +103,7 @@ const state = {
 const undoStack = [];
 function snapshot() {
   const ref = state.ref ? { x: state.ref.x, y: state.ref.y, scale: state.ref.scale, opacity: state.ref.opacity } : null;
-  return JSON.stringify({ elevMode: state.elev.mode || 'auto', project: state.project, flatZones: state.flatZones, suspZones: state.suspZones, cutZones: state.cutZones, overrides: state.overrides, ref, refCanvas: !!state.ref, densityPaint: state.densityPaint, terrainSculpt: state.terrainSculpt, sculptCurves: state.sculptCurves, decoSets: state.decoSets, hills: state.hills, selHill: state.selHill, rivers: state.rivers, items: state.items, tunnelOverrides: state.scene ? state.scene.tunnelOverrides || [] : [] });
+  return JSON.stringify({ elevMode: state.elev.mode || 'auto', project: state.project, flatZones: state.flatZones, suspZones: state.suspZones, cutZones: state.cutZones, overrides: state.overrides, ref, refCanvas: !!state.ref, densityPaint: state.densityPaint, terrainSculpt: state.terrainSculpt, sculptCurves: state.sculptCurves, decoSets: state.decoSets, hills: state.hills, selHill: state.selHill, rivers: state.rivers, items: state.items, tunnelOverrides: state.scene ? state.scene.tunnelOverrides || [] : [], treeEdit: state.scene ? { single: state.scene.treeSingle !== false, bake: state.scene.treeBake || null } : null });
 }
 function pushUndo() {
   undoStack.push(snapshot());
@@ -126,6 +126,13 @@ function undo() {
   if (o.rivers) { state.rivers = o.rivers; if (!state.rivers.some((rv) => rv.id === state.selRiver)) state.selRiver = null; if (typeof renderRiverPanel === 'function') renderRiverPanel(); }
   if (o.decoSets) { state.decoSets = o.decoSets; if (typeof renderDecoPanel === 'function') { renderDecoPanel(); decoChanged(); } }
   if (o.sculptCurves) state.sculptCurves = o.sculptCurves;
+  if (o.treeEdit && state.scene && JSON.stringify(o.treeEdit) !== JSON.stringify({ single: state.scene.treeSingle !== false, bake: state.scene.treeBake || null })) { // árboles editados a mano
+    state.scene.treeSingle = o.treeEdit.single; state.scene.treeBake = o.treeEdit.bake;
+    if (state.selVeg && state.selVeg.kind === 'tree') state.selVeg = null;
+    if (typeof preview !== 'undefined') preview.buildTreeMesh();
+    if (typeof syncTreeEdit === 'function') syncTreeEdit();
+  }
+  if (o.decoSets && state.selVeg && state.selVeg.kind === 'deco') state.selVeg = null;
   if (o.tunnelOverrides && state.scene && JSON.stringify(o.tunnelOverrides) !== JSON.stringify(state.scene.tunnelOverrides || [])) state.scene.tunnelOverrides = o.tunnelOverrides; // ajustes por túnel (rocas y estalactitas movidas…)
   if (o.terrainSculpt) { state.terrainSculpt = o.terrainSculpt; if (typeof refreshSculptInfo === 'function') refreshSculptInfo(); }
   if (o.densityPaint) { const changed = JSON.stringify(o.densityPaint) !== JSON.stringify(state.densityPaint); state.densityPaint = o.densityPaint; if (changed && typeof refreshPaintInfo === 'function') refreshPaintInfo(); }
@@ -345,6 +352,7 @@ function clearAllSelections() {
   if (state.selHill != null || state.selTunnel != null) selectHill(null);
   state.selTunnel = null;
   state.selCave = null;
+  if (state.selVeg) { state.selVeg = null; refreshVegEditInfo(); }
   refreshArcBox();
   if (typeof editor !== 'undefined') { editor.draw(); profile.draw(); preview.updateHandles(); preview.setHillSelection(null); }
 }
@@ -404,6 +412,129 @@ function refreshCaveInfo() {
   if (!el) return;
   const c = state.selCave;
   el.textContent = c ? `Seleccionada: ${c.kind === 'r' ? 'roca' : 'estalactita'} ${c.key + 1}. Arrástrala en el mapa o con el gizmo en 3D.` : 'Clic en una roca o estalactita (mapa o 3D) para seleccionarla y moverla.';
+}
+// ---------- árboles y adornos sin «single mesh»: se eligen, se mueven en planta y se borran uno a uno ----------
+const r3 = (v) => Math.round(v * 1000) / 1000;
+/** Lista (fija) de la que sale el elemento: sc.treeBake o set.bake. */
+function vegBake(v) {
+  if (!v) return null;
+  if (v.kind === 'tree') return state.scene.treeBake || null;
+  const set = state.decoSets.find((q) => q.id === v.set);
+  return set ? set.bake || null : null;
+}
+/** Árbol o adorno seleccionado: {kind: 'tree' | 'deco', set (id del set), i (n.º en su lista fija)}. */
+function selectVeg(v, refresh = true) {
+  state.selVeg = v || null;
+  if (v) {
+    if (state.selCave) state.selCave = null;
+    if (state.selItem) { state.selItem = null; preview.buildItems(); refreshItemsInfo(); }
+    if (state.selHill != null || state.selTunnel != null) { state.selHill = null; state.selTunnel = null; refreshHillPanel(); preview.setHillSelection(null, false); }
+    if (state.selAlt != null) selectAlt(null);
+    if (state.selBridge != null) selectBridge(null);
+    if (state.tool !== 'pan') setTool('pan');
+    if (v.kind === 'deco') { if (state.selDeco !== v.set) selectDecoSet(v.set); } else focusPanel('trees', $('treesBlock'));
+  }
+  if (refresh && typeof editor !== 'undefined') { editor.draw(); preview.updateHandles(); }
+  refreshVegEditInfo();
+}
+/** Guarda la nueva posición (en el mapa) del árbol o adorno movido y rehace solo lo necesario. */
+function commitVegMove(v, P) {
+  const b = vegBake(v), L = state.layout;
+  if (!b || !b[v.i] || !P || !L) return;
+  pushUndo();
+  const [lx, ly] = L.toLayout(P.x, P.y);
+  b[v.i] = [r3(lx), r3(ly), ...b[v.i].slice(2)];
+  if (v.kind === 'tree') preview.buildTreeMesh(); else decoChanged();
+  editor.draw();
+}
+function deleteSelectedVeg() {
+  const v = state.selVeg, b = vegBake(v);
+  if (!b || !b[v.i]) return;
+  pushUndo();
+  b.splice(v.i, 1);
+  state.selVeg = null;
+  if (v.kind === 'tree') preview.buildTreeMesh(); else decoChanged();
+  preview.updateHandles(); editor.draw();
+  refreshVegEditInfo();
+  toast(`${v.kind === 'tree' ? 'Árbol borrado' : 'Elemento borrado'} (Ctrl+Z para deshacer; «Restablecer» vuelve a la distribución automática).`);
+}
+/** Lista fija de árboles con la distribución actual (para editarlos uno a uno). */
+function bakeTreesNow() {
+  const L = state.layout, E = state.result, sc = state.scene;
+  if (!L || !E) return null;
+  const TR = buildTrees(L, E, { ...sc, treeBake: null }, preview.groundCache || null);
+  return bakeTreeList(L, TR.trees, sc.treeScale);
+}
+function bakeDecoNow(set) {
+  const L = state.layout, E = state.result;
+  if (!L || !E) return null;
+  return bakeDecoList(L, buildDecoInstances(L, E, state.scene, preview.groundCache || null, { ...set, bake: null }, app.decoPaintWorld(set)));
+}
+/** «Single mesh» de los árboles: sin marcar se fija la distribución actual y cada árbol se edita; al marcarla vuelven a ser una malla (con lo editado). */
+function setTreeSingle(on) {
+  const sc = state.scene;
+  pushUndo();
+  sc.treeSingle = !!on;
+  if (!on && !Array.isArray(sc.treeBake)) sc.treeBake = bakeTreesNow();
+  if (on && state.selVeg && state.selVeg.kind === 'tree') selectVeg(null, false);
+  preview.buildTreeMesh();
+  syncTreeEdit(); editor.draw();
+}
+function resetTreeBake() {
+  const sc = state.scene;
+  pushUndo();
+  sc.treeBake = null;
+  if (sc.treeSingle === false) sc.treeBake = bakeTreesNow(); // sigue editable: la nueva distribución automática queda fija
+  if (state.selVeg && state.selVeg.kind === 'tree') state.selVeg = null;
+  preview.buildTreeMesh();
+  syncTreeEdit(); editor.draw();
+}
+function setDecoSingle(set, on) {
+  pushUndo();
+  set.single = !!on;
+  if (!on && !Array.isArray(set.bake)) set.bake = bakeDecoNow(set);
+  if (on && state.selVeg && state.selVeg.kind === 'deco' && state.selVeg.set === set.id) state.selVeg = null;
+  renderDecoPanel(); decoChanged();
+}
+function resetDecoBake(set) {
+  pushUndo();
+  set.bake = null;
+  if (set.single === false) set.bake = bakeDecoNow(set);
+  if (state.selVeg && state.selVeg.kind === 'deco' && state.selVeg.set === set.id) state.selVeg = null;
+  renderDecoPanel(); decoChanged();
+}
+/** Controles de edición de los árboles (casilla, texto y botones). */
+function syncTreeEdit() {
+  const sc = state.scene;
+  if (!$('treeSingle')) return;
+  $('treeSingle').checked = sc.treeSingle !== false;
+  const baked = Array.isArray(sc.treeBake);
+  $('treeEditBox').hidden = !baked && sc.treeSingle !== false;
+  $('btnTreeReset').hidden = !baked;
+  refreshVegEditInfo();
+}
+function refreshVegEditInfo() {
+  const sc = state.scene, v = state.selVeg;
+  if ($('treeEditInfo')) {
+    const n = Array.isArray(sc.treeBake) ? sc.treeBake.length : 0;
+    const sel = v && v.kind === 'tree' ? `Seleccionado: árbol ${v.i + 1}. Arrástralo en el mapa o con el gizmo en 3D (sigue apoyado en el suelo); Supr lo borra. ` : '';
+    $('treeEditInfo').textContent = sc.treeSingle === false
+      ? `${sel || 'Clic en un árbol (mapa o 3D) para seleccionarlo, moverlo o borrarlo. '}Lista fija de ${n} árboles: la densidad, la distancia, la dispersión, los cerros y la semilla no la cambian hasta «Restablecer» (la escala y la inclinación sí).`
+      : Array.isArray(sc.treeBake) ? `Una sola malla con los ${n} árboles editados a mano. «Restablecer» vuelve a la distribución automática.` : '';
+    if ($('btnTreeDel')) { $('btnTreeDel').disabled = !(v && v.kind === 'tree'); $('btnTreeDel').hidden = sc.treeSingle !== false; }
+  }
+  document.querySelectorAll('#decoList .deco-card').forEach((d) => {
+    const set = state.decoSets.find((q) => q.id === d.dataset.id);
+    const el = d.querySelector('.dbakeInfo');
+    if (!set || !el) return;
+    const n = Array.isArray(set.bake) ? set.bake.length : 0;
+    const mine = v && v.kind === 'deco' && v.set === set.id;
+    el.textContent = set.single === false
+      ? `${mine ? `Seleccionado: elemento ${v.i + 1}. Arrástralo en el mapa o con el gizmo en 3D; Supr lo borra. ` : 'Clic en un elemento (mapa o 3D) para seleccionarlo, moverlo o borrarlo. '}Lista fija de ${n}: la cantidad, la densidad, la distancia, la separación, la rotación al azar y las zonas pintadas no la cambian hasta «Restablecer».`
+      : n ? `Una sola malla con los ${n} elementos editados a mano. «Restablecer» vuelve a la distribución automática.` : '';
+    const del = d.querySelector('.ddel');
+    if (del) { del.disabled = !mine; del.hidden = set.single !== false; }
+  });
 }
 /** Selecciona un atajo (índice en project.alts): lo resalta y lleva el panel a sus parámetros. */
 function selectAlt(i) {
@@ -1520,6 +1651,7 @@ const app = {
   endBridgeDrag() { state.bridgeDrag = null; refreshBridgeList(); },
   selectHillAt(p, tol = 0) {
     if (state.ref3d && state.ref3d.sel) selectRef3d(false);
+    if (state.selVeg) selectVeg(null);
     const ai = altAt(p, tol);
     if (ai != null) { selectAlt(ai); return; }
     if (state.selAlt != null) selectAlt(null);
@@ -1635,6 +1767,23 @@ const app = {
   selectTunnel(id) { selectTunnel(id); },
   selectCave(c, refresh = true) { selectCave(c, refresh); },
   commitCaveMove(c, P) { commitCaveMove(c, P); },
+  selectVeg(v, refresh = true) { selectVeg(v, refresh); },
+  commitVegMove(v, P) { commitVegMove(v, P); },
+  moveVegLive(v, x, y) { return preview.moveVegLive(v, x, y); },
+  onVegLive() { editor.draw(); },
+  onTreesInfo(info) { refreshTreesInfo(info); },
+  /** Árboles y adornos editables (grupos sin «single mesh»), para el mapa: [{kind, set, i, x, y, r, color}]. */
+  vegEditItems() {
+    const out = [], sc = state.scene;
+    if (typeof preview === 'undefined') return out;
+    if (sc.trees && sc.treeSingle === false && preview.treeData) for (const t of preview.treeData) out.push({ kind: 'tree', set: null, i: t.bi, x: t.x, y: t.y, r: t.r, color: '#3fa34d' });
+    const by = preview.decoItemsBySet || {};
+    for (const set of state.decoSets) {
+      if (set.single !== false || set.visible === false) continue;
+      for (const it of by[set.id] || []) out.push({ kind: 'deco', set: set.id, i: it.bi, x: it.x, y: it.y, r: 0.6 * (it.scale || 1), color: set.color });
+    }
+    return out;
+  },
   /** Rocas y estalactitas sueltas del túnel seleccionado (para el mapa): [{kind, key, x, y, z, rad}]. */
   caveItemsSel() {
     const tid = state.selTunnel;
@@ -2561,7 +2710,7 @@ function refreshBridgeList() {
     d.innerHTML = `<div class="head"><span class="row" style="gap:4px;min-width:0"><button class="x btoggle" title="Mostrar u ocultar los parámetros del tramo">${b.collapsed ? '▸' : '▾'}</button><strong>${tName} ${i + 1}</strong></span><button class="x bdel" title="Quitar el tramo (vuelve a ser pista normal)">✕</button></div>
       <div class="meta">${inf ? `${(inf.s1 - inf.s0).toFixed(0)} m · s ${inf.s0.toFixed(0)}–${inf.s1.toFixed(0)} m` : ''}</div>
       <div class="bbody">
-      <div class="field"><label>Tipo</label><select class="btype" title="Pista: el terreno se adapta como en el resto de la pista. Puente: bajo el tramo queda el relieve natural y lleva pilares si queda en altura"><option value="track"${!isBr && !isCut ? ' selected' : ''}>Pista (el terreno se adapta)</option><option value="bridge"${isBr ? ' selected' : ''}>Puente (terreno natural y pilares)</option><option value="cut"${isCut ? ' selected' : ''}>Socavado (zanja con paredes)</option></select></div>
+      <div class="field"><label>Tipo</label><select class="btype" title="Pista: el terreno se adapta como en el resto de la pista. Puente: el terreno no se adapta (queda el relieve natural bajo el tramo) y se crean pilares si queda en altura"><option value="track"${!isBr && !isCut ? ' selected' : ''}>Pista (el terreno se adapta)</option><option value="bridge"${isBr ? ' selected' : ''}>Puente: Terreno no se adapta y se crean pilares</option><option value="cut"${isCut ? ' selected' : ''}>Socavado (zanja con paredes)</option></select></div>
       <div class="bcutBox"${isCut ? '' : ' hidden'}>
         <div class="field"><label>Paredes</label><select class="bwalls"><option value="art"${b.walls !== 'nat' ? ' selected' : ''}>Artificiales (lisas)</option><option value="nat"${b.walls === 'nat' ? ' selected' : ''}>Naturales (roca)</option></select></div>
         <div class="field"><label>Densidad de las paredes <span class="val bwsV">${b.wallSubdiv ?? 2} (×${subdivFactor(b.wallSubdiv ?? 2)} pol.)</span></label><input type="range" class="bws" min="0" max="6" step="1" value="${b.wallSubdiv ?? 2}"></div>
@@ -4246,6 +4395,9 @@ function bindControls() {
     } else if (state.tool === 'edit' && state.sel) {
       e.preventDefault();
       app.deleteCtrl(state.sel.key, state.sel.idx);
+    } else if (state.selVeg) {
+      e.preventDefault();
+      deleteSelectedVeg();
     } else if (state.selAlt != null) {
       e.preventDefault();
       const i = state.selAlt;
@@ -4927,6 +5079,7 @@ function syncSceneControls() {
   for (const k of ['terrainDensity', 'terrainMaxPolys', 'terrainMargin', 'terrainGap', 'terrainFalloff', 'treeSide', 'grassSide', 'treeSeed', 'trackTexDir', ...VEG_NUMS]) set(k, sc[k]);
   for (const k of VEG_NUMS) { const el = $(k + 'Val'); if (el) el.textContent = VEG_FMT[k](sc[k]); }
   $('treeHillBox').classList.toggle('disabled', !(sc.treeOnSlopes || sc.treeOnTops));
+  syncTreeEdit();
   $('grassHillBox').classList.toggle('disabled', !(sc.grassOnSlopes || sc.grassOnTops));
   set('hillBrush', Math.min(250, sc.hillBrush)); set('hillBrushNum', sc.hillBrush);
   set('trackTexReps', Math.min(1000, sc.trackTexReps)); set('trackTexRepsNum', sc.trackTexReps);
@@ -5111,7 +5264,7 @@ function refreshDecoCounts() {
     if (m) m.textContent = k ? `${k.count.toLocaleString('es')} elementos · ${k.tris.toLocaleString('es')} tri.` : '';
   });
   const tot = Object.values(c).reduce((a, k) => a + k.count, 0);
-  if ($('decoInfo')) $('decoInfo').textContent = state.decoSets.length ? `${state.decoSets.length} set(s) · ${tot.toLocaleString('es')} elementos. Se exportan en «decoracion/<set>/<set>_0001…», cada uno como objeto propio con el pivote en su base.` : 'Sin sets. «+ Nuevo set» agrega cubos de color que luego puedes reemplazar por modelos.';
+  if ($('decoInfo')) $('decoInfo').textContent = state.decoSets.length ? `${state.decoSets.length} set(s) · ${tot.toLocaleString('es')} elementos. Se exportan en «decoracion/<set>/»: con «Single mesh», una sola malla por material (<set>_malla); sin marcar, cada elemento como objeto propio (<set>_0001…) con el pivote en su base.` : 'Sin sets. «+ Nuevo set» agrega cubos de color que luego puedes reemplazar por modelos.';
 }
 /** Fichas para elegir modelos de la biblioteca (árboles, hierba o un set). */
 function assetChipsHTML(selected) {
@@ -5179,8 +5332,9 @@ function renderDecoPanel() {
       <div class="meta"><span class="dcount"></span></div>
       <div class="dbody">
       <div class="field"${models.length ? ' hidden' : ''}><label>Forma</label><select class="dshape"><option value="cube">Cubos</option><option value="plane">Planos (de frente, 1 cara con UV)</option></select></div>
-      <div class="row gap wrap"><label class="check"><input type="checkbox" class="dv"${set.visible !== false ? ' checked' : ''}> Visible</label><label class="check" title="Cada elemento del set lleva un plano de sombra (se generan con «Planos de sombra»)"><input type="checkbox" class="dsh"${set.shadow ? ' checked' : ''}> Proyectar sombra</label>
+      <div class="row gap wrap"><label class="check"><input type="checkbox" class="dv"${set.visible !== false ? ' checked' : ''}> Visible</label><label class="check" title="Cada elemento del set lleva un plano de sombra (se generan con «Planos de sombra»)"><input type="checkbox" class="dsh"${set.shadow ? ' checked' : ''}> Proyectar sombra</label><label class="check" title="Marcado: todo el set es una sola malla al exportar. Sin marcar: la distribución actual queda fija y cada elemento se elige (mapa o 3D), se mueve en planta (sigue apoyado en el suelo) o se borra; al volver a marcarlo se juntan otra vez en una malla, con lo editado"><input type="checkbox" class="dsingle"${set.single !== false ? ' checked' : ''}> Single mesh</label>
         <select class="dm"><option value="road">Junto a la pista</option><option value="painted">Solo en zonas pintadas</option></select></div>
+      <div class="dbake veg-edit"${set.single !== false && !Array.isArray(set.bake) ? ' hidden' : ''}><p class="hint dbakeInfo"></p><div class="row gap"><button class="ddel" disabled>Borrar el seleccionado</button><button class="dreset"${Array.isArray(set.bake) ? '' : ' hidden'} title="Descarta lo editado a mano y vuelve a la distribución automática">Restablecer</button></div></div>
       <div class="row gap wrap dpaint"${set.mode === 'painted' ? '' : ' hidden'}><button class="dp${painting ? ' active' : ''}">${painting ? 'Terminar de pintar' : 'Pintar zonas'}</button><button class="dpc"${set.paint && set.paint.length ? '' : ' disabled'}>Borrar zonas</button><span class="small muted">clic derecho o Alt borra</span></div>
       <div class="field droad"${set.mode === 'painted' ? ' hidden' : ''}><label>Lado</label><select class="ds"><option value="both">Ambos lados</option><option value="left">Izquierda</option><option value="right">Derecha</option></select></div>
       ${fld('Cantidad máxima', 'max', set.max, 0, 3000, 10)}
@@ -5227,6 +5381,9 @@ function renderDecoPanel() {
     d.querySelector('.dc').addEventListener('input', (e) => { set.color = e.target.value; d.querySelector('.swatch').style.background = set.color; commit(); });
     d.querySelector('.dv').addEventListener('change', (e) => { set.visible = e.target.checked; commit(); });
     d.querySelector('.dsh').addEventListener('change', (e) => { set.shadow = e.target.checked; commit(); refreshShadowInfo(preview.shadowInfo); });
+    d.querySelector('.dsingle').addEventListener('change', (e) => setDecoSingle(set, e.target.checked));
+    d.querySelector('.dreset').addEventListener('click', () => resetDecoBake(set));
+    d.querySelector('.ddel').addEventListener('click', () => { if (state.selVeg && state.selVeg.kind === 'deco' && state.selVeg.set === set.id) deleteSelectedVeg(); });
     d.querySelector('.dm').addEventListener('change', (e) => { pushUndo(); set.mode = e.target.value; commit(true); });
     d.querySelector('.ds').addEventListener('change', (e) => { set.side = e.target.value; commit(); });
     d.querySelector('.dsl').addEventListener('change', (e) => { set.onSlopes = e.target.checked; commit(); });
@@ -5252,6 +5409,7 @@ function renderDecoPanel() {
     el.appendChild(d);
   });
   refreshDecoCounts();
+  refreshVegEditInfo();
 }
 function refreshSculptInfo() {
   const el = $('sculptInfo');
@@ -5435,13 +5593,27 @@ function bindPanelFocus() {
   });
 }
 /** Botones de la barra: activa el terreno / los árboles con los valores por defecto (si estaban apagados). */
+function refreshTreesInfo(info) {
+  const sc = state.scene;
+  $('treesInfo').textContent = sc.trees ? `${info.trees || 0} árboles${info.treesOnHills ? ` (${info.treesOnHills} sobre cerros)` : ''}.${!Array.isArray(sc.treeBake) && !(sc.treeOnSlopes || sc.treeOnTops) && state.hills.length ? ' Sin marcar laderas ni cima, solo van sobre el terreno.' : ''} Se exportan ${sc.treeSingle !== false ? 'como una sola malla («arboles_malla»)' : 'como un objeto por árbol (arbol_0001…)'}.` : 'Desactivado.';
+  refreshVegEditInfo();
+}
 function generateFromToolbar(kind) {
   const sc = state.scene;
   if (kind === 'terrain') {
     if (!sc.terrain) { for (const k of TERRAIN_KEYS) sc[k] = DEFAULT_SCENE[k]; sc.terrain = true; syncSceneControls(); sceneChanged(); toast('Terreno generado con los valores por defecto.'); }
     focusPanel('terrain');
-  } else {
-    if (!sc.trees) { for (const k of TREE_KEYS) sc[k] = DEFAULT_SCENE[k]; sc.trees = true; syncSceneControls(); sceneChanged(); toast('Árboles generados con los valores por defecto.'); }
+  } else { // «Generar árboles y decoración»: árboles y, si no hay ninguno, un set de decoración con los valores por defecto
+    const made = [];
+    if (!sc.trees) { for (const k of TREE_KEYS) sc[k] = DEFAULT_SCENE[k]; sc.trees = true; syncSceneControls(); sceneChanged(); made.push('árboles'); }
+    if (!state.decoSets.length) {
+      pushUndo();
+      const set = defaultDecoSet(`d${Date.now().toString(36)}1`, 1);
+      state.decoSets.push(set);
+      renderDecoPanel(); decoChanged();
+      made.push('un set de decoración');
+    }
+    if (made.length) toast(`Generados ${made.join(' y ')} con los valores por defecto.`);
     focusPanel('trees');
   }
 }
@@ -5714,6 +5886,9 @@ function bindSceneControls() {
     const shadowsChanged = () => { syncShadowControls(); scheduleShadows(); };
     $('shadows').addEventListener('change', (e) => { sc.shadows = e.target.checked; shadowsChanged(); refreshShadowInfo(preview.shadowInfo); });
     $('treeShadow').addEventListener('change', (e) => { sc.treeShadow = e.target.checked; shadowsChanged(); });
+    $('treeSingle').addEventListener('change', (e) => setTreeSingle(e.target.checked));
+    $('btnTreeReset').addEventListener('click', () => resetTreeBake());
+    $('btnTreeDel').addEventListener('click', () => { if (state.selVeg && state.selVeg.kind === 'tree') deleteSelectedVeg(); });
     $('sunLight').addEventListener('change', (e) => { sc.sunLight = e.target.checked; preview.updateSunLight(); });
     $('shadowMode').addEventListener('change', (e) => { sc.shadowMode = e.target.value; shadowsChanged(); });
     for (const k of Object.keys(SHADOW_FMT)) {
@@ -5852,7 +6027,7 @@ function bindSceneControls() {
   app.onSceneInfo = (info) => {
     refreshShadowInfo(preview.shadowInfo);
     $('terrainInfo').textContent = state.scene.terrain ? `Terreno: ${info.terrainTris.toLocaleString('es')} triángulos, celda de ${info.terrainCell.toFixed(1)} m${info.terrainCellFine ? ` (${info.terrainCellFine.toFixed(1)} m en lo pintado)` : ''} · ${info.ms.toFixed(0)} ms. Nunca atraviesa la pista: queda al menos ${state.scene.terrainGap} m bajo su superficie.` : 'Desactivado.';
-    $('treesInfo').textContent = state.scene.trees ? `${info.trees} árboles${info.treesOnHills ? ` (${info.treesOnHills} sobre cerros)` : ''}.${!(state.scene.treeOnSlopes || state.scene.treeOnTops) && state.hills.length ? ' Sin marcar laderas ni cima, solo van sobre el terreno.' : ''}` : 'Desactivado.';
+    refreshTreesInfo(info);
     $('grassInfo').textContent = state.scene.grass ? `${(info.grass || 0).toLocaleString('es')} matas · ${(info.grassTris || 0).toLocaleString('es')} triángulos. Se exporta como una sola malla «hierba» con la textura recortada por transparencia.` : 'Desactivado.';
     const tl = info.tunnels || [];
     state.hillInfo = info.hills || [];

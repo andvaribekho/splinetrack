@@ -439,3 +439,6 @@ button.km-keys:hover { border-color: var(--accent); background: rgba(242,169,59,
 .side-tool.active { border-color: var(--accent); color: var(--accent); background: rgba(242,169,59,0.12); }
 .menu.menu-left { left: 0; right: auto; }
 #itemsMenuWrap { display: inline-block; }
+/* edición a mano de árboles y adornos (sin «single mesh») */
+.veg-edit { border-left: 2px solid #ffd54f55; padding: 2px 0 6px 8px; margin: 4px 0 6px; }
+.veg-edit .hint { margin-top: 2px; }

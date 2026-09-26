@@ -4,10 +4,10 @@ import { OrbitControls } from '../vendor/OrbitControls.js';
 import { TransformControls } from '../vendor/TransformControls.js';
 import { edgeSamples } from './export.js';
 import { buildEdgeMeshes } from './edges.js';
-import { instancedGroup } from './assets.js';
-import { decoSetItems, treeModelItems, grassModelItems } from './deco.js';
+import { instancedGroup, instanceMatrix } from './assets.js';
+import { decoSetItems, treeModelItems, treeModelItem, grassModelItems } from './deco.js';
 import { buildShadows, shadowCasters, sunVector } from './shadows.js';
-import { buildTrackMesh, trackRows, trackCols, coveredRanges, terrainTint, buildTerrain, buildTrees, buildHills, buildStartGate, buildGrass, makeGround, bridgePillars, suspPillars, pillarBlocked } from './scene.js';
+import { buildTrackMesh, trackRows, trackCols, coveredRanges, terrainTint, buildTerrain, buildTrees, buildHills, buildStartGate, buildGrass, makeGround, bridgePillars, suspPillars, pillarBlocked, moveTree, treeConeVerts, vegPlace } from './scene.js';
 import { buildRivers } from './rivers.js';
 import { pillarGeometry } from './tunnels.js';
 import { applyRefLook } from './refmodel.js';
@@ -658,14 +658,16 @@ export class Preview3D {
       this.decoGroup.add(g);
     };
     const vm = this.vegModels || {};
-    if (sp.trees) add(vm.trees, { veg: 'trees' });
+    this.decoItemsBySet = {};
+    if (sp.trees) add(vm.trees, { veg: 'trees', vegEdit: sp.treeSingle === false ? { kind: 'tree' } : null });
     if (sp.grass) add(vm.grass, { veg: 'grass' });
     const sets = this.app.state.decoSets || [];
     if (sets.length) {
       const res = decoSetItems(L, E, sp, this.groundCache || null, sets, (set) => this.app.decoPaintWorld(set), (id) => !!byId(id));
       this.decoCounts = {};
       for (const { set, items } of res) {
-        add(items, { decoSet: set.id });
+        add(items, { decoSet: set.id, vegEdit: set.single === false ? { kind: 'deco', set: set.id } : null });
+        this.decoItemsBySet[set.id] = items;
         const tris = items.reduce((a, it) => a + (byId(it.asset) ? byId(it.asset).tris : 0), 0);
         this.decoCounts[set.id] = { count: items.length, tris };
         this.triCounts.deco += tris;
@@ -673,6 +675,7 @@ export class Preview3D {
       if (this.app.onDecoInfo) this.app.onDecoInfo(this.decoCounts);
     }
     if (stats) this.updateStats();
+    if (this.app.state.selVeg) this.updateHandles(); // el marcador y el gizmo siguen al elemento seleccionado
     this.needsFrame = true;
   }
 
@@ -690,6 +693,7 @@ export class Preview3D {
     this.hillMeshes = [];
     this.tunnelMeshes = [];
     this.caveMeshes = []; // rocas y estalactitas sueltas (túneles sin «single mesh»)
+    this.treeMesh = null; this.treeData = null; // árboles (buildTreeMesh)
     this.tunnelGeoById = new Map();
     this.hillData = null;
     this.objTris = { hills: new Map(), tunnels: new Map() };
@@ -923,31 +927,7 @@ export class Preview3D {
       info.grass = gItems ? gItems.length : GR.count;
       info.grassTris = GR.tris;
     }
-    let shadowTrees = null;
-    if (sp.trees) {
-      const TR = buildTrees(L, E, sp, ground);
-      shadowTrees = TR.trees;
-      const tItems = treeModelItems(TR.trees, sp.treeAssets, hasAsset); // árboles reemplazados por modelos
-      if (tItems) this.vegModels.trees = tItems;
-      if (TR.count && !tItems) {
-        const g = new THREE.BufferGeometry();
-        g.setAttribute('position', new THREE.BufferAttribute(TR.positions, 3));
-        g.setIndex(new THREE.BufferAttribute(TR.indices, 1));
-        g.computeVertexNormals();
-        const tm = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: 0x2e6b34, roughness: 0.9, flatShading: true }));
-        { // cada árbol (10 vértices) se desplaza con el suelo exagerado, sin estirarse
-          const T0 = this.terrainData, per = TR.trees.map((t) => (T0 ? T0.sample(t.x, t.y) : t.z));
-          const pos = g.getAttribute('position');
-          tm.userData.exag = { base: new Float32Array(pos.array), shift: Float32Array.from({ length: pos.count }, (_, v) => per[Math.floor(v / 10)]) };
-        }
-        tm.userData.veg = 'trees';
-        this.extras.add(tm);
-      }
-      info.trees = TR.count;
-      info.treeTris = tItems ? tItems.reduce((a, it) => a + (this.app.assetById(it.asset).tris || 0), 0) : TR.indices.length / 3;
-      info.treesOnHills = TR.trees.filter((t) => t.where !== 'terrain').length;
-    }
-    this.shadowTrees = shadowTrees;
+    this.buildTreeMesh(info); // árboles (conos combinados o modelos)
     this.buildShadowMesh(info);
     // los bordes se cortan en los túneles: si cambiaron, se rehacen
     if (JSON.stringify(newRuns) !== JSON.stringify(this.tunnelRuns)) { this.tunnelRuns = newRuns; setTimeout(() => this.update(false, true), 0); } // pista (material de los tramos en túnel) y bordes
@@ -967,6 +947,136 @@ export class Preview3D {
     this.applyWireframe();
     if (this.game && this.game.active) this.game.onSceneRebuilt();
     if (this.app.onSceneInfo) this.app.onSceneInfo(info);
+  }
+
+  /**
+   * Árboles: conos en una malla combinada (16 triángulos por árbol) o modelos (instancias en la decoración).
+   * Se llama desde buildExtras o sola (info = null) al editar los árboles a mano, sin reconstruir el terreno.
+   */
+  buildTreeMesh(info = null) {
+    if (this.treeMesh) { this.extras.remove(this.treeMesh); this.treeMesh.geometry.dispose(); this.treeMesh.material.dispose(); this.treeMesh = null; }
+    this.treeData = null;
+    if (!this.vegModels) this.vegModels = { trees: null, grass: null };
+    this.vegModels.trees = null;
+    const own = !info;
+    if (own) info = {};
+    const L = this.app.state.layout, E = this.app.state.result, sp = this.app.state.scene;
+    const ground = this.groundCache || null;
+    const hasAsset = (id) => !!(this.app.assetById && this.app.assetById(id));
+    let shadowTrees = null;
+    if (L && E && sp.trees) {
+      const TR = buildTrees(L, E, sp, ground);
+      shadowTrees = TR.trees;
+      this.treeData = TR.trees;
+      const tItems = treeModelItems(TR.trees, sp.treeAssets, hasAsset); // árboles reemplazados por modelos
+      if (tItems) this.vegModels.trees = tItems;
+      if (TR.count && !tItems) {
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.BufferAttribute(TR.positions, 3));
+        g.setIndex(new THREE.BufferAttribute(TR.indices, 1));
+        const tm = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: 0x2e6b34, roughness: 0.9, flatShading: true }));
+        { // cada árbol (10 vértices) se desplaza con el suelo exagerado, sin estirarse
+          const T0 = this.terrainData, per = TR.trees.map((t) => (T0 ? T0.sample(t.x, t.y) : t.z));
+          const pos = g.getAttribute('position');
+          tm.userData.exag = { base: new Float32Array(pos.array), shift: Float32Array.from({ length: pos.count }, (_, v) => per[Math.floor(v / 10)]) };
+          const k = this.zExag - 1, a = pos.array, ex = tm.userData.exag;
+          for (let v = 0; v < pos.count; v++) a[v * 3 + 2] = ex.base[v * 3 + 2] + ex.shift[v] * k;
+        }
+        g.computeVertexNormals();
+        g.computeBoundingSphere();
+        tm.userData.veg = 'trees';
+        if (sp.treeSingle === false) tm.userData.vegEdit = { kind: 'tree' }; // sin «single mesh»: cada árbol se elige (faceIndex / 16)
+        this.extras.add(tm);
+        this.treeMesh = tm;
+      }
+      info.trees = TR.count;
+      info.treeTris = tItems ? tItems.reduce((a, it) => a + (this.app.assetById(it.asset).tris || 0), 0) : TR.indices.length / 3;
+      info.treesOnHills = TR.trees.filter((t) => t.where !== 'terrain').length;
+    }
+    this.shadowTrees = shadowTrees;
+    if (own) {
+      this.triCounts.trees = info.treeTris || 0;
+      this.buildDeco(false);
+      this.buildShadowMesh();
+      this.applyWireframe();
+      if (this.app.onTreesInfo) this.app.onTreesInfo(info);
+      this.updateHandles();
+      this.needsFrame = true;
+    }
+    return info;
+  }
+
+  /** Árbol o adorno seleccionado ({kind: 'tree' | 'deco', set, i}): sus datos y dónde se dibuja. */
+  vegItem(v) {
+    if (!v) return null;
+    if (v.kind === 'tree') {
+      const t = this.treeData && this.treeData[v.i];
+      if (!t) return null;
+      return { x: t.x, y: t.y, z: t.z, r: Math.max(0.6, t.r * 1.25), t };
+    }
+    const it = ((this.decoItemsBySet || {})[v.set] || []).find((q) => q.bi === v.i);
+    if (!it) return null;
+    const A = this.app.assetById ? (this.app.assetById(it.asset) || null) : null;
+    const size = A && A.size ? Math.max(A.size[0] * (it.sx ?? 1), A.size[1] * (it.sy ?? 1)) : 1;
+    return { x: it.x, y: it.y, z: it.z, r: Math.max(0.5, size * (it.scale || 1) * 0.75), it };
+  }
+
+  /** Altura (con la exageración Z) del suelo bajo un árbol o adorno. */
+  vegZ(x, y, z) {
+    const T0 = this.terrainData, t = T0 ? T0.sample(x, y) : z;
+    return z + (Number.isFinite(t) ? t : z) * (this.zExag - 1);
+  }
+
+  /** Mueve en vivo (sin reconstruir) un árbol o adorno a (x, y), apoyado en el suelo. Devuelve {x, y}. */
+  moveVegLive(v, x, y) {
+    const vi = this.vegItem(v);
+    if (!vi) return null;
+    const sp = this.app.state.scene, ground = this.groundCache || null;
+    const setInst = (pred, fn) => { // actualiza la matriz de las instancias que cumplen pred
+      if (!this.decoGroup) return;
+      const tmp = new THREE.Matrix4();
+      this.decoGroup.traverse((o) => {
+        if (!o.isInstancedMesh || !o.userData.instItems) return;
+        const list = o.userData.instItems;
+        for (let j = 0; j < list.length; j++) {
+          if (!pred(o, list[j])) continue;
+          const it = fn(list[j], j, list);
+          tmp.multiplyMatrices(instanceMatrix(it, it.scale, this.vegZ(it.x, it.y, it.z)), o.userData.partMatrix || new THREE.Matrix4());
+          o.setMatrixAt(j, tmp);
+          o.instanceMatrix.needsUpdate = true;
+          o.computeBoundingSphere();
+        }
+      });
+    };
+    if (v.kind === 'tree') {
+      const nt = moveTree(vi.t, ground, x, y, sp.treeTilt, vi.t.z);
+      this.treeData[v.i] = nt;
+      if (this.shadowTrees === this.treeData) this.shadowTrees[v.i] = nt;
+      if (this.treeMesh) { // 10 vértices del cono
+        const g = this.treeMesh.geometry, a = g.getAttribute('position'), ex = this.treeMesh.userData.exag;
+        const vv = treeConeVerts(nt), T0 = this.terrainData, sh = T0 ? T0.sample(nt.x, nt.y) : nt.z, k = this.zExag - 1;
+        for (let j = 0; j < 10; j++) {
+          const o = (v.i * 10 + j) * 3;
+          ex.base[o] = vv[j * 3]; ex.base[o + 1] = vv[j * 3 + 1]; ex.base[o + 2] = vv[j * 3 + 2]; ex.shift[v.i * 10 + j] = sh;
+          a.array[o] = vv[j * 3]; a.array[o + 1] = vv[j * 3 + 1]; a.array[o + 2] = vv[j * 3 + 2] + sh * k;
+        }
+        a.needsUpdate = true;
+        g.computeVertexNormals();
+        g.computeBoundingSphere();
+      }
+      const vm = this.vegModels && this.vegModels.trees;
+      if (vm) {
+        const models = [...new Set(vm.map((q) => q.asset))];
+        setInst((o, q) => o.userData.veg === 'trees' && q.bi === v.i, (q) => Object.assign(q, treeModelItem(nt, v.i, models), { asset: q.asset }));
+      }
+    } else {
+      const set = (this.app.state.decoSets || []).find((q) => q.id === v.set);
+      const P = vegPlace(ground, x, y, set ? set.tilt ?? 0 : 0, vi.it.z);
+      setInst((o, q) => o.userData.decoSet === v.set && q.bi === v.i, (q) => Object.assign(q, { x: P.x, y: P.y, z: P.z, up: P.up }));
+    }
+    if (this.vegRing) { const w = this.vegItem(v); if (w) this.vegRing.position.set(w.x, w.y, this.vegZ(w.x, w.y, w.z) + 0.15); }
+    this.needsFrame = true;
+    return { x, y };
   }
 
   /** Altura de la calzada más cercana (para apoyar túneles en la pista exagerada). */
@@ -1162,6 +1272,18 @@ export class Preview3D {
     if (st0.selCave) this.app.selectCave(null, false);
     const h = ray.intersectObjects(objs, false);
     const ud = h.length ? h[0].object.userData : {};
+    // árbol o adorno de un grupo sin «single mesh»: se elige ese elemento (instancia o cono de la malla combinada)
+    // (se atraviesa la vegetación que no se edita, hasta el primer objeto sólido)
+    let vh = null;
+    for (const q of h) { const u = q.object.userData; if (u.vegEdit) { vh = q; break; } if (!(u.veg || u.decoSet != null)) break; }
+    if (vh && this.app.selectVeg) {
+      const hit = vh, ve = vh.object.userData.vegEdit, ud2 = vh.object.userData;
+      let i = null;
+      if (hit.object.isInstancedMesh && hit.instanceId != null) { const it = (ud2.instItems || [])[hit.instanceId]; if (it) i = it.bi; }
+      else if (hit.faceIndex != null && this.treeData) { const t = this.treeData[Math.floor(hit.faceIndex / 16)]; if (t) i = t.bi; }
+      if (i != null) { if (this.app.state.ref3d && this.app.state.ref3d.sel) this.app.selectRef3d(false); this.app.selectVeg({ kind: ve.kind, set: ve.set ?? null, i }); return; }
+    }
+    if (st0.selVeg) this.app.selectVeg(null, false);
     const onTrack = h.length && this.trackGroup.children.includes(h[0].object);
     const altHit = onTrack ? this.app.altAtWorld(h[0].point.x, h[0].point.y) : null;
     if (altHit == null && !ud.item && this.app.state.selAlt != null) this.app.selectAlt(null);
@@ -1440,6 +1562,26 @@ export class Preview3D {
       c.material?.dispose();
     }
     const st = this.app.state;
+    this.vegRing = null;
+    if (st.tool === 'pan' && st.selVeg && st.layout && st.result) {
+      // árbol o adorno seleccionado: anillo amarillo en el suelo y gizmo solo en el plano XY
+      const vi = this.vegItem(st.selVeg);
+      if (vi) {
+        const ring = new THREE.Mesh(new THREE.RingGeometry(vi.r * 0.86, vi.r, 40), new THREE.MeshBasicMaterial({ color: 0xffd54f, depthTest: false, transparent: true, opacity: 0.95, side: THREE.DoubleSide }));
+        ring.position.set(vi.x, vi.y, this.vegZ(vi.x, vi.y, vi.z) + 0.15);
+        ring.renderOrder = 12;
+        this.handleGroup.add(ring);
+        this.vegRing = ring;
+        if (!this.tc.dragging) {
+          this.tc.setMode('translate');
+          this.tc.showX = true; this.tc.showY = true; this.tc.showZ = false;
+          this.proxy.position.set(vi.x, vi.y, this.vegZ(vi.x, vi.y, vi.z) + 0.3);
+          this.tc.attach(this.proxy);
+        }
+      } else if (!this.tc.dragging) this.tc.detach();
+      this.needsFrame = true;
+      return;
+    }
     if (st.tool === 'pan' && st.selCave && st.layout && st.result) {
       // roca o estalactita seleccionada: gizmo solo en el plano XY
       const ci = this.caveItem(st.selCave);
@@ -1528,6 +1670,7 @@ export class Preview3D {
 
   onDragStart() {
     const st = this.app.state;
+    if (st.tool === 'pan' && st.selVeg) { this.vegDragMode = true; this.vegDragLast = null; return; }
     if (st.tool === 'pan' && st.selCave) { this.caveDragMode = true; return; }
     if (st.tool === 'pan' && st.selItem) {
       this.itemDragMode = true;
@@ -1560,6 +1703,12 @@ export class Preview3D {
   }
 
   onGizmoMove() {
+    if (this.vegDragMode) {
+      const p = this.proxy.position;
+      const P = this.moveVegLive(this.app.state.selVeg, p.x, p.y);
+      if (P) { this.vegDragLast = P; if (this.app.onVegLive) this.app.onVegLive(); }
+      return;
+    }
     if (this.caveDragMode) {
       const p = this.proxy.position;
       const P = this.moveCaveLive(this.app.state.selCave, p.x, p.y);
@@ -1606,6 +1755,12 @@ export class Preview3D {
   }
 
   onDragEnd() {
+    if (this.vegDragMode) {
+      this.vegDragMode = false;
+      if (this.vegDragLast) this.app.commitVegMove(this.app.state.selVeg, this.vegDragLast);
+      this.vegDragLast = null;
+      return;
+    }
     if (this.caveDragMode) {
       this.caveDragMode = false;
       if (this.caveDragLast) this.app.commitCaveMove(this.app.state.selCave, this.caveDragLast);

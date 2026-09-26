@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Track Spline Generator v0.52</title>
+  <title>Track Spline Generator v0.53</title>
   <link rel="stylesheet" href="styles.css">
   <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.52</span></div>
+    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.53</span></div>
     <div class="top-actions">
       <button id="btnNew" title="Empezar de cero">Nuevo</button>
       <button id="btnOpen" title="Abrir proyecto .tsg.json">Abrir</button>
@@ -155,9 +155,9 @@
       <section class="panel" data-panel="bridges">
         <h2>Tramos</h2>
         <p class="hint">Un tramo es una parte de la ruta principal con parámetros propios. Para crearlo (con «Editar puntos»): selecciona con Shift varios puntos seguidos y aprieta «Tramo» (barra) o «Crear tramo»: esa parte se vuelve tramo, con la misma forma. O abre el circuito borrando un punto con «Abrir» activado, selecciona los dos extremos y crea el tramo: los une y cierra el circuito.</p>
-        <p class="hint">Tipo <b>Pista</b>: el terreno se adapta como en el resto de la pista; por defecto toma todo de la pista principal (ancho, textura, camino de tierra y barrera) y puedes cambiar el ancho, el desplazamiento lateral y asignarle texturas propias. Tipo <b>Puente</b>: bajo el tramo queda el relieve natural del terreno y lleva pilares si queda en altura. Tipo <b>Socavado</b>: como Pista, pero si bajas sus puntos el terreno se abre en una zanja con paredes artificiales (lisas) o naturales (roca), con más polígonos en la zanja. En cada tarjeta (▾ la colapsa), cada elemento puede quedar «Como la pista» o tener lo suyo; la barrera del tramo se une con la de la pista en los extremos. Se exportan como <code>tramos/tramo_NN</code> y <code>puentes/puente_NN</code> (con sus pilares), y sus bordes en <code>bordes</code>, cada uno con materiales únicos.</p>
+        <p class="hint">Tipo <b>Pista</b>: el terreno se adapta como en el resto de la pista; por defecto toma todo de la pista principal (ancho, textura, camino de tierra y barrera) y puedes cambiar el ancho, el desplazamiento lateral y asignarle texturas propias. Tipo <b>Puente</b>: el terreno no se adapta (bajo el tramo queda el relieve natural) y se crean pilares si queda en altura. Tipo <b>Socavado</b>: como Pista, pero si bajas sus puntos el terreno se abre en una zanja con paredes artificiales (lisas) o naturales (roca), con más polígonos en la zanja. En cada tarjeta (▾ la colapsa), cada elemento puede quedar «Como la pista» o tener lo suyo; la barrera del tramo se une con la de la pista en los extremos. Se exportan como <code>tramos/tramo_NN</code> y <code>puentes/puente_NN</code> (con sus pilares), y sus bordes en <code>bordes</code>, cada uno con materiales únicos.</p>
         <div id="bridgeControls">
-          <div class="field"><label>Tipo del tramo nuevo</label><select id="tramoType"><option value="track">Pista (el terreno se adapta)</option><option value="bridge">Puente (terreno natural y pilares)</option><option value="cut">Socavado (zanja con paredes)</option></select></div>
+          <div class="field"><label>Tipo del tramo nuevo</label><select id="tramoType"><option value="track">Pista (el terreno se adapta)</option><option value="bridge">Puente: Terreno no se adapta y se crean pilares</option><option value="cut">Socavado (zanja con paredes)</option></select></div>
           <div class="field" id="tramoWidthBox" hidden><label>Ancho del puente nuevo <span class="val"><input type="number" id="bridgeWidthNum" min="2" max="80" step="0.5" style="width:60px"> m</span></label><input type="range" id="bridgeWidth" min="3" max="40" step="0.5"></div>
           <div class="row gap"><button id="btnBridge">Crear tramo</button></div>
         </div>
@@ -466,6 +466,11 @@
         <div class="coll-head" title="Clic para mostrar u ocultar"><span class="coll-arrow">▾</span><h3 class="subhead">Árboles</h3></div>
         <div class="coll-body">
         <label class="check"><input type="checkbox" id="trees"> Agregar árboles (conos)</label>
+        <label class="check" title="Marcado: todos los árboles son una sola malla (vista y exportación). Sin marcar: la distribución actual queda fija y cada árbol se elige (mapa o 3D), se mueve en planta (sigue apoyado en el suelo) o se borra; al volver a marcarlo se juntan otra vez en una malla, con lo editado"><input type="checkbox" id="treeSingle"> Single mesh</label>
+        <div id="treeEditBox" class="veg-edit" hidden>
+          <p class="hint" id="treeEditInfo"></p>
+          <div class="row gap"><button id="btnTreeDel" disabled>Borrar el seleccionado</button><button id="btnTreeReset" title="Descarta lo editado a mano y vuelve a la distribución automática (densidad, distancia, semilla…)">Restablecer</button></div>
+        </div>
         <div class="field">
           <label>Lado</label>
           <select id="treeSide">
@@ -721,7 +726,7 @@
           <input type="color" id="wireColor" value="#ffffff" class="color-in">
           <input type="range" id="wireOpacity" min="0.05" max="1" step="0.05" value="0.35" style="width:70px">
           <button id="btnGenTerrain" class="gen">Generar terreno</button>
-          <button id="btnGenTrees" class="gen">Generar árboles</button>
+          <button id="btnGenTrees" class="gen">Generar árboles y decoración</button>
           <button id="btnGame" class="primary" title="Un auto recorre la pista solo, con cámara en tercera o primera persona">Cámara de juego</button>
           <span id="gizmoBox" class="row" hidden>
             <span class="label" style="margin:0 2px 0 6px">Mover</span>

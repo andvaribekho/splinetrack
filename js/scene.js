@@ -82,6 +82,8 @@ export const DEFAULT_SCENE = {
   treeOnTops: false, // también en la cima de cerros
   treeHillDensity: 4, // árboles por 1000 m² sobre cerros
   treeTilt: 0, // 0 = vertical, 100 = alineado con la normal del suelo
+  treeSingle: true, // «single mesh»: los árboles se exportan como una sola malla; sin marcar se editan uno a uno
+  treeBake: null, // lista fija de árboles (editados a mano): [[lx, ly, alto/escala, radio/escala, giro, ex, ey, n.º original], …] en coordenadas del mapa
   // hierba (dos planos cruzados con textura con transparencia)
   grass: false,
   grassSide: 'both',
@@ -1560,6 +1562,14 @@ function capList(list, max, rand) {
  */
 export function buildDecoInstances(layout, elev, spIn, ground, set, paintW = null) {
   const sp = { ...DEFAULT_SCENE, ...spIn };
+  if (Array.isArray(set.bake)) { // lista fija (editada a mano): mismas posiciones, apoyadas en el suelo actual
+    const zf = ground ? null : roadZFallback(layout, elev, sp);
+    return set.bake.map((b, i) => {
+      const [x, y] = layout.toWorld ? layout.toWorld(b[0], b[1]) : [b[0], b[1]];
+      const p = vegPlace(ground, x, y, set.tilt ?? 0, zf ? zf(x, y) : 0);
+      return { x, y, z: p.z, up: p.up, yaw: b[2] || 0, s: b[3] ?? 1, pick: b[4] ?? 0, bi: i };
+    });
+  }
   const seed = ((set.seed | 0) * 7919 + 17) >>> 0;
   let candidates = null;
   if (set.mode === 'painted') {
@@ -1613,7 +1623,7 @@ export function buildDecoInstances(layout, elev, spIn, ground, set, paintW = nul
   return pts.map((p) => {
     const rr = rand();
     return { x: p.x, y: p.y, z: p.z, up: p.up, yaw: fixedYaw ? fixedYaw(p.x, p.y) : (rr - 0.5) * rot, s: 1 + (rand() * 2 - 1) * sv, pick: rand() };
-  });
+  }).map((it, i) => ({ ...it, bi: i }));
 }
 
 /** Base ortonormal (A, B) perpendicular a U. */
@@ -1625,51 +1635,123 @@ function basis(U) {
   return [A, B];
 }
 
-/** Árboles (conos) a los costados de la pista y, opcionalmente, en laderas y cimas de cerros. */
+/** Altura de la calzada más cercana menos la separación del terreno (apoyo de árboles y adornos sin terreno). */
+function roadZFallback(layout, elev, sp) {
+  const g = new SpatialGrid(20);
+  layout.routes.forEach((r, k) => { const e = elev.routes[k]; for (let i = 0; i < r.n; i += 2) g.insert(r.x[i], r.y[i], { x: r.x[i], y: r.y[i], z: e.z[i] }); });
+  return (x, y) => {
+    for (const rad of [30, 200, 2000]) {
+      let best = null, bd = Infinity;
+      g.query(x, y, rad, (q) => { const d = (q.x - x) ** 2 + (q.y - y) ** 2; if (d < bd) { bd = d; best = q; } });
+      if (best) return best.z - (sp.terrainGap ?? 0);
+    }
+    return 0;
+  };
+}
+
+/**
+ * Apoya un árbol o un adorno en (x, y): altura del suelo (terreno o cerro), eje «up» según la inclinación pedida
+ * (tilt 0..100 respecto de la normal) y pendiente. Se usa para las listas fijas (editadas a mano) y al moverlos.
+ */
+export function vegPlace(ground, x, y, tiltPct = 0, zFallback = 0) {
+  const tilt = clamp(tiltPct ?? 0, 0, 100) / 100;
+  let z = ground ? ground.sample(x, y) : zFallback;
+  if (!Number.isFinite(z)) z = zFallback;
+  let up = [0, 0, 1], cosA = 1, where = 'terrain';
+  if (ground) {
+    const n = groundNormal(ground, x, y);
+    const ux = n[0] * tilt, uy = n[1] * tilt, uz = 1 - tilt + n[2] * tilt;
+    const l = Math.hypot(ux, uy, uz);
+    up = [ux / l, uy / l, uz / l];
+    cosA = clamp(up[0] * n[0] + up[1] * n[1] + up[2] * n[2], 0.05, 1);
+    if (ground.classify) { const c = ground.classify(x, y); if (c) where = c.kind; }
+  }
+  return { x, y, z, up, slope: Math.sqrt(1 - cosA * cosA) / cosA, where };
+}
+
+/** Un árbol apoyado en p (de scatter o vegPlace): se hunde lo necesario para que el borde de la base no flote en pendiente. */
+function makeTree(p, h, rad, yaw, ex, ey, bi, mi = bi) {
+  const sink = 0.3 + Math.min(0.6 * h, rad * p.slope);
+  const base = [p.x - p.up[0] * sink, p.y - p.up[1] * sink, p.z - p.up[2] * sink];
+  return { x: p.x, y: p.y, z: p.z, base: base[2], basePos: base, up: p.up, h, r: rad, yaw, ex, ey, where: p.where, bi, mi };
+}
+
+/** Vértices del cono de un árbol (8 lados + punta + centro de la base = 10 vértices, 30 números). */
+export function treeConeVerts(t, out = new Float32Array(30), o = 0) {
+  const seg = 8;
+  const [A, B] = basis(t.up);
+  const [bx, by, bz] = t.basePos;
+  const cy = Math.cos(t.yaw), sy = Math.sin(t.yaw);
+  for (let k2 = 0; k2 < seg; k2++) {
+    const a = (k2 / seg) * Math.PI * 2;
+    const lx = Math.cos(a) * t.r * t.ex, ly = Math.sin(a) * t.r * t.ey; // local, antes del giro
+    const c = lx * cy - ly * sy, sn = lx * sy + ly * cy;
+    out[o++] = bx + A[0] * c + B[0] * sn; out[o++] = by + A[1] * c + B[1] * sn; out[o++] = bz + A[2] * c + B[2] * sn;
+  }
+  out[o++] = bx + t.up[0] * t.h; out[o++] = by + t.up[1] * t.h; out[o++] = bz + t.up[2] * t.h;
+  out[o++] = bx; out[o++] = by; out[o++] = bz;
+  return out;
+}
+
+/** Árbol movido a mano a (x, y): nueva posición apoyada en el suelo, con su mismo tamaño y giro. */
+export function moveTree(t, ground, x, y, tiltPct, zFallback) {
+  return makeTree(vegPlace(ground, x, y, tiltPct, zFallback ?? t.z), t.h, t.r, t.yaw, t.ex, t.ey, t.bi, t.mi);
+}
+
+const r3 = (v) => Math.round(v * 1000) / 1000;
+/** Lista fija de árboles (para editarlos uno a uno): en coordenadas del mapa y con el tamaño relativo a la escala. */
+export function bakeTreeList(layout, trees, treeScale = 1) {
+  const k = Math.max(0.01, treeScale);
+  return trees.map((t) => { const [lx, ly] = layout.toLayout ? layout.toLayout(t.x, t.y) : [t.x, t.y]; return [r3(lx), r3(ly), r3(t.h / k), r3(t.r / k), r3(t.yaw), r3(t.ex), r3(t.ey), t.mi ?? t.bi ?? 0]; });
+}
+/** Lista fija de un set de decoración: [[lx, ly, giro, tamaño relativo, elección de modelo], …]. */
+export function bakeDecoList(layout, inst) {
+  return inst.map((it) => { const [lx, ly] = layout.toLayout ? layout.toLayout(it.x, it.y) : [it.x, it.y]; return [r3(lx), r3(ly), r3(it.yaw || 0), r3(it.s ?? 1), r3(it.pick ?? 0)]; });
+}
+
+/**
+ * Árboles (conos) a los costados de la pista y, opcionalmente, en laderas y cimas de cerros.
+ * Con sp.treeBake (lista fija editada a mano) se usan esas posiciones, apoyadas en el suelo actual.
+ */
 export function buildTrees(layout, elev, spIn = {}, ground = null) {
   const sp = { ...DEFAULT_SCENE, ...spIn };
-  const pts = scatter(layout, elev, sp, ground, {
-    seed: sp.treeSeed, density: sp.treeDensity, side: sp.treeSide, offset: sp.treeOffset, spread: sp.treeSpread,
-    minSpace: 3.2 * sp.treeScale, clear: 1.5 + 2.6 * sp.treeScale,
-    onSlopes: sp.treeOnSlopes, onTops: sp.treeOnTops, hillDensity: sp.treeHillDensity, tilt: sp.treeTilt,
-  });
-  const rand = rng((sp.treeSeed ^ 0x9e3779b9) >>> 0);
-  const trees = pts.map((p) => {
-    const h = 9 * sp.treeScale * (0.75 + 0.5 * rand());
-    const rad = h * (0.26 + 0.06 * rand());
-    // se hunde lo necesario para que el borde de la base no flote en pendiente
-    const sink = 0.3 + Math.min(0.6 * h, rad * p.slope);
-    const base = [p.x - p.up[0] * sink, p.y - p.up[1] * sink, p.z - p.up[2] * sink];
-    // rotación aleatoria sobre su eje y sección levemente ovalada: cada árbol se ve distinto
-    const yaw = rand() * Math.PI * 2, ex = 0.86 + 0.28 * rand(), ey = 0.86 + 0.28 * rand();
-    return { x: p.x, y: p.y, z: p.z, base: base[2], basePos: base, up: p.up, h, r: rad, yaw, ex, ey, where: p.where };
-  });
-  // malla combinada de conos (8 lados + base)
+  let trees;
+  if (Array.isArray(sp.treeBake)) {
+    const zf = ground ? null : roadZFallback(layout, elev, sp);
+    const k = Math.max(0.01, sp.treeScale);
+    trees = sp.treeBake.map((b, i) => {
+      const [x, y] = layout.toWorld ? layout.toWorld(b[0], b[1]) : [b[0], b[1]];
+      return makeTree(vegPlace(ground, x, y, sp.treeTilt, zf ? zf(x, y) : 0), b[2] * k, b[3] * k, b[4] || 0, b[5] || 1, b[6] || 1, i, b[7] ?? i);
+    });
+  } else {
+    const pts = scatter(layout, elev, sp, ground, {
+      seed: sp.treeSeed, density: sp.treeDensity, side: sp.treeSide, offset: sp.treeOffset, spread: sp.treeSpread,
+      minSpace: 3.2 * sp.treeScale, clear: 1.5 + 2.6 * sp.treeScale,
+      onSlopes: sp.treeOnSlopes, onTops: sp.treeOnTops, hillDensity: sp.treeHillDensity, tilt: sp.treeTilt,
+    });
+    const rand = rng((sp.treeSeed ^ 0x9e3779b9) >>> 0);
+    trees = pts.map((p, i) => {
+      const h = 9 * sp.treeScale * (0.75 + 0.5 * rand());
+      const rad = h * (0.26 + 0.06 * rand());
+      // rotación aleatoria sobre su eje y sección levemente ovalada: cada árbol se ve distinto
+      const yaw = rand() * Math.PI * 2, ex = 0.86 + 0.28 * rand(), ey = 0.86 + 0.28 * rand();
+      return makeTree(p, h, rad, yaw, ex, ey, i);
+    });
+  }
+  // malla combinada de conos (8 lados + base): 10 vértices y 16 triángulos por árbol
   const seg = 8;
   const pos = new Float32Array(trees.length * (seg + 2) * 3);
   const idx = new Uint32Array(trees.length * seg * 6);
-  let v = 0, q = 0;
-  for (const t of trees) {
-    const b = v;
-    const [A, B] = basis(t.up);
-    const [bx, by, bz] = t.basePos;
-    for (let k2 = 0; k2 < seg; k2++) {
-      const a = (k2 / seg) * Math.PI * 2;
-      const lx = Math.cos(a) * t.r * t.ex, ly = Math.sin(a) * t.r * t.ey; // local, antes del giro
-      const cy = Math.cos(t.yaw), sy = Math.sin(t.yaw);
-      const c = lx * cy - ly * sy, sn = lx * sy + ly * cy;
-      pos[v * 3] = bx + A[0] * c + B[0] * sn; pos[v * 3 + 1] = by + A[1] * c + B[1] * sn; pos[v * 3 + 2] = bz + A[2] * c + B[2] * sn; v++;
-    }
-    pos[v * 3] = bx + t.up[0] * t.h; pos[v * 3 + 1] = by + t.up[1] * t.h; pos[v * 3 + 2] = bz + t.up[2] * t.h; const apex = v++;
-    pos[v * 3] = bx; pos[v * 3 + 1] = by; pos[v * 3 + 2] = bz; const bottom = v++;
-    // el orden depende de la orientación de (A, B, U): se asegura que la normal mire hacia afuera
-    const right = (A[1] * B[2] - A[2] * B[1]) * t.up[0] + (A[2] * B[0] - A[0] * B[2]) * t.up[1] + (A[0] * B[1] - A[1] * B[0]) * t.up[2] > 0;
+  let q = 0;
+  trees.forEach((t, n) => {
+    const b = n * (seg + 2);
+    treeConeVerts(t, pos, b * 3);
+    const apex = b + seg, bottom = b + seg + 1;
     for (let k2 = 0; k2 < seg; k2++) {
       const a = b + k2, c = b + ((k2 + 1) % seg);
-      if (right) { idx[q++] = a; idx[q++] = c; idx[q++] = apex; idx[q++] = c; idx[q++] = a; idx[q++] = bottom; }
-      else { idx[q++] = c; idx[q++] = a; idx[q++] = apex; idx[q++] = a; idx[q++] = c; idx[q++] = bottom; }
+      idx[q++] = a; idx[q++] = c; idx[q++] = apex; idx[q++] = c; idx[q++] = a; idx[q++] = bottom; // (A, B, U) es siempre derecha: normales hacia afuera
     }
-  }
+  });
   return { positions: pos, indices: idx, count: trees.length, trees };
 }
 
