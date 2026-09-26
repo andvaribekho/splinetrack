@@ -46,6 +46,7 @@ const state = {
   image: null, // {canvas, w, h}
   imageOpacity: 0.5,
   tool: 'pan',
+  feature: null, // herramienta de la barra sobre la selección: 'cut' | 'helix' | 'loop' | 'smooth' | 'line'
   layout: null,
   result: null,
   hover: null,
@@ -3829,12 +3830,7 @@ function bindControls() {
     createBridge(parseFloat($('bridgeWidthNum').value) || state.geom.width);
   });
   // sección socavada: botón de la barra con sus opciones; «Socavar selección» la crea sobre los puntos seleccionados
-  $('btnCut').addEventListener('click', () => {
-    const box = $('cutBox');
-    box.hidden = !box.hidden;
-    $('btnCut').classList.toggle('active', !box.hidden);
-    if (!box.hidden && state.tool !== 'edit') setTool('edit');
-  });
+  $('btnCut').addEventListener('click', () => setFeature(state.feature === 'cut' ? null : 'cut'));
   $('cutDensity').addEventListener('input', () => { $('cutDensityVal').textContent = $('cutDensity').value; });
   $('cutDensityVal').textContent = $('cutDensity').value;
   $('btnCutAdd').addEventListener('click', () => app.addCutFromSelection($('cutWalls').value, Math.round(parseFloat($('cutDensity').value))));
@@ -3845,11 +3841,8 @@ function bindControls() {
   }
   // suavizar tramo: barra en vivo desde la forma original de la selección (cada gesto es un paso de deshacer)
   $('btnSmooth').addEventListener('click', () => {
-    const box = $('smoothBox');
-    if (state.tool !== 'edit') setTool('edit');
-    box.hidden = !box.hidden;
-    $('btnSmooth').classList.toggle('active', !box.hidden);
-    if (!box.hidden && !smoothRun()) toast('Suavizar: selecciona 3 o más puntos seguidos (Shift + clic o caja) y mueve la barra.');
+    setFeature(state.feature === 'smooth' ? null : 'smooth');
+    if (state.feature === 'smooth' && !smoothRun()) toast('Suavizar: selecciona 3 o más puntos seguidos (Shift + clic o caja) y mueve la barra.');
     refreshSmoothInfo();
   });
   let smGesture = false;
@@ -3862,11 +3855,8 @@ function bindControls() {
   app.smoothSelection = smoothSelection;
   // recta: el botón alinea al tiro la selección entre sus extremos y muestra las opciones (eje X, eje Y, ángulo)
   $('btnLine').addEventListener('click', () => {
-    const box = $('lineBox');
-    if (state.tool !== 'edit') setTool('edit');
-    if (lineRun()) { box.hidden = false; alignSelection('chord'); }
-    else { box.hidden = !box.hidden; if (!box.hidden) toast('Recta: selecciona 2 o más puntos (Shift o arrastrando) y vuelve a apretar «Recta», o elige una dirección.'); }
-    $('btnLine').classList.toggle('active', !box.hidden);
+    if (lineRun()) { setFeature('line'); alignSelection('chord'); }
+    else { setFeature(state.feature === 'line' ? null : 'line'); if (state.feature === 'line') toast('Recta: selecciona 2 o más puntos (Shift o arrastrando) y vuelve a apretar «Recta», o elige una dirección.'); }
     refreshLineInfo();
   });
   $('btnLineChord').addEventListener('click', () => alignSelection('chord'));
@@ -3886,10 +3876,8 @@ function bindControls() {
   angLbl();
   // helix: igual que el rizo (botón de la barra con sus parámetros)
   $('btnHelix').addEventListener('click', () => {
-    const box = $('helixBox');
-    box.hidden = !box.hidden;
-    $('btnHelix').classList.toggle('active', !box.hidden);
-    if (!box.hidden) { $('loopBox').hidden = true; $('btnLoop').classList.remove('active'); if (state.tool !== 'edit') setTool('edit'); loadFeatureParams.lastH = null; loadFeatureParams(); }
+    setFeature(state.feature === 'helix' ? null : 'helix');
+    if (state.feature === 'helix') { loadFeatureParams.lastH = null; loadFeatureParams(); }
     refreshHelixInfo();
   });
   const helixSync = (live = true) => {
@@ -3913,10 +3901,8 @@ function bindControls() {
   $('btnProfileFit').addEventListener('click', () => profile.resetView());
   // rizo: el botón de la barra muestra sus parámetros; «Añadir rizo» lo crea en los puntos seleccionados
   $('btnLoop').addEventListener('click', () => {
-    const box = $('loopBox');
-    box.hidden = !box.hidden;
-    $('btnLoop').classList.toggle('active', !box.hidden);
-    if (!box.hidden) { $('helixBox').hidden = true; $('btnHelix').classList.remove('active'); if (state.tool !== 'edit') setTool('edit'); loadFeatureParams.lastL = null; loadFeatureParams(); }
+    setFeature(state.feature === 'loop' ? null : 'loop');
+    if (state.feature === 'loop') { loadFeatureParams.lastL = null; loadFeatureParams(); }
     refreshLoopInfo();
   });
   // radio: barra deslizable (0 = automático) y número (acepta más que la barra), sincronizados
@@ -3994,7 +3980,7 @@ function bindControls() {
   $('btnFit').addEventListener('click', () => editor.fit());
 
   // herramientas
-  document.querySelectorAll('#toolbar [data-tool], .viewProfile [data-tool]').forEach((b) => b.addEventListener('click', () => setTool(b.dataset.tool === state.tool && b.dataset.tool === 'profile' ? 'pan' : b.dataset.tool)));
+  document.querySelectorAll('#toolbar [data-tool], .viewProfile [data-tool]').forEach((b) => b.addEventListener('click', () => { setFeature(null, false); setTool(b.dataset.tool === state.tool && b.dataset.tool === 'profile' ? 'pan' : b.dataset.tool); }));
 
   // ejemplos
   const sel = $('sampleSelect');
@@ -4046,7 +4032,9 @@ function bindControls() {
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape' || (preview.game && preview.game.active)) return;
     const t = e.target || {};
-    if ((t.tagName === 'INPUT' && ['text', 'number', 'search'].includes(t.type)) || t.tagName === 'TEXTAREA') { t.blur(); return; }
+    if ((t.tagName === 'INPUT' && ['text', 'search'].includes(t.type)) || t.tagName === 'TEXTAREA') { t.blur(); return; } // escribiendo texto: solo sale del campo
+    if ((t.tagName === 'INPUT' && t.type !== 'checkbox') || t.tagName === 'SELECT') t.blur(); // números, barras y listas: sale del campo y sigue
+    setFeature(null, false); // apaga Rizo, Helix, Suavizar, Recta, Sección socavada…
     clearAllSelections();
     const nav = document.querySelector('button[data-tool="pan"]');
     if (nav) nav.click(); else setTool('pan');
@@ -4141,7 +4129,26 @@ function bindControls() {
   $('btnExportOBJ').addEventListener('click', () => needOut() && download('track_spline.obj', exportOBJ(state.layout, state.result, state.exp), 'text/plain'));
 }
 
+// Herramientas de la barra que trabajan sobre la selección de «Editar puntos» (cada una muestra sus opciones en la
+// barra). Solo una herramienta de la barra está activa a la vez: al elegir una se apagan las demás, y Esc las apaga todas.
+const FEATURES = { cut: ['btnCut', 'cutBox'], helix: ['btnHelix', 'helixBox'], loop: ['btnLoop', 'loopBox'], smooth: ['btnSmooth', 'smoothBox'], line: ['btnLine', 'lineBox'] };
+function setFeature(f, sync = true) {
+  state.feature = f && FEATURES[f] ? f : null;
+  for (const [k, [b, box]] of Object.entries(FEATURES)) {
+    const on = k === state.feature;
+    const bx = document.getElementById(box), bt = document.getElementById(b);
+    if (bx) bx.hidden = !on;
+    if (bt) bt.classList.toggle('active', on);
+  }
+  if (state.feature && state.tool !== 'edit') setTool('edit');
+  else if (sync) syncToolButtons();
+}
+/** Marca en la barra la herramienta activa (una sola: la de edición de la selección, si hay, o la herramienta). */
+function syncToolButtons() {
+  document.querySelectorAll('#toolbar [data-tool], .viewProfile [data-tool]').forEach((b) => b.classList.toggle('active', !state.feature && b.dataset.tool === state.tool));
+}
 function setTool(t) {
+  if (t !== 'edit' && state.feature) setFeature(null, false); // otra herramienta (o Esc → Navegar) apaga Rizo, Helix, Recta…
   state.tool = t;
   if (t === 'sculpt' && state.scene && !state.scene.terrain) { state.scene.terrain = true; if (typeof syncSceneControls === 'function') { syncSceneControls(); sceneChanged(); } } // esculpir necesita el terreno
   const p = state.project;
@@ -4178,7 +4185,7 @@ function setTool(t) {
   if (t === 'pan') document.querySelectorAll('.panel.focus-ring').forEach((p) => p.classList.remove('focus-ring')); // Navegar / Esc quitan el resaltado
   // al editar puntos, la barra lateral muestra «Puntos seleccionados»
   if (t === 'edit') { try { focusPanel('arc'); } catch { /* aún iniciando */ } }
-  document.querySelectorAll('#toolbar [data-tool], .viewProfile [data-tool]').forEach((b) => b.classList.toggle('active', b.dataset.tool === t));
+  syncToolButtons();
 }
 
 async function loadImageBlob(blob, origin = 'cargada') {
