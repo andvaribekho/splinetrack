@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Track Spline Generator v0.51</title>
+  <title>Track Spline Generator v0.52</title>
   <link rel="stylesheet" href="styles.css">
   <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.51</span></div>
+    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.52</span></div>
     <div class="top-actions">
       <button id="btnNew" title="Empezar de cero">Nuevo</button>
       <button id="btnOpen" title="Abrir proyecto .tsg.json">Abrir</button>
@@ -587,27 +587,36 @@
         <div class="toolbar" id="toolbar">
           <button data-tool="pan" title="Mover y hacer zoom (también con rueda y botón derecho)">Navegar</button>
           <button data-tool="edit" title="Mover, agregar y borrar puntos del spline">Editar puntos</button>
-          <button data-tool="draw" title="Dibujar la ruta principal a mano alzada">Dibujar</button>
-          <button data-tool="extend" title="Continúa la pista desde un extremo (círculo verde) o redibuja un tramo empezando y terminando sobre la pista">Extender</button>
+          <button data-tool="draw" title="Dibuja la ruta principal a mano alzada. Con «Extender la pista existente» (por defecto) continúa la pista desde un extremo o redibuja un tramo; desmarcado, dibuja una pista nueva que reemplaza la actual">Dibujar</button>
           <button data-tool="alt" title="Dibujar una ruta alternativa: empieza y termina sobre la principal">Dibujar atajo</button>
           <button data-tool="ref" title="Mover y escalar la imagen de referencia (arrastra la imagen o su esquina)">Referencia</button>
           <span class="sep"></span>
-          <button data-tool="hill" title="Pinta cerros (suaves o paredes rocosas); si cubren la pista se crea un túnel. Alt o clic derecho borra">Pintar cerros</button>
+          <button data-tool="hill" title="Pinta cerros (suaves o paredes rocosas); si cubren la pista se crea un túnel. Alt o clic derecho borra">Cerros</button>
           <button data-tool="paint" title="Pinta zonas del terreno (o del cerro seleccionado) que tendrán más polígonos (Alt o clic derecho borra)">Pintar subdivisión</button>
           <button data-tool="sculpt" title="Esculpe el terreno: clic izquierdo eleva, clic derecho hunde (en el mapa o en la vista 3D). [ y ] cambian el pincel">Esculpir relieve</button>
           <button data-tool="river" title="Pinta ríos sobre el terreno; con un cerro seleccionado, lo que pintes sobre él es una cascada. Empezar sobre un río lo extiende (y se bifurca). Alt o clic derecho borra">Ríos y cascadas</button>
+          <div class="menu-wrap" id="itemsMenuWrap">
+            <button id="btnItemsMenu" title="Agregar elementos de pista (nitro strips, turbo pads, charcos)">Elementos de pista ▾</button>
+            <div class="menu menu-left" id="itemsMenu" hidden>
+              <button id="btnTbStrip" title="Nuevo grupo de nitro strips">+ Nitro strips</button>
+              <button id="btnTbPad" title="Nuevo grupo de turbo pads">+ Turbo pads</button>
+              <button id="btnTbPuddle" title="Nuevo grupo de charcos">+ Charcos</button>
+            </div>
+          </div>
           <span class="sep"></span>
           <button id="btnFit" title="Encuadrar">Encuadrar</button>
           <label class="check small"><input type="checkbox" id="showRaw"> Trazo crudo</label>
           <span id="paintBox" class="row" hidden>
             <label class="small">Pincel <input type="range" id="paintBrush" min="3" max="200" step="1" style="width:90px"> <span class="val" id="paintBrushVal"></span></label>
+            <select id="paintSubMode" title="Aumentar: las pinceladas tienen más polígonos que el resto del terreno. Disminuir: menos (el terreno queda más simple en esa zona)"><option value="inc">Aumentar subd.</option><option value="dec">Disminuir subd.</option></select>
             <label class="small" id="paintSubdivLbl" title="Subdivisiones extra de las pinceladas que hagas ahora (cada lado de la celda se divide n + 1 veces)">Subdiv. <input type="range" id="paintSubdiv" min="1" max="6" step="1" style="width:70px"> <span class="val" id="paintSubdivVal"></span></label>
             <span class="small muted" id="paintHillHint" hidden></span>
             <label class="check small" id="paintEraseLbl"><input type="checkbox" id="paintErase"> Borrar</label>
           </span>
           <span id="sculptBox" class="row" hidden>
             <label class="small">Fuerza <input type="range" id="sculptStrength" min="0.1" max="10" step="0.1" style="width:80px"> <span class="val" id="sculptStrengthVal"></span></label>
-            <span class="small muted">clic izq. eleva · clic der. hunde</span>
+            <select id="sculptMode" title="Elevar / hundir: clic izquierdo eleva, clic derecho hunde. Suavizar: el pincel no eleva ni hunde, solo suaviza el relieve esculpido bajo él"><option value="raise">Elevar / hundir</option><option value="smooth">Suavizar</option></select>
+            <span class="small muted" id="sculptHint">clic izq. eleva · clic der. hunde</span>
           </span>
           <span id="hillBox" class="row" hidden>
             <label class="small">Altura <input type="range" id="hillHeight" min="2" max="150" step="1" style="width:90px"> <span class="val" id="hillHeightVal"></span></label>
@@ -693,6 +702,7 @@
             <span class="sep"></span>
             <label class="check small"><input type="checkbox" id="openOnDelete"> Abrir</label>
           </span>
+          <label class="check small" id="drawExtendLbl" hidden title="Marcado: el trazo continúa la pista desde un extremo abierto (círculo verde) o, si empieza y termina sobre la pista, redibuja ese tramo; no borra nada. Desmarcado: el trazo es una pista nueva que reemplaza la actual (pide confirmación)"><input type="checkbox" id="drawExtend" checked> Extender la pista existente</label>
           <label class="small" id="drawSmoothBox" hidden>Suavizado del dibujo <input type="range" id="drawSmooth" min="0" max="10" step="1" value="4" style="width:90px"> <span class="val" id="drawSmoothVal">4</span></label>
         </div>
         <canvas id="canvas2d"></canvas>

@@ -509,6 +509,12 @@ export function terrainTint(T, hasTex) {
  * Relieve esculpido a mano sobre el terreno: suma de toques [{x, y, r, h, lut?}] (m; h > 0 eleva, h < 0 hunde) con caída
  * según la curva del pincel (lut = tabla f(d/r) de sculptcurve.js) o, sin ella, (1 - (d/r)²)².Se rasteriza en una grilla fina y se muestrea con interpolación bilineal. null si no hay toques.
  */
+/** Multiplicador de polígonos de una pincelada: > 1 aumenta (redondeado a cuartos), < 1 disminuye (mín. 1/64). */
+function paintFv(f) {
+  if (!(f > 0)) return 1;
+  if (f < 1) return Math.max(1 / 64, f);
+  return Math.max(1, Math.round(f * 4) / 4);
+}
 export function sculptField(dabs) {
   if (!dabs || !dabs.length) return null;
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, rmin = Infinity;
@@ -527,6 +533,7 @@ export function sculptField(dabs) {
     const i0 = Math.max(0, Math.floor((d.x - d.r - x0) / c)), i1 = Math.min(nx - 1, Math.ceil((d.x + d.r - x0) / c));
     const j0 = Math.max(0, Math.floor((d.y - d.r - y0) / c)), j1 = Math.min(ny - 1, Math.ceil((d.y + d.r - y0) / c));
     const r2 = d.r * d.r;
+    if (d.smooth) { smoothDab(F, nx, ny, c, x0, y0, d, i0, i1, j0, j1); continue; } // suavizar: ni eleva ni hunde
     const lut = Array.isArray(d.lut) && d.lut.length > 2 ? d.lut : null, ln = lut ? lut.length - 1 : 0;
     for (let j = j0; j <= j1; j++) {
       const dy = y0 + j * c - d.y;
@@ -541,11 +548,53 @@ export function sculptField(dabs) {
   }
   const sample = (x, y) => {
     const fx = (x - x0) / c, fy = (y - y0) / c;
-    if (fx < 0 || fy < 0 || fx >= nx - 1 || fy >= ny - 1) return 0;
+    if (fx < 0 || fy < 0 || fx >= nx - 1 || fy >= ny - 1) return 0; // (fuera del relieve esculpido)
     const i = Math.floor(fx), j = Math.floor(fy), tx = fx - i, ty = fy - j, k = j * nx + i;
     return (F[k] * (1 - tx) + F[k + 1] * tx) * (1 - ty) + (F[k + nx] * (1 - tx) + F[k + nx + 1] * tx) * ty;
   };
   return { sample, bounds: { x0, y0, x1, y1 }, cell: c };
+}
+
+/**
+ * Toque de suavizado sobre el relieve esculpido: difusión (como el calor) solo dentro del pincel, con la caída del
+ * pincel y la fuerza (h: 5 o más = máximo). Conserva el volumen: no eleva ni hunde, solo reparte (baja las cimas y
+ * rellena los bordes).
+ */
+function smoothDab(F, nx, ny, c, x0, y0, d, i0, i1, j0, j1) {
+  const w = i1 - i0 + 1, h = j1 - j0 + 1;
+  if (w < 3 || h < 3) return;
+  const k = clamp(Math.abs(d.h) / 5, 0.05, 1), r2 = d.r * d.r;
+  const lut = Array.isArray(d.lut) && d.lut.length > 2 ? d.lut : null, ln = lut ? lut.length - 1 : 0;
+  const G = new Float32Array(w * h); // conductividad de cada celda (0 fuera del pincel: nada sale del pincel)
+  for (let j = 0; j < h; j++) {
+    const dy = y0 + (j0 + j) * c - d.y;
+    for (let i = 0; i < w; i++) {
+      const dx = x0 + (i0 + i) * c - d.x, q = (dx * dx + dy * dy) / r2;
+      if (q >= 1) continue;
+      let f;
+      if (lut) { const u = Math.sqrt(q) * ln, kk = u | 0, a = u - kk; f = lut[kk] * (1 - a) + lut[kk + 1] * a; } else { const t = 1 - q; f = t * t; }
+      G[j * w + i] = 0.24 * k * f;
+    }
+  }
+  const br = Math.max(1, (d.r * 0.25) / c);
+  const iters = Math.min(40, Math.max(2, Math.round(br * br * 0.5)));
+  let A = new Float32Array(w * h), B = new Float32Array(w * h);
+  for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) A[j * w + i] = F[(j0 + j) * nx + i0 + i];
+  for (let it = 0; it < iters; it++) {
+    for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
+      const q = j * w + i, g = G[q];
+      let v = A[q];
+      if (g > 0) {
+        if (i > 0) v += Math.min(g, G[q - 1]) * (A[q - 1] - A[q]);
+        if (i < w - 1) v += Math.min(g, G[q + 1]) * (A[q + 1] - A[q]);
+        if (j > 0) v += Math.min(g, G[q - w]) * (A[q - w] - A[q]);
+        if (j < h - 1) v += Math.min(g, G[q + w]) * (A[q + w] - A[q]);
+      }
+      B[q] = v;
+    }
+    const t = A; A = B; B = t;
+  }
+  for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) if (G[j * w + i] > 0) F[(j0 + j) * nx + i0 + i] = A[j * w + i];
 }
 
 /**
@@ -823,7 +872,7 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
   const origAt = (x, y) => heightAt0(x, y, 0.5);
   const inRiver = RF.length ? (x, y) => RF.some((F) => { const B = F.bounds; return x >= B.x0 && y >= B.y0 && x <= B.x1 && y <= B.y1 && F.sd(x, y) > -0.5; }) : null;
   if (extraPaint.length) paint = [...(paint || []), ...extraPaint];
-  const painted = paint && paint.length && paint.some((st) => !st.e && (st.f ?? sp.paintFactor) > 1);
+  const painted = paint && paint.length && paint.some((st) => !st.e && paintFv(st.f ?? sp.paintFactor) !== 1); // más o menos polígonos
   const out = painted
     ? adaptiveMesh(minX, minY, W, H, sp, paint, heightAt)
     : gridMesh(minX, minY, W, H, sp, heightAt);
@@ -935,15 +984,15 @@ export function buildHills(layout, elev, spIn, T, hills) {
     // máscara de subdivisión (multiplicador por celda) sobre la caja del cerro
     let fmask = null, fmc = 0, fmw = 0, fmh = 0;
     const areas = new Map();
-    if (subPaint.some((q) => !q.e && (q.f ?? 4) > 1)) {
+    if (subPaint.some((q) => !q.e && paintFv(q.f ?? 4) !== 1)) {
       fmc = Math.max(0.3, Math.min(c0 / 2, Math.max(f.maxX - f.minX, f.maxY - f.minY) / 400));
       fmw = Math.ceil((f.maxX - f.minX) / fmc) + 1; fmh = Math.ceil((f.maxY - f.minY) / fmc) + 1;
       fmask = new Float32Array(fmw * fmh);
       for (const st of subPaint) {
-        const fv = st.e ? 0 : Math.max(1, Math.round((st.f ?? 4) * 4) / 4);
+        const fv = st.e ? 0 : paintFv(st.f ?? 4);
         const i0 = Math.max(0, Math.floor((st.x - st.r - x0) / fmc)), i1 = Math.min(fmw - 1, Math.ceil((st.x + st.r - x0) / fmc));
         const j0 = Math.max(0, Math.floor((st.y - st.r - y0) / fmc)), j1 = Math.min(fmh - 1, Math.ceil((st.y + st.r - y0) / fmc));
-        for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) if (Math.hypot(x0 + i * fmc - st.x, y0 + j * fmc - st.y) <= st.r) fmask[j * fmw + i] = fv <= 1 ? 0 : fv;
+        for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) if (Math.hypot(x0 + i * fmc - st.x, y0 + j * fmc - st.y) <= st.r) fmask[j * fmw + i] = fv === 1 ? 0 : fv;
       }
       for (let j = 0; j < fmh; j++) for (let i = 0; i < fmw; i++) {
         const fv = fmask[j * fmw + i];
@@ -1285,11 +1334,11 @@ function adaptiveMesh(minX, minY, W, H, sp, paint, heightAt) {
   const mask = new Float32Array(mw * mh);
   const defF = Math.max(1, sp.paintFactor);
   for (const st of paint) {
-    const fv = st.e ? 0 : Math.max(1, Math.round((st.f ?? defF) * 4) / 4);
+    const fv = st.e ? 0 : paintFv(st.f ?? defF);
     const i0 = Math.max(0, Math.floor((st.x - st.r - minX) / mc)), i1 = Math.min(mw - 1, Math.ceil((st.x + st.r - minX) / mc));
     const j0 = Math.max(0, Math.floor((st.y - st.r - minY) / mc)), j1 = Math.min(mh - 1, Math.ceil((st.y + st.r - minY) / mc));
     for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
-      if (Math.hypot(minX + i * mc - st.x, minY + j * mc - st.y) <= st.r) mask[j * mw + i] = fv <= 1 ? 0 : fv;
+      if (Math.hypot(minX + i * mc - st.x, minY + j * mc - st.y) <= st.r) mask[j * mw + i] = fv === 1 ? 0 : fv;
     }
   }
   const factorAt = (x, y) => {

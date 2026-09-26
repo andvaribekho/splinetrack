@@ -437,3 +437,5 @@ button.km-keys:hover { border-color: var(--accent); background: rgba(242,169,59,
 .menu .menu-label { font-size: calc(10px * var(--fs, 1)); color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; padding: 6px 6px 2px; }
 #btnExportMenu.on { border-color: var(--accent); }
 .side-tool.active { border-color: var(--accent); color: var(--accent); background: rgba(242,169,59,0.12); }
+.menu.menu-left { left: 0; right: auto; }
+#itemsMenuWrap { display: inline-block; }

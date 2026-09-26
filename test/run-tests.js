@@ -347,6 +347,27 @@ for (const [key, s] of Object.entries(SAMPLES)) {
   }
 }
 
+// pintar subdivisión «disminuir» (menos polígonos en la zona) y pincel de relieve «suavizar»
+{
+  const L = buildLayout(SAMPLES.oval.build(), { lapLength: 1000 });
+  const E = computeElevation(L, { hills: 0.3 });
+  const r = L.routes[0];
+  const cxm = r.x.reduce((a, v) => a + v, 0) / r.n, cym = r.y.reduce((a, v) => a + v, 0) / r.n;
+  const sp = { terrain: true, terrainDensity: 70, terrainMaxPolys: 400000 };
+  const T0 = buildTerrain(L, E, sp);
+  const TD = buildTerrain(L, E, sp, { density: [{ x: cxm, y: cym, r: 90, e: false, f: 1 / 9 }] });
+  const TU = buildTerrain(L, E, sp, { density: [{ x: cxm, y: cym, r: 90, e: false, f: 4 }] });
+  check(TD.tris < T0.tris * 0.95 && TU.tris > T0.tris * 1.05, `subdivisión: disminuir baja y aumentar sube los triángulos (${TD.tris} / ${T0.tris} / ${TU.tris})`);
+  const bump = { x: cxm, y: cym, r: 40, h: 10 };
+  const smooth = [];
+  for (let k = 0; k < 6; k++) smooth.push({ x: cxm, y: cym, r: 60, h: 5, smooth: true });
+  const S1 = sculptField([bump]), S2 = sculptField([bump, ...smooth]);
+  const peak1 = S1.sample(cxm, cym), peak2 = S2.sample(cxm, cym), edge1 = S1.sample(cxm + 38, cym), edge2 = S2.sample(cxm + 38, cym);
+  let vol1 = 0, vol2 = 0;
+  for (let dx = -70; dx <= 70; dx += 2) for (let dy = -70; dy <= 70; dy += 2) { vol1 += S1.sample(cxm + dx, cym + dy); vol2 += S2.sample(cxm + dx, cym + dy); }
+  check(peak2 < peak1 * 0.9 && edge2 > edge1 && Math.abs(vol2 - vol1) < vol1 * 0.08, `relieve: suavizar baja la cima y rellena el borde sin elevar ni hundir (cima ${peak1.toFixed(2)}→${peak2.toFixed(2)}, volumen ${vol1.toFixed(0)}→${vol2.toFixed(0)})`);
+}
+
 // relieve esculpido: parte de la malla del terreno, eleva / hunde lejos de la pista y nunca la tapa
 {
   const L = buildLayout(SAMPLES.oval.build(), { lapLength: 1000 });

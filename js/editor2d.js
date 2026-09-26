@@ -221,9 +221,9 @@ export class Editor2D {
         return;
       }
       const m = this.hitMarker(sx, sy);
-      if (m && tool !== 'draw' && tool !== 'alt' && tool !== 'extend') { this.app.selectCrossing(m.id); return; }
+      if (m && tool !== 'draw' && tool !== 'alt') { this.app.selectCrossing(m.id); return; }
       const p = this.toLayout(sx, sy);
-      if (tool === 'draw' || tool === 'alt' || tool === 'extend') this.stroke = { kind: tool, pts: [p] };
+      if (tool === 'draw' || tool === 'alt') this.stroke = { kind: tool === 'draw' && this.app.drawExtends && this.app.drawExtends() ? 'extend' : tool, pts: [p] }; // «Dibujar» con «Extender»: continúa o redibuja
       else if (tool === 'start') this.app.setStart(p);
       else if (tool === 'flat') this.dragFlat = { a: p, b: p };
       else if (tool === 'profile') this.dragProfile = { a: p, b: p }; // tramo para dibujar su perfil
@@ -1095,7 +1095,7 @@ export class Editor2D {
       if (this.stroke.pts.length > 3) line(this.smoothStroke(this.stroke.pts, this.stroke.kind), `rgb(${col})`, 3);
       // extremos a los que se puede enganchar (herramienta Extender)
       if (this.stroke.kind === 'extend') this.drawSnapTargets();
-    } else if (st.tool === 'extend') this.drawSnapTargets();
+    } else if (st.tool === 'draw' && this.app.drawExtends && this.app.drawExtends()) this.drawSnapTargets(); // extremos para continuar la pista
     if (this.dragFlat && L) {
       const s0 = this.app.nearestMainS(this.dragFlat.a, Infinity);
       const s1 = this.app.nearestMainS(this.dragFlat.b, Infinity);

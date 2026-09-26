@@ -647,11 +647,16 @@ const app = {
     state.hover = s;
     requestRender({ hover: true, src });
   },
+  /** ¿«Dibujar» extiende la pista existente? (casilla «Extender la pista existente», marcada por defecto) */
+  drawExtends() { const el = document.getElementById('drawExtend'); return !!state.project.main && (!el || el.checked); },
   commitStroke(kind, pts, zoom = 1) {
+    if (kind === 'draw' && app.drawExtends()) kind = 'extend';
     if (kind === 'extend') {
       if (!state.project.main) kind = 'draw';
       else { extendMain(pts, 28 / zoom); return; }
     }
+    // pista nueva sobre una pista con trabajo encima: se pide confirmación (Ctrl+Z también la recupera)
+    if (kind === 'draw' && !confirmReplaceTrack('Dibujar una pista nueva reemplaza la ruta principal actual')) return;
     pushUndo();
     if (kind === 'draw') {
       state.project.main = { pts, closed: state.closed };
@@ -1297,6 +1302,7 @@ const app = {
       if (ses.last && Math.hypot(p[0] - ses.last[0], p[1] - ses.last[1]) < rr * 0.3) return;
       ses.last = p;
       if (ses.cv == null) ses.cv = sculptCurveIndex();
+      if (sc.sculptMode === 'smooth') { state.terrainSculpt.push({ x: +p[0].toFixed(2), y: +p[1].toFixed(2), r: +rr.toFixed(3), h: +sc.sculptStrength.toFixed(3), cv: ses.cv, sm: 1 }); return; } // suavizar: ni eleva ni hunde
       state.terrainSculpt.push({ x: +p[0].toFixed(2), y: +p[1].toFixed(2), r: +rr.toFixed(3), h: +((ses.erase ? -1 : 1) * sc.sculptStrength).toFixed(3), cv: ses.cv });
       return;
     }
@@ -1346,7 +1352,9 @@ const app = {
         if (h) h.strokes.push(q);
       }
     } else {
-      const dq = { ...q, f: q.e ? undefined : subdivFactor(state.scene.paintSubdiv) };
+      // «Disminuir subd.»: la pincelada tiene menos polígonos que el terreno (1 / (n + 1)²)
+      const fk = subdivFactor(state.scene.paintSubdiv);
+      const dq = { ...q, f: q.e ? undefined : state.scene.paintSubMode === 'dec' ? +(1 / fk).toFixed(5) : fk };
       const hs = ses.hillSub != null ? state.hills.find((h) => h.id === ses.hillSub) : null;
       if (hs) (hs.subdiv || (hs.subdiv = [])).push(dq); // subdivisión del cerro seleccionado
       else state.densityPaint.push(dq);
@@ -1405,7 +1413,7 @@ const app = {
     const L = state.layout;
     if (!L || !state.terrainSculpt.length) return null;
     const luts = state.sculptCurves.map((c) => curveLUT(c));
-    return state.terrainSculpt.map((q) => { const [x, y] = L.toWorld(q.x, q.y); const d = { x, y, r: q.r * L.scale, h: q.h }; if (q.cv != null && luts[q.cv]) d.lut = luts[q.cv]; return d; });
+    return state.terrainSculpt.map((q) => { const [x, y] = L.toWorld(q.x, q.y); const d = { x, y, r: q.r * L.scale, h: q.h }; if (q.sm) d.smooth = true; if (q.cv != null && luts[q.cv]) d.lut = luts[q.cv]; return d; });
   },
   /** Todo lo que el terreno recibe del pincel: zonas de densidad y relieve esculpido. */
   terrainPaintWorld() { const rv = this.riversWorld(); return { density: this.paintWorld(), sculpt: this.sculptWorld(), rivers: rv ? rv.filter((q) => q.kind !== 'fall') : null }; },
@@ -2432,6 +2440,30 @@ function migrateCutToTramos(zones) {
   }
   if (n) setTimeout(() => toast(`${n} sección(es) socavada(s) del proyecto pasaron a ser tramos de tipo «Socavado» (sección «Tramos»).`), 700);
 }
+/** Menú desplegable: se abre y se cierra con su botón, al elegir una opción, con clic afuera o con Esc. */
+function bindDropMenu(btnId, menuId, wrapId) {
+  const menu = $(menuId), btn = $(btnId);
+  if (!menu || !btn) return;
+  const close = () => { menu.hidden = true; btn.classList.remove('on'); };
+  btn.addEventListener('click', (e) => { e.stopPropagation(); menu.hidden = !menu.hidden; btn.classList.toggle('on', !menu.hidden); });
+  menu.addEventListener('click', (e) => { if (e.target.closest('button')) close(); });
+  document.addEventListener('pointerdown', (e) => { if (!menu.hidden && !e.target.closest('#' + wrapId)) close(); });
+  window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !menu.hidden) { e.stopPropagation(); close(); } }, true); // Esc solo cierra el menú
+}
+/** ¿La ruta principal tiene trabajo encima que se perdería al reemplazarla? */
+function trackHasWork() {
+  const m = state.project && state.project.main;
+  if (!m) return false;
+  if ((m.bridges || []).length) return true;
+  const za = m.ctrl ? zArray('main') : null;
+  if (za && za.some((z) => z !== null && z !== undefined)) return true;
+  return !!(m.ctrl && m.ctrl.length);
+}
+/** Pide confirmación antes de reemplazar la ruta principal (si tiene trabajo encima). */
+function confirmReplaceTrack(what) {
+  if (!trackHasWork()) return true;
+  return window.confirm(`${what}: se pierden sus puntos editados, tramos y alturas fijadas. (Ctrl+Z la recupera.) ¿Continuar?`);
+}
 /** Identificador estable de un puente (sus materiales propios se guardan con él). */
 function ensureBridgeUid(b) { if (b && !b.uid) b.uid = `br${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`; return b; }
 function createBridge(w) {
@@ -3380,6 +3412,10 @@ function bindItemsPanel() {
     toast(`Nuevo grupo ${groupName(type, gid)}${list.length > 1 ? ` (usa los parámetros de ${groupName(type, list[0].gid)})` : ''}.`);
   };
   $('btnNewPuddle').addEventListener('click', () => addGroup('puddle'));
+  // botón «Elementos de pista ▾» de la barra del mapa
+  $('btnTbPuddle').addEventListener('click', () => addGroup('puddle'));
+  $('btnTbPad').addEventListener('click', () => addGroup('pad'));
+  $('btnTbStrip').addEventListener('click', () => addGroup('strip'));
   // texturas de los elementos y borde de los nitro strips
   for (const key of ['puddle', 'pad', 'strip', 'border']) {
     $(`btnItemTex-${key}`).addEventListener('click', () => $(`fileItemTex-${key}`).click());
@@ -4132,6 +4168,7 @@ function bindControls() {
   $('thr').addEventListener('input', (e) => { state.trace.threshold = parseInt(e.target.value, 10); $('thrVal').textContent = e.target.value; });
   $('invert').addEventListener('change', (e) => { const v = e.target.value; state.trace.invert = v === 'true' ? true : v === 'false' ? false : v; });
   $('imgOpacity').addEventListener('input', (e) => { state.imageOpacity = e.target.value / 100; $('imgOpVal').textContent = `${e.target.value}%`; editor.draw(); });
+  $('drawExtend').addEventListener('change', () => editor.draw()); // muestra u oculta los extremos para continuar
   $('drawSmooth').addEventListener('input', (e) => { state.drawSmooth = parseFloat(e.target.value); $('drawSmoothVal').textContent = e.target.value; editor.draw(); });
   $('showRaw').addEventListener('change', (e) => { state.showRaw = e.target.checked; editor.draw(); });
   $('zExag').addEventListener('input', (e) => { preview.zExag = parseFloat(e.target.value); preview.update(false, true); });
@@ -4336,7 +4373,9 @@ function setTool(t) {
   if (typeof preview !== 'undefined' && preview.setPaintMode) preview.setPaintMode(PAINT_TOOLS.includes(t) ? t : null);
   if (typeof preview !== 'undefined' && preview.updateHillGizmo) preview.updateHillGizmo();
   const ds = document.getElementById('drawSmoothBox');
-  if (ds) ds.hidden = !(t === 'draw' || t === 'alt' || t === 'extend');
+  if (ds) ds.hidden = !(t === 'draw' || t === 'alt');
+  const dx = document.getElementById('drawExtendLbl');
+  if (dx) dx.hidden = t !== 'draw';
   const gb = document.getElementById('gizmoBox');
   if (gb) gb.hidden = t !== 'edit';
   const eb = document.getElementById('editBox');
@@ -4374,6 +4413,7 @@ function setImage(cv) {
 let worker = null, traceId = 0;
 function runTrace() {
   if (!state.image) return;
+  if (!confirmReplaceTrack('Trazar la imagen reemplaza la ruta principal actual')) return;
   if (!worker) worker = new Worker(new URL('./trace-worker.js', import.meta.url), { type: 'module' });
   const { canvas } = state.image;
   const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
@@ -4899,6 +4939,8 @@ function syncSceneControls() {
   $('treeDensityVal').textContent = `${sc.treeDensity}`;
   set('paintSubdiv', sc.paintSubdiv ?? 1); set('paintSubdivP', sc.paintSubdiv ?? 1);
   set('paintBrush', Math.min(200, sc[brushKey(state.tool)]));
+  set('paintSubMode', sc.paintSubMode === 'dec' ? 'dec' : 'inc'); set('sculptMode', sc.sculptMode === 'smooth' ? 'smooth' : 'raise');
+  if ($('sculptHint')) $('sculptHint').textContent = sc.sculptMode === 'smooth' ? 'clic: suaviza el relieve' : 'clic izq. eleva · clic der. hunde';
   set('sculptStrength', sc.sculptStrength); set('sculptStrengthP', sc.sculptStrength); set('sculptBrushP', Math.min(200, sc.sculptBrush));
   set('sculptDetail', sc.sculptDetail !== false);
   if ($('sculptStrengthVal')) $('sculptStrengthVal').textContent = `${sc.sculptStrength} m`;
@@ -5215,8 +5257,8 @@ function refreshSculptInfo() {
   const el = $('sculptInfo');
   if (!el) return;
   const n = state.terrainSculpt.length;
-  const up = state.terrainSculpt.filter((q) => q.h > 0).length;
-  el.textContent = n ? `${n} toques (${up} elevan, ${n - up} hunden). Son parte de la misma malla del terreno; junto a la pista se desvanecen para no taparla.` : 'Sin relieve esculpido. Con «Esculpir relieve», clic izquierdo eleva y clic derecho hunde (en el mapa o en la vista 3D).';
+  const up = state.terrainSculpt.filter((q) => q.h > 0 && !q.sm).length, sm = state.terrainSculpt.filter((q) => q.sm).length;
+  el.textContent = n ? `${n} toques (${up} elevan, ${n - up - sm} hunden${sm ? `, ${sm} suavizan` : ''}). Son parte de la misma malla del terreno; junto a la pista se desvanecen para no taparla.` : 'Sin relieve esculpido. Con «Esculpir relieve», clic izquierdo eleva y clic derecho hunde (en el mapa o en la vista 3D).';
   if ($('btnSculptClear')) $('btnSculptClear').disabled = !n;
 }
 /** Índice de la curva actual del pincel de relieve en state.sculptCurves (la agrega si es nueva). */
@@ -5500,6 +5542,8 @@ function bindSceneControls() {
   $('btnSculptClear').addEventListener('click', () => { if (!state.terrainSculpt.length) return; pushUndo(); state.terrainSculpt = []; state.sculptCurves = []; refreshSculptInfo(); editor.draw(); sceneChanged(); });
   const sStr = (v) => { if (!(v > 0)) return; sc.sculptStrength = Math.round(Math.min(50, v) * 100) / 100; syncSceneControls(); };
   $('sculptStrength').addEventListener('input', (e) => sStr(parseFloat(e.target.value)));
+  $('sculptMode').addEventListener('change', (e) => { sc.sculptMode = e.target.value; syncSceneControls(); });
+  $('paintSubMode').addEventListener('change', (e) => { sc.paintSubMode = e.target.value; syncSceneControls(); });
   $('sculptStrengthP').addEventListener('input', (e) => sStr(parseFloat(e.target.value)));
   $('sculptBrushP').addEventListener('input', (e) => { sc.sculptBrush = Math.round(parseFloat(e.target.value)); syncSceneControls(); editor.draw(); });
   $('sculptDetail').addEventListener('change', (e) => { sc.sculptDetail = e.target.checked; sceneChanged(); });
@@ -5782,15 +5826,9 @@ function bindSceneControls() {
     } catch (err) { console.error(err); toast('No se pudo exportar la escena: ' + err.message); }
   };
   $('btnExportGLB').addEventListener('click', glb);
-  // menú «Exportar ▾» del encabezado: se abre y se cierra con el botón, al elegir o al hacer clic afuera
-  {
-    const menu = $('exportMenu'), btn = $('btnExportMenu');
-    const close = () => { menu.hidden = true; btn.classList.remove('on'); };
-    btn.addEventListener('click', (e) => { e.stopPropagation(); menu.hidden = !menu.hidden; btn.classList.toggle('on', !menu.hidden); });
-    menu.addEventListener('click', (e) => { if (e.target.closest('button')) close(); });
-    document.addEventListener('pointerdown', (e) => { if (!menu.hidden && !e.target.closest('#exportMenuWrap')) close(); });
-    window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !menu.hidden) { e.stopPropagation(); close(); } }, true); // Esc solo cierra el menú
-  }
+  // menús desplegables: «Exportar ▾» (encabezado) y «Elementos de pista ▾» (barra del mapa)
+  bindDropMenu('btnExportMenu', 'exportMenu', 'exportMenuWrap');
+  bindDropMenu('btnItemsMenu', 'itemsMenu', 'itemsMenuWrap');
   $('btnExportGLB2').addEventListener('click', glb);
   const fbx = async () => {
     if (!state.layout || !state.result) return;
