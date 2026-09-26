@@ -612,12 +612,43 @@ test('exportar y guardar: Blender, 3ds Max, JSON, OBJ y el proyecto descargan su
   expect(downloads.some((n) => n.endsWith('.py')) && downloads.some((n) => n.endsWith('.ms')) && downloads.some((n) => n.endsWith('.json')) && downloads.some((n) => n.endsWith('.obj')) && downloads.includes('pista.tsg.json'), `descargas: ${downloads}`);
 });
 
-test('cámara de juego: entra, muestra el auto en el perfil y sale con Esc', async () => {
+test('cámara de juego: entra, oculta triggers, orbita (clic derecho restablece), brillo del auto y sale con Esc', async () => {
   await sample('oval');
   await page.click('#btnGame');
   await page.waitForFunction(() => window.__tsg.preview.game && window.__tsg.preview.game.active);
   const on = await ev(() => [window.__tsg.preview.game.active, window.__tsg.profile.gameS != null || !!window.__tsg.profile.hitCar]);
   expect(on[0], 'no entró a la cámara de juego');
+  // «Ocultar triggers» (marcado por defecto): el grupo de triggers no se ve; al desmarcarlo vuelve
+  await page.waitForFunction(() => window.__tsg.preview.triggerGroup.visible === false);
+  expect(await page.locator('#gameHideTrig').isChecked(), 'Ocultar triggers debería venir marcado');
+  await page.locator('#gameHideTrig').uncheck();
+  await page.waitForFunction(() => window.__tsg.preview.triggerGroup.visible === true);
+  await page.locator('#gameHideTrig').check();
+  await page.waitForFunction(() => window.__tsg.preview.triggerGroup.visible === false);
+  // órbita: arrastrar con clic izquierdo gira alrededor del auto; clic derecho restablece
+  await ev(() => { document.getElementById('btnGamePause').click(); });
+  const box = await page.locator('#view3d').boundingBox();
+  const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
+  const camBefore = await ev(() => window.__tsg.preview.game.camera.position.toArray());
+  await page.mouse.move(cx, cy); await page.mouse.down(); await page.mouse.move(cx + 160, cy + 10, { steps: 6 }); await page.mouse.move(cx + 220, cy + 40, { steps: 4 });
+  await page.waitForTimeout(150);
+  const orb = await ev(() => { const g = window.__tsg.preview.game; return [g.orbit.on, g.orbit.yaw, g.camera.position.toArray()]; });
+  await page.mouse.up();
+  const moved = Math.hypot(orb[2][0] - camBefore[0], orb[2][1] - camBefore[1]);
+  expect(orb[0] && orb[1] < -1 && moved > 3, `órbita: ${orb[0]} yaw ${orb[1]} movió ${moved.toFixed(1)} m`);
+  await page.mouse.click(cx, cy, { button: 'right' });
+  expect(await ev(() => { const g = window.__tsg.preview.game; return !g.orbit.on && g.orbit.yaw === 0 && g.orbit.pitch === 0; }), 'el clic derecho no restableció la cámara');
+  await ev(() => { document.getElementById('btnGamePause').click(); });
+  // brillo del auto (Ajuste auto 3D)
+  if (await page.locator('#carAdjBox').isHidden()) await page.click('#btnCarAdj');
+  const bri = await ev(() => {
+    const g = window.__tsg.preview.game, body = g.car.userData.body, r0 = body.material.color.r;
+    const el = document.getElementById('carBri'); el.value = '2'; el.dispatchEvent(new Event('input', { bubbles: true }));
+    const r2 = body.material.color.r;
+    document.getElementById('btnCarAdjReset').click();
+    return [r0, r2, body.material.color.r, document.getElementById('carBriVal').textContent];
+  });
+  expect(Math.abs(bri[1] - bri[0] * 2) < 1e-4 && Math.abs(bri[2] - bri[0]) < 1e-4 && bri[3] === '×1.00', `brillo: ${bri}`);
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => !window.__tsg.preview.game.active);
 });

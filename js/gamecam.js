@@ -60,6 +60,48 @@ export class GameCam {
     this.hud.hidden = true;
     preview.el.appendChild(this.hud);
     this.wheelSpin = 0;
+    // órbita: arrastrar con clic izquierdo gira la cámara alrededor del auto; clic derecho la restablece
+    this.orbit = { yaw: 0, pitch: 0, on: false };
+    const el = preview.el;
+    el.addEventListener('pointerdown', (e) => {
+      if (!this.active) return;
+      if (e.button === 2) { e.preventDefault(); e.stopPropagation(); this.resetOrbit(); return; }
+      if (e.button !== 0 || e.target.closest?.('.game-hud')) return;
+      e.preventDefault(); e.stopPropagation();
+      let lx = e.clientX, ly = e.clientY;
+      this.orbitDrag = true;
+      el.style.cursor = 'grabbing';
+      const move = (ev) => {
+        const dx = ev.clientX - lx, dy = ev.clientY - ly;
+        lx = ev.clientX; ly = ev.clientY;
+        if (!dx && !dy) return;
+        this.orbit.on = true;
+        this.orbit.yaw -= dx * 0.008;
+        this.orbit.pitch = Math.max(-1.2, Math.min(1.35, this.orbit.pitch + dy * 0.006));
+      };
+      const up = () => { this.orbitDrag = false; el.style.cursor = ''; window.removeEventListener('pointermove', move, true); window.removeEventListener('pointerup', up, true); };
+      window.addEventListener('pointermove', move, true);
+      window.addEventListener('pointerup', up, true);
+    }, true);
+    el.addEventListener('contextmenu', (e) => { if (this.active) e.preventDefault(); }, true);
+  }
+
+  /** Vuelve a la cámara normal (detrás del auto o desde el asiento), con transición suave. */
+  resetOrbit() { this.orbit.yaw = 0; this.orbit.pitch = 0; this.orbit.on = false; }
+
+  /** Brillo del auto (×, 1 = normal): multiplica el color de sus materiales (propios, no los del modelo cargado). */
+  applyBrightness(b = 1) {
+    b = Math.max(0.1, Math.min(4, +b || 1));
+    this.car.traverse((o) => {
+      if (!o.isMesh) return;
+      for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+        if (!m || !m.color) continue;
+        if (!m.userData.baseColor) m.userData.baseColor = m.color.clone();
+        m.color.copy(m.userData.baseColor).multiplyScalar(b);
+        if (m.emissive && m.emissiveIntensity != null) { if (m.userData.baseEmi == null) m.userData.baseEmi = m.emissiveIntensity; m.emissiveIntensity = m.userData.baseEmi * b; }
+      }
+    });
+    this.pv.needsFrame = true;
   }
 
   resize(aspect) { this.camera.aspect = aspect; this.camera.updateProjectionMatrix(); }
@@ -84,6 +126,8 @@ export class GameCam {
     this.pv.tc.getHelper().visible = false;
     this.pv.statsDiv.hidden = true;
     this.snapCamera = true;
+    this.resetOrbit();
+    this.pv.controls.enabled = false; // la cámara del editor no se mueve mientras se orbita el auto
     this.setMode(this.mode);
     return true;
   }
@@ -101,6 +145,8 @@ export class GameCam {
     this.pv.handleGroup.visible = true;
     this.pv.tc.getHelper().visible = true;
     this.pv.statsDiv.hidden = false;
+    this.pv.triggerGroup.visible = true;
+    this.pv.controls.enabled = true;
     this.pv.update(false, true);
     this.pv.needsFrame = true;
   }
@@ -154,11 +200,16 @@ export class GameCam {
    * adj = {dz (m), sx, sy, sz (×), rot (grados, giro sobre Z)}: ajuste manual encima del automático.
    */
   setCarModel(A, adj = {}) {
-    if (this.customCar) { this.car.remove(this.customCar); this.customCar = null; }
+    if (this.customCar) {
+      this.customCar.traverse((o) => { if (o.isMesh) for (const m of Array.isArray(o.material) ? o.material : [o.material]) m.dispose(); });
+      this.car.remove(this.customCar); this.customCar = null;
+    }
     this.carInfo = null;
     if (A) {
       const inner = new THREE.Group();
-      for (const part of A.parts) { const m = new THREE.Mesh(part.geometry, part.material); part.matrix.decompose(m.position, m.quaternion, m.scale); inner.add(m); }
+      // materiales propios (copias): el brillo se ajusta sin tocar los del modelo cargado
+      const cl = (mt) => (Array.isArray(mt) ? mt.map((x) => x.clone()) : mt.clone());
+      for (const part of A.parts) { const m = new THREE.Mesh(part.geometry, cl(part.material)); part.matrix.decompose(m.position, m.quaternion, m.scale); inner.add(m); }
       const s0 = new THREE.Box3().setFromObject(inner).getSize(new THREE.Vector3());
       const autoRot = s0.y > s0.x * 1.05 ? Math.PI / 2 : 0; // el lado más largo va a lo largo (+X adelante)
       const rotG = new THREE.Group();
@@ -180,6 +231,7 @@ export class GameCam {
       this.car.add(outer);
       this.carInfo = { name: A.name, k, size: [sz.x * k, sz.y * k, sz.z * k], tris: A.tris };
     }
+    this.applyBrightness(adj.bri ?? 1);
     this.setMode(this.mode);
     this.pv.needsFrame = true;
   }
@@ -230,6 +282,8 @@ export class GameCam {
       this.wheelSpin += (v * dt) / 0.36;
     }
     const P = this.pose(this.s);
+    const G0 = this.app.state.game || {};
+    this.pv.triggerGroup.visible = G0.hideTriggers === false; // «Ocultar triggers»: nada, ni las cajas semitransparentes
     this.tick2d = (this.tick2d || 0) + dt;
     if (this.tick2d > 0.066 && this.app.onGameMove) { this.tick2d = 0; this.app.onGameMove(this.s); }
     const m = new THREE.Matrix4().makeBasis(P.fwd, P.left, P.up);
@@ -261,6 +315,29 @@ export class GameCam {
         desiredLook = desiredPos.clone().add(d);
       }
     }
+    // órbita (arrastrar con clic izquierdo): gira alrededor del auto; en primera persona, mira alrededor
+    const orb = this.orbit.on;
+    if (orb) {
+      const yaw = this.orbit.yaw, pitch = this.orbit.pitch;
+      if (this.mode === 'first') {
+        const d = desiredLook.clone().sub(desiredPos);
+        d.applyAxisAngle(P.up, yaw);
+        d.applyAxisAngle(d.clone().cross(P.up).normalize(), -pitch);
+        desiredLook = desiredPos.clone().add(d);
+      } else {
+        const G = this.app.state.game || {};
+        const dist = Math.max(0.5, G.camDist ?? 8.5), hgt = G.camHeight ?? 2.9;
+        const target = P.pos.clone().addScaledVector(P.up, 1.0);
+        const R = Math.hypot(dist, hgt), el0 = Math.atan2(hgt, dist);
+        const el = Math.max(-0.15, Math.min(1.5, el0 + pitch));
+        const Z = new THREE.Vector3(0, 0, 1);
+        const back = P.fwd.clone().multiplyScalar(-1).applyAxisAngle(Z, yaw);
+        back.addScaledVector(Z, -back.dot(Z)).normalize();
+        desiredPos = target.clone().addScaledVector(back, R * Math.cos(el)).addScaledVector(Z, R * Math.sin(el));
+        desiredLook = target;
+        desiredUp = Z.clone();
+      }
+    }
     // campo de visión
     {
       const fov = Math.max(20, Math.min(120, (this.app.state.game && this.app.state.game.fov) || 62));
@@ -269,7 +346,7 @@ export class GameCam {
     if (this.snapCamera) {
       this.camPos.copy(desiredPos); this.camLook.copy(desiredLook); this.camUp.copy(desiredUp);
       this.snapCamera = false;
-    } else if (this.mode === 'first') {
+    } else if (this.mode === 'first' || (orb && this.orbitDrag)) {
       this.camPos.copy(desiredPos); this.camLook.copy(desiredLook); this.camUp.copy(desiredUp);
     } else {
       const k = 1 - Math.exp(-dt * 7);
@@ -291,7 +368,8 @@ export class GameCam {
       <div>Peralte ${bank.toFixed(1)}°</div>
       <div>Altura ${E.routes[0].z[i].toFixed(1)} m</div>
       <div>Vuelta ${fmtT(this.lapTime)}${this.lastLap ? ` · última ${fmtT(this.lastLap)}` : ''}</div>
-      ${this.paused ? '<div><b>EN PAUSA</b></div>' : ''}`;
+      ${this.paused ? '<div><b>EN PAUSA</b></div>' : ''}
+      <div class="hint">${orb ? 'Clic derecho: cámara normal' : 'Arrastra: orbitar el auto'}</div>`;
   }
 }
 

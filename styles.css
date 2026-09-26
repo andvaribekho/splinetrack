@@ -209,6 +209,7 @@ label.small { white-space: nowrap; }
   padding: 8px 12px; font-size: calc(13px * var(--fs, 1)); line-height: 1.5; color: #fff; font-variant-numeric: tabular-nums; min-width: 150px;
 }
 .game-hud .big { font-size: calc(26px * var(--fs, 1)); font-weight: 700; color: var(--accent); }
+.game-hud .hint { margin-top: 4px; font-size: calc(11px * var(--fs, 1)); opacity: 0.65; }
 
 .color-in { width: 26px; height: 22px; padding: 0 1px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel2); }
 .wide-thumb { width: 56px; }

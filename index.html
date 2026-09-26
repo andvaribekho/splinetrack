@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Track Spline Generator v0.61</title>
+  <title>Track Spline Generator v0.62</title>
   <link rel="stylesheet" href="styles.css">
   <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.61</span></div>
+    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.62</span></div>
     <label class="proj-name-wrap" title="Nombre del proyecto: se usa al guardar (<nombre>.tsg.json) y en los autoguardados (<nombre>_auto_…)"><input id="projectName" class="proj-name" value="pista" spellcheck="false" maxlength="80"><span class="small muted" id="autosaveState"></span></label>
     <div class="top-actions">
       <button id="btnNew" title="Empezar de cero">Nuevo</button>
@@ -740,7 +740,7 @@
           <input type="range" id="wireOpacity" min="0.05" max="1" step="0.05" value="0.35" style="width:70px">
           <button id="btnGenTerrain" class="gen">Generar terreno</button>
           <button id="btnGenTrees" class="gen">Generar árboles y decoración</button>
-          <button id="btnGame" class="primary" title="Un auto recorre la pista solo, con cámara en tercera o primera persona">Cámara de juego</button>
+          <button id="btnGame" class="primary" title="Un auto recorre la pista solo, con cámara en tercera o primera persona. Arrastrar con clic izquierdo orbita alrededor del auto; clic derecho vuelve a la cámara normal">Cámara de juego</button>
           <span id="gizmoBox" class="row" hidden>
             <span class="label" style="margin:0 2px 0 6px">Mover</span>
             <button data-gizmo="free" class="active" title="Mover en X, Y y Z">Libre</button>
@@ -760,20 +760,22 @@
           <button id="btnGameExit" title="Salir de la cámara de juego (Esc)">Salir</button>
           <button id="btnGameCam" title="Distancia, altura, inclinación y campo de visión de la cámara">Ajustar cámara</button>
           <label class="check small" title="Muestra la esfera blanca que marca sobre la pista el punto bajo el cursor del mapa o del perfil"><input type="checkbox" id="gameGuide"> Mostrar guía</label>
+          <label class="check small" title="Oculta del todo los triggers (bocas de túneles y propios) mientras manejas: ni las cajas semitransparentes ni sus aristas. Se siguen exportando igual"><input type="checkbox" id="gameHideTrig"> Ocultar triggers</label>
           <button id="btnCarLoad" title="Carga un auto 3D (FBX o GLB): se escala solo para caber en el tamaño del auto por defecto, se centra y se apoya en la pista">Auto 3D…</button>
           <input id="fileCar" type="file" accept=".fbx,.glb,.gltf" hidden>
-          <button id="btnCarAdj" title="Altura, escala X, Y, Z y giro del auto 3D (por si queda enterrado o mirando al revés)">Ajuste auto 3D</button>
-          <span id="carAdjBox" class="row" hidden style="flex-basis:100%;gap:10px">
-            <span class="small muted" id="carInfo"></span>
+          <button id="btnCarAdj" title="Altura, escala X, Y, Z, brillo y giro del auto 3D (por si queda enterrado, mirando al revés o muy oscuro)">Ajuste auto 3D</button>
+          <span id="carAdjBox" class="row" hidden style="flex-basis:100%;gap:6px 10px;flex-wrap:wrap">
+            <span class="small muted" id="carInfo" style="flex-basis:100%"></span>
             <label class="small" title="Sube o baja el auto (si queda enterrado o flotando por su pivote)">Altura <input type="range" id="carDz" min="-2" max="2" step="0.01" style="width:90px"> <span class="val" id="carDzVal"></span></label>
             <label class="small" title="Escala a lo largo (adelante)">Escala X <input type="range" id="carSx" min="0.2" max="3" step="0.01" style="width:80px"> <span class="val" id="carSxVal"></span></label>
             <label class="small" title="Escala a lo ancho">Escala Y <input type="range" id="carSy" min="0.2" max="3" step="0.01" style="width:80px"> <span class="val" id="carSyVal"></span></label>
             <label class="small" title="Escala en altura">Escala Z <input type="range" id="carSz" min="0.2" max="3" step="0.01" style="width:80px"> <span class="val" id="carSzVal"></span></label>
+            <label class="small" title="Brillo del auto: sube o baja el color de sus materiales (1 = tal cual)">Brillo <input type="range" id="carBri" min="0.2" max="3" step="0.05" style="width:80px"> <span class="val" id="carBriVal"></span></label>
             <label class="small" title="Giro sobre su eje vertical (si mira hacia atrás o de lado)">Giro <select id="carRot"><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></label>
-            <button id="btnCarAdjReset" class="small" title="Altura 0, escala 1 y giro 0°">Por defecto</button>
+            <button id="btnCarAdjReset" class="small" title="Altura 0, escala 1, brillo 1 y giro 0°">Por defecto</button>
             <button id="btnCarRemove" class="small" title="Vuelve al auto por defecto">Quitar auto 3D</button>
           </span>
-          <span id="gameCamBox" class="row" hidden style="flex-basis:100%;gap:10px">
+          <span id="gameCamBox" class="row" hidden style="flex-basis:100%;gap:6px 10px;flex-wrap:wrap">
             <label class="small" title="Distancia detrás del auto (tercera persona)">Distancia <input type="range" id="gameCamDist" min="1" max="40" step="0.5" style="width:90px"> <span class="val" id="gameCamDistVal"></span></label>
             <label class="small" title="Altura sobre el auto (tercera persona)">Altura <input type="range" id="gameCamHeight" min="0" max="20" step="0.1" style="width:90px"> <span class="val" id="gameCamHeightVal"></span></label>
             <label class="small" title="Inclinación de la mirada: positivo mira más hacia abajo">Inclinación <input type="range" id="gameCamTilt" min="-30" max="45" step="1" style="width:90px"> <span class="val" id="gameCamTiltVal"></span></label>

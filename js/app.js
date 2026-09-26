@@ -84,7 +84,7 @@ const state = {
   selItem: null, // {type, gid, idx}
   itemPaintTarget: null, // {type, gid} al pintar zonas de un grupo
   paintErase: false,
-  game: { showGuide: false, speed: 120, mode: 'third', camDist: 8.5, camHeight: 2.9, camTilt: 0, fov: 62 }, // cámara: distancia y altura (tercera persona), inclinación (°) y FOV
+  game: { showGuide: false, hideTriggers: true, speed: 120, mode: 'third', camDist: 8.5, camHeight: 2.9, camTilt: 0, fov: 62 }, // cámara: distancia y altura (tercera persona), inclinación (°) y FOV
   skyTex: null, skyCustom: false,
   trackTex: null, // canvas de la textura de la pista
   barrierTex: null, // canvas de la textura de la barrera (null = rojo y blanco por defecto)
@@ -5144,6 +5144,7 @@ async function openProject(text, fileName = null) {
   if (d.carModel && d.carModel.data) { try { state.carModel = await loadAsset(b64ToBuf(d.carModel.data), d.carModel.name); } catch (err) { toastErr(`No se pudo cargar el auto 3D: ${err.message}`); } }
   if (app.applyCar) app.applyCar();
   if (app.syncGameCam) app.syncGameCam();
+  { const hb = document.getElementById('gameHideTrig'); if (hb) hb.checked = state.game.hideTriggers !== false; }
   if (d.sky) { state.skyTex = await toCanvas(d.sky); state.skyCustom = true; } else { state.skyTex = makeDefaultSky(); state.skyCustom = false; }
   refreshSkyThumb();
   state.terrainTex = await toCanvas(d.terrainTex);
@@ -6450,8 +6451,8 @@ function bindSceneControls() {
   syncCam();
   app.syncGameCam = syncCam;
   // auto 3D propio (FBX / GLB): se escala solo al tamaño del auto por defecto; ajuste de altura, escala por eje y giro
-  const CAR_DEF = { dz: 0, sx: 1, sy: 1, sz: 1, rot: 0 };
-  const carCtl = [['carDz', 'dz', (v) => `${v >= 0 ? '+' : ''}${v.toFixed(2)} m`], ['carSx', 'sx', (v) => `×${v.toFixed(2)}`], ['carSy', 'sy', (v) => `×${v.toFixed(2)}`], ['carSz', 'sz', (v) => `×${v.toFixed(2)}`]];
+  const CAR_DEF = { dz: 0, sx: 1, sy: 1, sz: 1, rot: 0, bri: 1 };
+  const carCtl = [['carDz', 'dz', (v) => `${v >= 0 ? '+' : ''}${v.toFixed(2)} m`], ['carSx', 'sx', (v) => `×${v.toFixed(2)}`], ['carSy', 'sy', (v) => `×${v.toFixed(2)}`], ['carSz', 'sz', (v) => `×${v.toFixed(2)}`], ['carBri', 'bri', (v) => `×${v.toFixed(2)}`]];
   const carAdj = () => (state.game.carAdj = { ...CAR_DEF, ...(state.game.carAdj || {}) });
   const syncCar = () => {
     const a = carAdj();
@@ -6502,6 +6503,9 @@ function bindSceneControls() {
   // «Mostrar guía»: la esfera blanca que marca en 3D el punto de la pista bajo el cursor (apagada por defecto)
   $('gameGuide').checked = !!state.game.showGuide;
   $('gameGuide').addEventListener('change', (e) => { state.game.showGuide = e.target.checked; preview.setHover(state.hover); });
+  // «Ocultar triggers» en la cámara de juego (marcado por defecto): no se ve ninguna caja
+  $('gameHideTrig').checked = state.game.hideTriggers !== false;
+  $('gameHideTrig').addEventListener('change', (e) => { state.game.hideTriggers = e.target.checked; });
   document.addEventListener('keydown', (e) => {
     if (!game.active) return;
     const t = e.target || {};
