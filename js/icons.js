@@ -83,7 +83,7 @@ const BY_ID = {
   btnHillTool: 'mountain', btnHillClear: 'trash', btnHillDelete: 'trash', btnHillDeselect: 'deselect',
   btnRef3d: 'box', btnRef3dTop: 'box', btnRef3dCenter: 'target', btnRef3dReset: 'reset', btnRef3dSelect: 'cursor', btnRef3dRemove: 'trash',
   btnAssetLoad: 'upload', btnDecoNew: 'plus', btnExportJSON: 'code', btnExportOBJ: 'box', btnExportBlender: 'download', btnExportMax: 'download',
-  btnExportGLB: 'download', btnExportGLB2: 'download', btnExportFBX: 'download', btnExportFBX2: 'download',
+  btnExportGLB: 'download', btnExportFBX: 'download', btnExportMenu: 'download',
 };
 const BY_TOOL = { pan: 'move', draw: 'pen', alt: 'penAlt', edit: 'cursor', extend: 'extend', start: 'flag', flat: 'flat', ref: 'image', paint: 'brush', hill: 'mountain', sculpt: 'sculpt', itemPaint: 'brush' };
 const BY_GIZMO = { free: 'move', xy: 'axisXY', z: 'axisZ' };

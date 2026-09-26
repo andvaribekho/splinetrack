@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Track Spline Generator v0.55</title>
+  <title>Track Spline Generator v0.58</title>
   <link rel="stylesheet" href="styles.css">
   <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.55</span></div>
+    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.58</span></div>
     <div class="top-actions">
       <button id="btnNew" title="Empezar de cero">Nuevo</button>
       <button id="btnOpen" title="Abrir proyecto .tsg.json">Abrir</button>
@@ -18,19 +18,7 @@
       <button id="btnUndo" title="Deshacer (Ctrl+Z)">Deshacer</button>
       <span class="sep"></span>
       <button id="btnSettings" title="Tamaño del texto, atajos de teclado y ventanas">Ajustes</button>
-      <div class="menu-wrap" id="exportMenuWrap">
-        <button class="primary" id="btnExportMenu" title="Exportar la pista o la escena">Exportar ▾</button>
-        <div class="menu" id="exportMenu" hidden>
-          <div class="menu-label">Curvas (la geometría se arma en el programa)</div>
-          <button id="btnExportBlender" title="Script Python para Blender">Blender (.py)</button>
-          <button id="btnExportMax" title="MAXScript para 3ds Max">3ds Max (.ms)</button>
-          <button id="btnExportJSON" title="Datos de la pista en JSON">JSON</button>
-          <button id="btnExportOBJ" title="Curvas en OBJ">OBJ</button>
-          <div class="menu-label">Escena 3D completa</div>
-          <button id="btnExportGLB2" title="Escena 3D completa: pista con UV, terreno y árboles (.glb)">Escena (.glb)</button>
-          <button id="btnExportFBX2" title="Escena 3D completa (.fbx)">Escena (.fbx)</button>
-        </div>
-      </div>
+      <button class="primary" id="btnExportMenu" title="Exportar la pista o la escena (ventana)">Exportar</button>
     </div>
   </header>
 
@@ -271,6 +259,18 @@
           <div class="range-ends"><span>mínimo: curvas con algo más</span><span>máximo: rectas con mucho menos</span></div></div>
         <p class="hint">Uniforme: secciones a distancia pareja. Optimizado: las curvas, los cambios de pendiente, el peralte y los cambios de ancho reciben más secciones; las rectas, menos. El mapeado UV sigue la distancia recorrida, así que la textura se ve igual con más o menos secciones. El tope de triángulos manda sobre la densidad.</p>
         <p class="meta" id="trackMeshInfo"></p>
+        <h3 class="subhead">Transiciones de ancho</h3>
+        <label class="check" title="Donde la pista pasa de un ancho a otro (tramos, atajos), agrega divisiones a lo largo y más secciones, así las líneas pintadas de la textura no se tuercen. El resto de la pista no cambia"><input type="checkbox" id="transSubdiv"> Subdividir transiciones</label>
+        <div id="transDivBox">
+          <p class="hint">Arrastra las marcas sobre la textura de la pista para alinearlas con sus líneas pintadas (lo ideal: una a cada lado de cada línea). Clic en una marca para escribir su posición.</p>
+          <div class="tdiv-bar" id="transDivBar"><canvas id="transDivCanvas" height="44"></canvas></div>
+          <div class="row gap wrap"><button id="btnTransDivAdd" class="small" title="Agrega una división en el espacio más ancho">+ División</button><button id="btnTransDivDel" class="small" title="Quita la división seleccionada (o la última)">− División</button><button id="btnTransDivReset" class="small" title="Las 4 divisiones por defecto (calzan con la textura de asfalto por defecto)">Por defecto</button></div>
+          <div class="row gap" id="transDivEdit"><span class="small muted" id="transDivInfo"></span></div>
+        </div>
+        <h3 class="subhead">Faldones laterales</h3>
+        <label class="check" title="Paredes que bajan desde los bordes de la pista hacia el terreno, para que no se vea el espacio entre ambos. Del lado donde hay camino de tierra no se ponen: el camino tiene su propio faldón"><input type="checkbox" id="skirts"> Faldones laterales en la pista</label>
+        <div class="field" id="skirtBox"><label>Alto del faldón <span class="val"><input type="number" id="skirtHeightNum" min="0.2" step="0.1" style="width:58px"> m</span></label><input type="range" id="skirtHeight" min="0.3" max="10" step="0.1"></div>
+        <p class="hint" id="skirtHint">Cuánto bajan desde el borde (la pista y el camino de tierra). Solo con terreno activado.</p>
       </section>
 
       <section class="panel" data-panel="edges">
@@ -279,7 +279,8 @@
         <h3 class="subhead" id="dirtHead">Camino de tierra</h3>
         <div class="field"><label>Lado</label><select id="dirtSide"><option value="none">Sin camino de tierra</option><option value="left">Izquierda</option><option value="right">Derecha</option><option value="both">Ambos lados</option></select></div>
         <div id="dirtBox">
-          <div class="field"><label>Ancho <span class="val"><input type="number" id="dirtWidthNum" min="0.2" step="0.1" style="width:60px"> m</span></label><input type="range" id="dirtWidth" min="0.5" max="15" step="0.1"></div>
+          <div class="field"><label>Ancho izquierdo <span class="val"><input type="number" id="dirtWidthLNum" min="0" step="0.1" style="width:60px"> m</span></label><input type="range" id="dirtWidthL" min="0.5" max="15" step="0.1"></div>
+          <div class="field"><label>Ancho derecho <span class="val"><input type="number" id="dirtWidthRNum" min="0" step="0.1" style="width:60px"> m</span></label><input type="range" id="dirtWidthR" min="0.5" max="15" step="0.1"></div>
           <div class="field"><label>Repetición de la textura (a lo largo) <span class="val"><input type="number" id="dirtTileNum" min="0.5" step="0.5" style="width:56px"> m</span></label><input type="range" id="dirtTile" min="0.5" max="30" step="0.5"></div>
           <div class="row gap"><button id="btnDirtTex">Cargar textura…</button><button id="btnDirtTexRemove" disabled>Por defecto</button><img id="dirtTexThumb" class="thumb" hidden alt=""></div>
           <input id="fileDirtTex" type="file" accept="image/*" hidden>
@@ -339,6 +340,19 @@
 
       </section>
 
+      <section class="panel" data-panel="triggers" data-group="Juego">
+        <h2>Triggers</h2>
+        <p class="hint">Cubos invisibles de todo el ancho de la pista (calzada, camino de tierra y barrera) que se exportan en el grupo <code>triggers</code> para que el motor sepa cuándo el auto pasa por ahí (por ejemplo, para cambiar su iluminación al entrar a un túnel). En la vista 3D se ven semitransparentes; al exportar su material «trigger» es invisible y los extras (glTF) dicen de qué trigger se trata.</p>
+        <label class="check"><input type="checkbox" id="tunnelTriggers"> Triggers en la entrada y la salida de los túneles</label>
+        <div class="field" id="tunnelTrigBox"><label>Profundidad <span class="val" id="triggerDepthVal"></span></label><input type="range" id="triggerDepth" min="0.2" max="10" step="0.1">
+          <label>Alto <span class="val" id="triggerHeightVal"></span></label><input type="range" id="triggerHeight" min="1" max="30" step="0.5"></div>
+        <p class="hint">Se llaman <code>trigger_tunel_NN_entrada</code> y <code>trigger_tunel_NN_salida</code> (según el sentido de marcha).</p>
+        <label class="check"><input type="checkbox" id="showTriggers"> Mostrar los triggers en la vista 3D</label>
+        <h3 class="subhead">Triggers propios</h3>
+        <div class="row gap"><button id="btnTriggerNew" title="Clic en la pista (mapa 2D) para ubicarlo; después se arrastra con Navegar">+ Nuevo trigger</button><span class="small muted" id="triggerPlaceHint" hidden>clic en la pista para ubicarlo · Esc cancela</span></div>
+        <div id="triggerList" class="list"></div>
+      </section>
+
       <section class="panel" data-panel="sky">
         <h2>Cielo (cámara de juego)</h2>
         <div class="row gap">
@@ -378,7 +392,6 @@
         <div class="field"><label>Margen alrededor de la pista <span class="val" id="terrainMarginVal"></span></label><input type="range" id="terrainMargin" min="20" max="400" step="5"></div>
         <div class="field"><label>Separación bajo la pista <span class="val" id="terrainGapVal"></span></label><input type="range" id="terrainGap" min="0.05" max="2" step="0.05"></div>
         <div class="field"><label>Transición hacia el relieve <span class="val" id="terrainFalloffVal"></span></label><input type="range" id="terrainFalloff" min="10" max="200" step="5"></div>
-        <label class="check"><input type="checkbox" id="skirts"> Faldones laterales en la pista</label>
         <h3 class="subhead" id="terrainTexHead">Textura del terreno</h3>
         <div class="row gap">
           <button id="btnTerrainTex">Cargar textura…</button>
@@ -574,16 +587,6 @@
         </div>
       </section>
 
-      <section class="panel" data-panel="export" data-group="Salida">
-        <h2>Exportación</h2>
-        <div class="field"><label>Separación de nudos Bézier <span class="val" id="knotSpacingVal"></span></label><input type="range" id="knotSpacing" min="3" max="40" step="1"></div>
-        <label class="check"><input type="checkbox" id="edges"> Exportar bordes izquierdo/derecho</label>
-        <label class="check"><input type="checkbox" id="blenderMesh"> Blender: perfil como bevel (pista visible)</label>
-        <label class="check"><input type="checkbox" id="bankFlip"> Blender: invertir signo del peralte</label>
-        <button class="primary wide" id="btnExportGLB" title="Pista con UV, terreno y árboles con texturas incrustadas, en un solo archivo glTF binario. Se importa en Blender (File > Import > glTF 2.0) y en 3ds Max 2023+ (Import > glTF).">Exportar escena 3D (.glb)</button>
-        <button class="primary wide" id="btnExportFBX" style="margin-top:6px">Exportar escena 3D (.fbx)</button>
-        <p class="hint" id="exportInfo"></p>
-      </section>
 
     </aside>
 
@@ -621,6 +624,7 @@
           <span id="sculptBox" class="row" hidden>
             <label class="small">Fuerza <input type="range" id="sculptStrength" min="0.1" max="10" step="0.1" style="width:80px"> <span class="val" id="sculptStrengthVal"></span></label>
             <span class="seg seg-bar" id="sculptMode" role="group" aria-label="Modo del pincel"><button data-smode="raise" data-icon="sculpt" title="Clic izquierdo eleva, clic derecho (o Alt) hunde">Elevar / hundir</button><button data-smode="smooth" data-icon="smooth" title="El pincel no eleva ni hunde: solo suaviza el relieve esculpido bajo él">Suavizar</button></span>
+            <label class="check small" title="Las zonas esculpidas reciben más polígonos (como lo pintado con «Pintar subdivisión»), para que el relieve se vea definido"><input type="checkbox" id="sculptDetailBar"> Más detalle en lo esculpido</label>
             <span class="small muted" id="sculptHint">clic izq. eleva · clic der. hunde</span>
           </span>
           <span id="hillBox" class="row" hidden>
@@ -747,6 +751,19 @@
           <button id="btnGameExit" title="Salir de la cámara de juego (Esc)">Salir</button>
           <button id="btnGameCam" title="Distancia, altura, inclinación y campo de visión de la cámara">Ajustar cámara</button>
           <label class="check small" title="Muestra la esfera blanca que marca sobre la pista el punto bajo el cursor del mapa o del perfil"><input type="checkbox" id="gameGuide"> Mostrar guía</label>
+          <button id="btnCarLoad" title="Carga un auto 3D (FBX o GLB): se escala solo para caber en el tamaño del auto por defecto, se centra y se apoya en la pista">Auto 3D…</button>
+          <input id="fileCar" type="file" accept=".fbx,.glb,.gltf" hidden>
+          <button id="btnCarAdj" title="Altura, escala X, Y, Z y giro del auto 3D (por si queda enterrado o mirando al revés)">Ajuste auto 3D</button>
+          <span id="carAdjBox" class="row" hidden style="flex-basis:100%;gap:10px">
+            <span class="small muted" id="carInfo"></span>
+            <label class="small" title="Sube o baja el auto (si queda enterrado o flotando por su pivote)">Altura <input type="range" id="carDz" min="-2" max="2" step="0.01" style="width:90px"> <span class="val" id="carDzVal"></span></label>
+            <label class="small" title="Escala a lo largo (adelante)">Escala X <input type="range" id="carSx" min="0.2" max="3" step="0.01" style="width:80px"> <span class="val" id="carSxVal"></span></label>
+            <label class="small" title="Escala a lo ancho">Escala Y <input type="range" id="carSy" min="0.2" max="3" step="0.01" style="width:80px"> <span class="val" id="carSyVal"></span></label>
+            <label class="small" title="Escala en altura">Escala Z <input type="range" id="carSz" min="0.2" max="3" step="0.01" style="width:80px"> <span class="val" id="carSzVal"></span></label>
+            <label class="small" title="Giro sobre su eje vertical (si mira hacia atrás o de lado)">Giro <select id="carRot"><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></label>
+            <button id="btnCarAdjReset" class="small" title="Altura 0, escala 1 y giro 0°">Por defecto</button>
+            <button id="btnCarRemove" class="small" title="Vuelve al auto por defecto">Quitar auto 3D</button>
+          </span>
           <span id="gameCamBox" class="row" hidden style="flex-basis:100%;gap:10px">
             <label class="small" title="Distancia detrás del auto (tercera persona)">Distancia <input type="range" id="gameCamDist" min="1" max="40" step="0.5" style="width:90px"> <span class="val" id="gameCamDistVal"></span></label>
             <label class="small" title="Altura sobre el auto (tercera persona)">Altura <input type="range" id="gameCamHeight" min="0" max="20" step="0.1" style="width:90px"> <span class="val" id="gameCamHeightVal"></span></label>
@@ -762,7 +779,7 @@
           <span class="label">Perfil de elevación z(s)</span>
           <button id="btnProfileFit" title="Encuadra el perfil: vuelve a ver toda la pista y todos los puntos. En el gráfico: rueda = zoom horizontal, Shift + rueda = zoom vertical, botón medio = desplazar">Encuadrar</button>
           <button id="btnFlatten" title="Aplana los puntos seleccionados (Editar puntos) a su elevación promedio: plano estricto entre el primero y el último. Es una sola vez: después puedes volver a editarlos">Aplanar</button>
-          <span class="zsmooth" title="Suaviza las alturas de los puntos seleccionados (Editar puntos, 3 o más): los extremos quedan fijos para empalmar con el resto. 0 = sin cambio, 100 = rampa lisa entre los extremos. Se ve mientras mueves la barra; Ctrl+Z lo deshace de una vez"><label class="small" for="smoothZ">Suavizar alturas</label><input type="range" id="smoothZ" min="0" max="100" step="1" value="0"><span class="val small" id="smoothZVal">0</span></span>
+          <span class="zsmooth" title="Suaviza las alturas de los puntos seleccionados (Editar puntos, 3 o más): los extremos quedan fijos para empalmar con el resto. 0 = sin cambio, 100 = rampa lisa entre los extremos. Se ve mientras mueves la barra; Ctrl+Z lo deshace de una vez"><label class="small" for="profSmooth">Suavizar alturas</label><input type="range" id="profSmooth" min="0" max="100" step="1" value="0"><span class="val small" id="profSmoothVal">0</span></span>
           <button data-tool="profile" id="btnProfileTool" title="Elige un tramo (arrastrando sobre la pista en el mapa, o con Shift en el gráfico de perfil) y dibuja en el gráfico de perfil cómo varía su elevación: sus puntos quedan a esa altura (se pueden seguir editando)">Perfil de tramo</button>
           <label class="check small"><input type="checkbox" id="pinLocal" checked> Editar solo este punto</label>
           <span class="stats" id="stats"></span>
@@ -774,6 +791,21 @@
     <aside class="sidebar sidebar-right" id="sidebarRight" aria-label="Barra de herramientas derecha"></aside>
   </div>
 
+  <div id="exportPop" class="instr-pop settings-pop export-pop" hidden role="dialog" aria-label="Exportar">
+    <div class="instr-head"><span class="instr-title">Exportar</span><button class="instr-x" id="btnExportClose" data-noicon title="Cerrar (Esc)">✕</button></div>
+    <div class="instr-body settings-body">
+      <h3 class="subhead">Escena 3D completa</h3>
+      <p class="meta">Pista con UV, terreno, cerros, túneles, bordes, tramos, árboles, decoración, elementos de pista y triggers, cada uno como objeto propio con su pivote y las texturas incrustadas.</p>
+      <div class="row gap"><button class="primary" id="btnExportGLB" title="Pista con UV, terreno y árboles con texturas incrustadas, en un solo archivo glTF binario. Se importa en Blender (File > Import > glTF 2.0) y en 3ds Max 2023+ (Import > glTF).">Escena (.glb)</button><button class="primary" id="btnExportFBX" title="Escena 3D completa en FBX (Blender, 3ds Max, Maya, Unity, Unreal)">Escena (.fbx)</button></div>
+      <h3 class="subhead">Curvas (la geometría se arma en el programa)</h3>
+      <div class="row gap wrap"><button id="btnExportBlender" title="Script Python para Blender">Blender (.py)</button><button id="btnExportMax" title="MAXScript para 3ds Max">3ds Max (.ms)</button><button id="btnExportJSON" title="Datos de la pista en JSON">JSON</button><button id="btnExportOBJ" title="Curvas en OBJ">OBJ</button></div>
+        <div class="field"><label>Separación de nudos Bézier <span class="val" id="knotSpacingVal"></span></label><input type="range" id="knotSpacing" min="3" max="40" step="1"></div>
+        <label class="check"><input type="checkbox" id="edges"> Exportar bordes izquierdo/derecho</label>
+        <label class="check"><input type="checkbox" id="blenderMesh"> Blender: perfil como bevel (pista visible)</label>
+        <label class="check"><input type="checkbox" id="bankFlip"> Blender: invertir signo del peralte</label>
+      <p class="hint" id="exportInfo"></p>
+    </div>
+  </div>
   <div id="settingsPop" class="instr-pop settings-pop" hidden role="dialog" aria-label="Ajustes">
     <div class="instr-head"><span class="instr-title">Ajustes</span><button class="instr-x" id="btnSettingsClose" data-noicon title="Cerrar (Esc)">✕</button></div>
     <div class="instr-body settings-body">

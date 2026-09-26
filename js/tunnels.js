@@ -178,8 +178,11 @@ export function edgeParams(sp = {}, alt = false) {
     if (own && own[k] != null) return own[k];
     return sp['alt' + k[0].toUpperCase() + k.slice(1)];
   };
+  const dw = g('dirtWidth') ?? 3;
+  const wl = g('dirtWidthL'), wr = g('dirtWidthR');
   return {
-    dirtSide: g('dirtSide') || 'none', dirtWidth: g('dirtWidth') ?? 3, dirtTile: g('dirtTile') ?? 4,
+    dirtSide: g('dirtSide') || 'none', dirtWidth: dw, dirtTile: g('dirtTile') ?? 4,
+    dirtWidthL: Number.isFinite(wl) && wl >= 0 ? wl : dw, dirtWidthR: Number.isFinite(wr) && wr >= 0 ? wr : dw, // ancho a cada lado (si no, el general)
     barrierSide: g('barrierSide') || 'none', barrierHeight: g('barrierHeight') ?? 0.8, barrierThick: g('barrierThick') ?? 0.25, barrierTile: g('barrierTile') ?? 4,
   };
 }
@@ -188,8 +191,41 @@ export function edgeParams(sp = {}, alt = false) {
 export function edgeExtents(sp = {}, alt = false) {
   const P = edgeParams(sp, alt);
   const has = (v, side) => v === 'both' || v === side;
-  const ext = (side) => (has(P.dirtSide, side) ? Math.max(0, P.dirtWidth || 0) : 0) + (has(P.barrierSide, side) ? Math.max(0.05, P.barrierThick ?? 0.25) + 0.15 : 0);
+  const ext = (side) => (has(P.dirtSide, side) ? Math.max(0, (side === 'left' ? P.dirtWidthL : P.dirtWidthR) || 0) : 0) + (has(P.barrierSide, side) ? Math.max(0.05, P.barrierThick ?? 0.25) + 0.15 : 0);
   return { left: ext('left'), right: ext('right') };
+}
+
+/** Tramo (de r.bridges) que contiene la posición s, o null. */
+export function tramoAtS(r, sv) {
+  if (!r.bridges) return null;
+  for (const b of r.bridges) { const d = r.closed ? (((sv - b.s0) % r.L) + r.L) % r.L : sv - b.s0; if (d >= -1e-6 && d <= b.s1 - b.s0 + 1e-6) return b; }
+  return null;
+}
+/**
+ * Ancho del camino de tierra de un lado (side +1 izquierda, -1 derecha, según el sentido de marcha) en la posición s de
+ * la ruta r (0 = sin camino). En un tramo: sus lados propios o «como la pista», y sus anchos propios o los de la pista.
+ * P = edgeParams de la ruta (opcional).
+ */
+export function dirtWidthAt(sp, r, k, sv, side, P = null) {
+  P = P || edgeParams(sp, r);
+  const key = side > 0 ? 'left' : 'right';
+  const hasS = (v) => v === 'both' || v === key;
+  const routeOn = P.dirtSide !== 'none' && hasS(P.dirtSide);
+  let on = routeOn;
+  let w = side > 0 ? P.dirtWidthL : P.dirtWidthR;
+  const b = tramoAtS(r, sv);
+  if (b) {
+    if (b.dirt != null) on = !!b.dirt && hasS(b.dirtSide || 'both');
+    if (b.dirtOwnW) { const o = side > 0 ? b.dirtWL : b.dirtWR; if (Number.isFinite(o) && o >= 0) w = o; }
+  } else if (sp.suspRanges && sp.suspRanges.length) { // tramos suspendidos (proyectos antiguos)
+    for (const z of sp.suspRanges) {
+      if (z.k !== k) continue;
+      let d = sv - z.s0;
+      if (r.closed) d = ((d % r.L) + r.L) % r.L;
+      if (d >= -1e-6 && d <= z.s1 - z.s0 + 1e-6) { on = !!z.dirt && (routeOn || P.dirtSide === 'none' || !P.dirtSide); break; }
+    }
+  }
+  return on ? Math.max(0, w || 0) : 0;
 }
 
 /** Ancho interior del túnel: el pedido, o más si hace falta para la calzada, el camino de tierra y la barrera. */
@@ -206,6 +242,18 @@ export function portalBox(sp, roadW, alt = false) {
   const ext = natural ? 1.35 * amp : 0;
   const thick = Math.max(0.05, sp.portalFrame ?? 1);
   return { A: W / 2 + ext + thick, B: sp.tunnelHeight + ext + thick, thick, depth: Math.max(0, sp.portalDepth ?? 1) };
+}
+
+/** Envolvente convexa de puntos 2D [[x, y], …] (cadena monótona), en sentido antihorario. */
+export function convexHull2(pts) {
+  const P = pts.map((p) => [p[0], p[1]]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  if (P.length < 3) return P;
+  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lo = [], hi = [];
+  for (const p of P) { while (lo.length >= 2 && cross(lo[lo.length - 2], lo[lo.length - 1], p) <= 1e-12) lo.pop(); lo.push(p); }
+  for (let i = P.length - 1; i >= 0; i--) { const p = P[i]; while (hi.length >= 2 && cross(hi[hi.length - 2], hi[hi.length - 1], p) <= 1e-12) hi.pop(); hi.push(p); }
+  lo.pop(); hi.pop();
+  return lo.concat(hi);
 }
 
 // ---------- detección ----------
@@ -552,14 +600,30 @@ export function buildTunnelGeometry(layout, elev, spIn, runs, opts = {}) {
     const walkways = meshOut(wpos, wuv, widx);
     // bocas: marco con contorno exterior rectangular que sobresale del cerro (depth) y se mete en él (collarIn)
     // caja de la boca medida en los contornos reales de ambos extremos (+ grosor del marco)
-    const toOuter = ([u, v]) => {
-      // rayo desde el centro de la sección hasta el rectángulo [-A, A] x [0, B]
+    // contorno exterior de las bocas: el del túnel agrandado en el grosor del marco (sigue la forma del túnel). Se usa
+    // la envolvente convexa del contorno de ambos extremos (en los naturales, irregulares, queda un borde limpio)
+    const offPts = [];
+    for (const R of [ring[0], ring[ns]]) for (let q = 0; q < N; q++) {
+      const [u, v] = R.loc[q]; // todo el contorno (también el del costado abierto): el marco tiene la forma del túnel
+      if (q === 0 || q === N - 1 || v <= 0.01) { offPts.push([u + Math.sign(u || (q === 0 ? -1 : 1)) * box.thick, 0]); continue; }
+      const du = u, dv = v - cvC, d = Math.hypot(du, dv) || 1;
+      offPts.push([u + (du / d) * box.thick, Math.max(0, v + (dv / d) * box.thick)]);
+    }
+    const outline = convexHull2(offPts); // antihorario, en (u, v) local
+    const toOuter = ([u, v], q) => {
+      // rayo desde el centro de la sección hasta el contorno exterior; el piso sale hacia el costado
+      if (q === 0 || q === N - 1 || v <= 0.01) { const sg = Math.sign(u || (q === 0 ? -1 : 1)); return [u + sg * box.thick, 0]; }
       const du = u, dv = v - cvC;
-      let k = Infinity;
-      if (Math.abs(du) > 1e-9) k = Math.min(k, box.A / Math.abs(du));
-      if (dv > 1e-9) k = Math.min(k, (box.B - cvC) / dv);
-      if (!isFinite(k)) k = 1;
-      return [du * k, Math.max(0, cvC + dv * k)];
+      let best = Infinity;
+      for (let k2 = 0; k2 < outline.length; k2++) {
+        const [ax, ay] = outline[k2], [bx, by] = outline[(k2 + 1) % outline.length];
+        const ex = bx - ax, ey = by - ay, den = du * ey - dv * ex;
+        if (Math.abs(den) < 1e-12) continue;
+        const t2 = ((ax) * ey - (ay - cvC) * ex) / den, w = ((ax) * dv - (ay - cvC) * du) / den;
+        if (t2 > 0 && w >= -1e-9 && w <= 1 + 1e-9) best = Math.min(best, t2);
+      }
+      if (!isFinite(best)) best = 1;
+      return [du * best, Math.max(0, cvC + dv * best)];
     };
     const portal = (atStart) => {
       const pos = [], uv = [], idx = [];
@@ -568,7 +632,7 @@ export function buildTunnelGeometry(layout, elev, spIn, runs, opts = {}) {
       const dir = atStart ? -1 : 1; // hacia afuera del túnel
       const sFront = sEnd + dir * box.depth, sBack = sEnd - dir * collarIn, sIn = sEnd - dir * 0.3;
       const Ff = frameAt(r, e, sFront), Fb = frameAt(r, e, sBack), Fi = frameAt(r, e, sIn);
-      const inner = R0.loc, outer = inner.map(toOuter);
+      const inner = R0.loc, outer = inner.map((p2, q) => toOuter(p2, q));
       const qs = [];
       for (let q = 0; q < N; q++) if (keep[q]) qs.push(q);
       const quad = (A, B, C, D, uA, uB, vA, vB) => {
@@ -768,7 +832,7 @@ export function buildTunnelGeometry(layout, elev, spIn, runs, opts = {}) {
       openMode: t.openMode ?? sp.tunnelOpen, pillarCount: nPil, custom: !!t.custom, key: t.key ?? -1,
       shape: sp.tunnelShape, type: sp.tunnelType, natural, density: sp.tunnelDensity, meshMode: t.meshMode || 'uniform', maxTris: t.maxTris, adapt: t.adapt, rocksOn, stalOn, rockDensity: t.rockDensity ?? 50, stalDensity: t.stalDensity ?? 50, singleMesh, sections: ns + 1, profilePts: N,
       width: sp.tunnelWidth, height: sp.tunnelHeight, caveSize: sp.caveSize, portalFrame: sp.portalFrame ?? 1, portalDepth: sp.portalDepth ?? 1,
-      walls, ceiling, walkways, portals, stalactites, rocks, stalItems, rockItems, caveSnap, pillars, tris, box, shell, noHill: !!t.noHill,
+      walls, ceiling, walkways, portals, stalactites, rocks, stalItems, rockItems, caveSnap, pillars, tris, box, outline: open ? null : outline, shell, noHill: !!t.noHill,
     });
   }
   return out;

@@ -1,8 +1,8 @@
 // Bordes de la pista: camino de tierra y barrera de contención. Se extruyen de las mismas secciones que la malla de
 // la pista (trackRows), así heredan su densidad y su optimización; la coordenada UV a lo largo sigue la distancia
 // recorrida, por lo que la textura se ve igual con más o menos secciones.
-import { DEFAULT_SCENE, trackRows } from './scene.js';
-import { edgeParams } from './tunnels.js';
+import { DEFAULT_SCENE, trackRows, skirtDepth } from './scene.js';
+import { edgeParams, dirtWidthAt } from './tunnels.js';
 import { SpatialGrid } from './geometry.js';
 
 const has = (v, side) => v === 'both' || v === side;
@@ -34,14 +34,14 @@ export function buildEdgeMeshes(layout, elev, spIn = {}, opts = {}) {
   const res = { dirt: [], barriers: [], dirtTris: 0, barrierTris: 0 };
   // parámetros propios de la pista y de los atajos
   if (!layout || !elev) return res;
-  const wants = (P) => ({ dirt: P.dirtSide !== 'none' && P.dirtWidth > 0, bar: P.barrierSide !== 'none' && P.barrierHeight > 0 });
+  const wants = (P) => ({ dirt: P.dirtSide !== 'none' && Math.max(P.dirtWidthL, P.dirtWidthR) > 0, bar: P.barrierSide !== 'none' && P.barrierHeight > 0 });
   const PR = layout.routes.map((r) => edgeParams(sp, r)); // cada atajo con sus propios parámetros
   const WR = PR.map(wants);
   const bridgeEdges = (r) => (r.bridges || []).some((b) => b.dirt || b.barrier === true || (b.barrier == null && b.type === 'bridge'));
   if (!WR.some((w) => w.dirt || w.bar) && !(sp.suspRanges || []).some((z) => z.dirt || z.barrier) && !layout.routes.some(bridgeEdges)) return res;
   const skip = opts.skip || [];
   const rowsAll = trackRows(layout, elev, sp);
-  const skirt = sp.skirts && sp.terrain ? sp.terrainGap + 0.8 : 0;
+  const skirt = sp.skirts && sp.terrain ? skirtDepth(sp) : 0;
   // muestras de todas las rutas, para abrir los bordes donde se meterían en otra calzada (salidas de atajos)
   let maxW = 8;
   for (const r of layout.routes) for (let i = 0; i < r.n; i++) maxW = Math.max(maxW, r.w[i]);
@@ -82,7 +82,7 @@ export function buildEdgeMeshes(layout, elev, spIn = {}, opts = {}) {
     const P = PR[k], Wt = WR[k];
     const hasSusp = susp.some((z) => z.k === k && (z.dirt || z.barrier));
     if (!Wt.dirt && !Wt.bar && !hasSusp && !bridgeEdges(r)) return;
-    const dw = Math.max(0, P.dirtWidth || 3), bh = P.barrierHeight > 0 ? P.barrierHeight : 0.8;
+    const bh = P.barrierHeight > 0 ? P.barrierHeight : 0.8;
     const bt = Math.max(0, P.barrierThick ?? 0.25), plane = bt < 0.01; // grosor 0: plano de una cara (mira a la calzada)
     const dTile = Math.max(0.5, P.dirtTile || 4), bTile = Math.max(0.5, P.barrierTile || 4);
     const e = elev.routes[k];
@@ -108,7 +108,9 @@ export function buildEdgeMeshes(layout, elev, spIn = {}, opts = {}) {
       const onFor = (z, want, routeHas, routeSide) => (z ? !!want && (routeHas || routeSide === 'none' || !routeSide) : routeHas);
       // en un puente: su camino de tierra y su barrera, del lado elegido (ambos, izquierda o derecha)
       // en un tramo: su camino de tierra y su barrera, del lado elegido; null = como la pista
-      const dOn = frames.map((F, a) => (brF[a] && brF[a].dirt != null ? !!brF[a].dirt && has(brF[a].dirtSide || 'both', sideKey) : onFor(suspF[a], suspF[a] && suspF[a].dirt, routeDirt, P.dirtSide)));
+      // ancho del camino de tierra en cada fila (0 = sin camino): el de la ruta o el propio del tramo (lados y anchos)
+      const dAt = frames.map((F) => dirtWidthAt(sp, r, k, F.s, side, P));
+      const dOn = dAt.map((w) => w > 0);
       const bOn = frames.map((F, a) => (brF[a] && brF[a].barrier != null ? brF[a].barrier !== false && has(brF[a].barrierSide || 'both', sideKey) : onFor(suspF[a], suspF[a] && suspF[a].barrier, routeBar, P.barrierSide)));
       if (!dOn.some(Boolean) && !bOn.some(Boolean)) continue;
       // tramo a tramo: ¿se dibuja?
@@ -126,8 +128,6 @@ export function buildEdgeMeshes(layout, elev, spIn = {}, opts = {}) {
       const segSusp = (a) => !!suspAt(r, k, (frames[a].s + frames[a + 1].s) / 2);
       // tramo de puente: su punto medio cae en un puente (malla y material propios del puente)
       const segBridge = (a) => bridgeAt(r, (frames[a].s + frames[a + 1].s) / 2);
-      // ancho del camino de tierra en cada fila (en un puente, solo si el puente lo lleva)
-      const dAt = frames.map((F, a) => (dOn[a] ? dw : 0));
       // índices por grupo: pista, tramos suspendidos y cada puente
       const groupOf = (a) => { const b = segBridge(a); return b ? `b${b.idx}` : segSusp(a) ? 's' : 'n'; };
       const tyOf = (bi) => { const b = (r.bridges || []).find((q) => q.idx === bi); return b && b.type === 'track' ? 'tramo' : b && b.type === 'cut' ? 'socavado' : 'puente'; };

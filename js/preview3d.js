@@ -7,7 +7,7 @@ import { buildEdgeMeshes } from './edges.js';
 import { instancedGroup, instanceMatrix } from './assets.js';
 import { decoSetItems, treeModelItems, treeModelItem, grassModelItems } from './deco.js';
 import { buildShadows, shadowCasters, sunVector } from './shadows.js';
-import { buildTrackMesh, trackRows, trackCols, coveredRanges, terrainTint, buildTerrain, buildTrees, buildHills, buildStartGate, buildGrass, makeGround, bridgePillars, suspPillars, pillarBlocked, moveTree, treeConeVerts, vegPlace } from './scene.js';
+import { buildTrackMesh, trackRows, trackCols, coveredRanges, terrainTint, buildTerrain, buildTrees, buildHills, buildStartGate, buildGrass, makeGround, bridgePillars, suspPillars, pillarBlocked, moveTree, treeConeVerts, vegPlace, buildTriggers } from './scene.js';
 import { buildRivers } from './rivers.js';
 import { pillarGeometry } from './tunnels.js';
 import { applyRefLook } from './refmodel.js';
@@ -41,7 +41,8 @@ export class Preview3D {
     this.extras = new THREE.Group();
     this.pillars = new THREE.Group();
     this.itemsGroup = new THREE.Group(); // charcos, turbo pads, nitro strips
-    this.scene.add(this.trackGroup, this.extras, this.pillars, this.itemsGroup);
+    this.triggerGroup = new THREE.Group(); // triggers (semitransparentes en la vista; invisibles al exportar)
+    this.scene.add(this.trackGroup, this.extras, this.pillars, this.itemsGroup, this.triggerGroup);
     this.texCache = new Map();
     this.terrainData = null;
     this.extrasTimer = null;
@@ -511,6 +512,7 @@ export class Preview3D {
     this.bbox = bbox;
     if (fitView || !this.fitted) this.fit();
     this.buildItems();
+    this.buildTriggerMeshes();
     this.updateHandles();
     if (keepExtras && this.extras.children.length) { this.applyExag(); this.buildPillars(); }
     else this.scheduleExtras();
@@ -602,7 +604,7 @@ export class Preview3D {
   /** Terreno y árboles se recalculan con una pequeña espera (son más pesados). */
   scheduleExtras() {
     clearTimeout(this.extrasTimer);
-    this.extrasTimer = setTimeout(() => this.buildExtras(), 220);
+    this.extrasTimer = setTimeout(() => { this.extrasTimer = null; this.buildExtras(); }, 220);
   }
 
   /**
@@ -716,6 +718,7 @@ export class Preview3D {
     };
     const tex = this.texture(this.app.state.terrainTex);
     let newRuns = [];
+    this.trigTunnels = [];
     const riversW = this.app.riversWorld ? this.app.riversWorld() : null;
     this.riverMeshes = [];
     this.wallMeshes = [];
@@ -784,6 +787,7 @@ export class Preview3D {
       const HS = buildHills(L, E, sp, T, hillsW);
       this.hillData = HS;
       newRuns = HS.tunnels.map((t) => ({ k: t.k, e0: t.e0, e1: t.e1, s0: t.s0, s1: t.s1 }));
+      this.trigTunnels = HS.tunnels.map((t) => ({ id: t.id, k: t.k, e0: t.e0, e1: t.e1, name: `tunel_${String(t.id + 1).padStart(2, '0')}` }));
       for (const h of HS.hills) {
         const m = tex
           ? new THREE.MeshStandardMaterial({ map: tex, roughness: 1, metalness: 0, color: 0xd8c8b0, side: THREE.DoubleSide })
@@ -929,9 +933,10 @@ export class Preview3D {
       info.grassTris = GR.tris;
     }
     this.buildTreeMesh(info); // árboles (conos combinados o modelos)
+    this.buildTriggerMeshes(); // triggers de las bocas (ya se conocen los túneles)
     this.buildShadowMesh(info);
     // los bordes se cortan en los túneles: si cambiaron, se rehacen
-    if (JSON.stringify(newRuns) !== JSON.stringify(this.tunnelRuns)) { this.tunnelRuns = newRuns; setTimeout(() => this.update(false, true), 0); } // pista (material de los tramos en túnel) y bordes
+    if (JSON.stringify(newRuns) !== JSON.stringify(this.tunnelRuns)) { this.tunnelRuns = newRuns; this.pendingUpdate = true; setTimeout(() => { this.pendingUpdate = false; this.update(false, true); }, 0); } // pista (material de los tramos en túnel) y bordes
     this.applyExag(); // también rehace la decoración (sets y modelos de vegetación)
     info.ms = performance.now() - t0;
     if (this.grid) this.grid.visible = !sp.terrain;
@@ -1078,6 +1083,35 @@ export class Preview3D {
     if (this.vegRing) { const w = this.vegItem(v); if (w) this.vegRing.position.set(w.x, w.y, this.vegZ(w.x, w.y, w.z) + 0.15); }
     this.needsFrame = true;
     return { x, y };
+  }
+
+  /** Triggers (bocas de túneles y propios): cajas semitransparentes con aristas; el seleccionado en amarillo. */
+  buildTriggerMeshes() {
+    this.disposeGroup(this.triggerGroup);
+    this.triggerGroup.scale.set(1, 1, this.zExag);
+    const st = this.app.state, L = st.layout, E = st.result, sp = st.scene;
+    this.triggerData = [];
+    if (!L || !E) return;
+    const TR = buildTriggers(L, E, sp, this.app.triggersWorld ? this.app.triggersWorld() : [], this.trigTunnels || []);
+    this.triggerData = TR;
+    if (sp.showTriggers === false) { this.needsFrame = true; return; }
+    const Mx = new THREE.Matrix4();
+    for (const t of TR) {
+      const sel = t.kind === 'custom' && st.selTrigger != null && t.custom === st.selTrigger;
+      const col = sel ? 0xffe066 : t.kind === 'custom' ? 0x3fd7ff : 0xff9f40;
+      const g = new THREE.BoxGeometry(t.d, t.w, t.h).translate(0, 0, t.h / 2);
+      const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: sel ? 0.3 : 0.16, depthWrite: false }));
+      const ed = new THREE.LineSegments(new THREE.EdgesGeometry(g), new THREE.LineBasicMaterial({ color: col, transparent: true, opacity: 0.85 }));
+      m.add(ed);
+      m.position.set(t.center[0], t.center[1], t.center[2]);
+      Mx.makeBasis(new THREE.Vector3(...t.T).normalize(), new THREE.Vector3(...t.L).normalize(), new THREE.Vector3(...t.U).normalize());
+      m.quaternion.setFromRotationMatrix(Mx);
+      m.scale.set(1, 1, 1 / this.zExag); // el grupo se estira con la exageración: el cubo conserva su alto real
+      m.userData = { trigger: t.kind, triggerId: t.custom ?? null, noWire: true };
+      m.renderOrder = 4;
+      this.triggerGroup.add(m);
+    }
+    this.needsFrame = true;
   }
 
   /** Altura de la calzada más cercana (para apoyar túneles en la pista exagerada). */
@@ -1271,7 +1305,12 @@ export class Preview3D {
     const hc = caves.length ? ray.intersectObjects(caves, false) : [];
     if (hc.length) { this.app.selectCave({ ...hc[0].object.userData.cave }); return; }
     if (st0.selCave) this.app.selectCave(null, false);
+    // trigger propio: clic sobre su caja lo selecciona
+    const trigMeshes = this.triggerGroup.children.filter((o) => o.userData.triggerId != null);
+    const ht = trigMeshes.length ? ray.intersectObjects(trigMeshes, false) : [];
     const h = ray.intersectObjects(objs, false);
+    if (ht.length && (!h.length || ht[0].distance <= h[0].distance + 0.5) && this.app.selectTrigger) { this.app.selectTrigger(ht[0].object.userData.triggerId); return; }
+    if (this.app.state.selTrigger != null && this.app.selectTrigger) this.app.selectTrigger(null);
     const ud = h.length ? h[0].object.userData : {};
     // árbol o adorno de un grupo sin «single mesh»: se elige ese elemento (instancia o cono de la malla combinada)
     // (se atraviesa la vegetación que no se edita, hasta el primer objeto sólido)

@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { GLTFExporter } from '../vendor/exporters/GLTFExporter.js';
 import { buildRivers } from './rivers.js';
-import { buildTrackMesh, coveredRanges, terrainTint, buildTerrain, buildTrees, buildHills, buildStartGate, buildGrass, makeGround, bridgePillars, suspPillars } from './scene.js';
+import { buildTrackMesh, coveredRanges, terrainTint, buildTerrain, buildTrees, buildHills, buildStartGate, buildGrass, makeGround, bridgePillars, suspPillars, buildTriggers } from './scene.js';
 import { pillarGeometry } from './tunnels.js';
 import { buildEdgeMeshes } from './edges.js';
 import { assetObject, builtinAsset, mergedAssetMeshes } from './assets.js';
@@ -367,6 +367,31 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
       }
     }
   }
+  // triggers: cubos invisibles (material transparente «trigger», opacidad 0) de todo el ancho de la pista, pivote en el
+  // centro de la base; en los extras de glTF (userData) va de qué trigger se trata (túnel: entrada / salida, o propio)
+  let triggerCount = 0;
+  {
+    const tun = HS ? HS.tunnels.map((t) => ({ id: t.id, k: t.k, e0: t.e0, e1: t.e1, name: `tunel_${String(t.id + 1).padStart(2, '0')}` })) : [];
+    const TR = buildTriggers(layout, elev, sp, textures.triggers || [], tun);
+    if (TR.length) {
+      const grp = new THREE.Group();
+      grp.name = 'triggers';
+      root.add(grp);
+      const mat = new THREE.MeshBasicMaterial({ name: 'trigger', color: 0x00ffff, transparent: true, opacity: 0, depthWrite: false });
+      const Mx = new THREE.Matrix4();
+      for (const t of TR) {
+        const g = new THREE.BoxGeometry(t.d, t.w, t.h).translate(0, 0, t.h / 2);
+        const m = new THREE.Mesh(g, mat);
+        m.name = t.name;
+        m.position.set(...t.center);
+        Mx.makeBasis(new THREE.Vector3(...t.T).normalize(), new THREE.Vector3(...t.L).normalize(), new THREE.Vector3(...t.U).normalize());
+        m.quaternion.setFromRotationMatrix(Mx);
+        m.userData = { trigger: t.kind, ...(t.tunnel ? { tunnel: t.tunnel } : {}), ...(t.label ? { label: t.label } : {}), width: +t.w.toFixed(3), depth: t.d, height: t.h };
+        grp.add(m);
+        triggerCount++;
+      }
+    }
+  }
   // hierba: una sola malla (planos cruzados) con textura recortada por transparencia
   let grassCount = 0;
   if (sp.grass) {
@@ -426,7 +451,7 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
       shadowCount = SH.count; shadowTris = SH.tris;
     }
   }
-  return { scene, root, info: { shadows: shadowCount, shadowTris, decoCount, trackTris: tm.indices.length / 3, terrainTris: terrain && sp.terrain ? terrain.tris : 0, hills: HS ? HS.hills.length : 0, hillTris: HS ? HS.tris : 0, tunnels: HS ? HS.tunnelGeo.length : 0, gateTris, trees: treeCount, treeTris: treeCount * 16, grass: grassCount, items: itemCount } };
+  return { scene, root, info: { shadows: shadowCount, shadowTris, decoCount, trackTris: tm.indices.length / 3, terrainTris: terrain && sp.terrain ? terrain.tris : 0, hills: HS ? HS.hills.length : 0, hillTris: HS ? HS.tris : 0, tunnels: HS ? HS.tunnelGeo.length : 0, gateTris, trees: treeCount, treeTris: treeCount * 16, grass: grassCount, items: itemCount, triggers: triggerCount } };
 }
 
 export async function exportGLB(...args) {

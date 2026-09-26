@@ -130,10 +130,58 @@ export class GameCam {
     this.mode = m;
     const u = this.car.userData;
     const first = m === 'first';
-    // primera persona: solo capó y tablero a la vista
-    for (const part of [u.cabin, u.roof, u.body, u.spoiler, ...u.wheels]) part.visible = !first;
-    u.dash.visible = first;
+    const own = !!this.customCar;
+    // auto 3D propio: se ocultan las piezas del auto por defecto; en primera persona no se ve el auto
+    for (const c of this.car.children) if (c !== this.customCar) c.visible = !own;
+    if (own) this.customCar.visible = !first;
+    else {
+      // primera persona: solo capó y tablero a la vista
+      for (const part of [u.cabin, u.roof, u.body, u.spoiler, ...u.wheels]) part.visible = !first;
+      u.dash.visible = first;
+    }
     this.snapCamera = true;
+  }
+
+  /** Caja (en metros) del auto por defecto: el auto 3D cargado se escala para caber en ella. */
+  defaultBox() {
+    if (!this._defBox) { const c = buildCar(); c.userData.dash.visible = true; this._defBox = new THREE.Box3().setFromObject(c); }
+    return this._defBox;
+  }
+
+  /**
+   * Auto 3D propio (asset de loadAsset, o null = el auto por defecto). Se orienta con su lado más largo hacia adelante,
+   * se escala (uniforme) para caber en la caja del auto por defecto, se centra y se apoya en el suelo.
+   * adj = {dz (m), sx, sy, sz (×), rot (grados, giro sobre Z)}: ajuste manual encima del automático.
+   */
+  setCarModel(A, adj = {}) {
+    if (this.customCar) { this.car.remove(this.customCar); this.customCar = null; }
+    this.carInfo = null;
+    if (A) {
+      const inner = new THREE.Group();
+      for (const part of A.parts) { const m = new THREE.Mesh(part.geometry, part.material); part.matrix.decompose(m.position, m.quaternion, m.scale); inner.add(m); }
+      const s0 = new THREE.Box3().setFromObject(inner).getSize(new THREE.Vector3());
+      const autoRot = s0.y > s0.x * 1.05 ? Math.PI / 2 : 0; // el lado más largo va a lo largo (+X adelante)
+      const rotG = new THREE.Group();
+      rotG.add(inner);
+      rotG.rotation.z = autoRot + ((adj.rot || 0) * Math.PI) / 180;
+      rotG.updateMatrixWorld(true);
+      const bb = new THREE.Box3().setFromObject(rotG), sz = bb.getSize(new THREE.Vector3()), c = bb.getCenter(new THREE.Vector3());
+      const D = this.defaultBox(), ds = D.getSize(new THREE.Vector3()), dc = D.getCenter(new THREE.Vector3());
+      const k = Math.min(ds.x / Math.max(1e-6, sz.x), ds.y / Math.max(1e-6, sz.y), ds.z / Math.max(1e-6, sz.z));
+      const shift = new THREE.Group();
+      shift.add(rotG);
+      shift.position.set(-c.x, -c.y, -bb.min.z);
+      const outer = new THREE.Group();
+      outer.add(shift);
+      outer.scale.set(k * (adj.sx || 1), k * (adj.sy || 1), k * (adj.sz || 1));
+      outer.position.set(dc.x, dc.y, adj.dz || 0);
+      outer.userData.defaultPart = false;
+      this.customCar = outer;
+      this.car.add(outer);
+      this.carInfo = { name: A.name, k, size: [sz.x * k, sz.y * k, sz.z * k], tris: A.tris };
+    }
+    this.setMode(this.mode);
+    this.pv.needsFrame = true;
   }
 
   onSceneRebuilt() { /* la pista se reconstruyó: nada que hacer, la pose se recalcula cada cuadro */ }

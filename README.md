@@ -1,21 +1,36 @@
 # Track Spline Generator
 
-**Versión 0.55** (se muestra en la barra superior, junto al nombre, y se guarda en cada proyecto como `appVersion`).
+**Versión 0.58** (se muestra en la barra superior, junto al nombre, y se guarda en cada proyecto como `appVersion`).
 
 Aplicación local con interfaz web que convierte un layout 2D de pista (minimapa o trazo a mano) en un spline 3D. Los cruces del layout se resuelven como pasos sobre/bajo nivel. El resto de la pista recibe colinas suaves controladas por un slider. Se exporta como curvas para **Blender** y **3ds Max**, donde se genera la geometría.
 
 ## Organización de la interfaz (versión 0.51)
 
-- **Encabezado:** Nuevo, Abrir, Guardar, Deshacer, Ajustes y **Exportar ▾** (menú con Blender, 3ds Max, JSON, OBJ, escena .glb y escena .fbx). El selector de ejemplos está en *Entrada*; «Anclar todas las ventanas» en *Ajustes*; importar el modelo 3D de referencia, en su sección.
+- **Encabezado:** Nuevo, Abrir, Guardar, Deshacer, Ajustes y **Exportar** (ventana con escena .glb y .fbx, Blender, 3ds Max, JSON, OBJ y sus opciones). El selector de ejemplos está en *Entrada*; «Anclar todas las ventanas» en *Ajustes*; importar el modelo 3D de referencia, en su sección.
 - **Barra del mapa 2D:** herramientas (Navegar, Editar puntos, Dibujar —con la casilla *Extender la pista existente*—, Dibujar atajo, Referencia), pinceles (Cerros, Pintar subdivisión —*Aumentar* / *Disminuir subd.*—, Esculpir relieve —*Elevar / hundir* o *Suavizar*—, Ríos y cascadas), **Elementos de pista ▾** (+ Nitro strips, + Turbo pads, + Charcos), Encuadrar y Trazo crudo.
 - **Sub-barra de Editar puntos:** nivel (Vértice, Segmento) y transformación (Mover, Rotar, Escalar); *Forma*: Recta, Suavizar, Radio; *Crear*: Helix, Rizo, Bifurcar, Tramo; y Abrir.
 - **Barra 3D:** Exagerar Z, Encuadrar, Wireframe, Generar terreno, Generar árboles y decoración, Cámara de juego y el gizmo.
 - **Barra del perfil:** Encuadrar, Aplanar, Suavizar alturas (con su barra 0–100), Perfil de tramo. Con 2 o más puntos seleccionados, un marco con asas arriba y abajo escala sus alturas.
-- **Barra lateral, en grupos:** *Entrada* (Entrada, Imagen de referencia, Modelo de referencia 3D) · *Forma de la pista* (Trazado, Spline, Tramos, Rutas alternativas) · *Alturas* (Elevación, Cruces, Peralte) · *Aspecto de la pista* (Textura, Geometría, Bordes) · *Juego* (Meta y pórtico de salida, Elementos de pista, Cielo) · *Terreno* (Terreno, Relieve y subdivisión, Cerros y túneles —con la textura de tramos cubiertos—, Ríos y cascadas) · *Vegetación y decoración* (Árboles y hierba, Decoración, Planos de sombra) · *Salida* (Exportación).
-- La organización anterior (versión 0.5) está descrita en `LAYOUT-v0.5.md`, por si se quiere volver a ella.
+- **Barra lateral, en grupos:** *Entrada* (Entrada, Imagen de referencia, Modelo de referencia 3D) · *Forma de la pista* (Trazado, Spline, Tramos, Rutas alternativas) · *Alturas* (Elevación, Cruces, Peralte) · *Aspecto de la pista* (Textura, Geometría, Bordes) · *Juego* (Meta y pórtico de salida, Elementos de pista, Triggers, Cielo) · *Terreno* (Terreno, Relieve y subdivisión, Cerros y túneles —con la textura de tramos cubiertos—, Ríos y cascadas) · *Vegetación y decoración* (Árboles y hierba, Decoración, Planos de sombra). La exportación está en la ventana *Exportar* (encabezado).
 
 
 **Pinceles del terreno (0.52):** *Pintar subdivisión* tiene *Aumentar subd.* (por defecto: la pincelada tiene (n + 1)² veces más polígonos) o *Disminuir subd.* (la pincelada tiene (n + 1)² veces menos: el terreno queda más simple en esa zona); también vale para la subdivisión de un cerro seleccionado. *Esculpir relieve* tiene los botones *Elevar / hundir* (clic izquierdo eleva, derecho hunde) y **Suavizar**: el pincel no eleva ni hunde, reparte el relieve esculpido bajo él (baja las cimas y rellena los bordes, conservando el volumen); la *Fuerza* marca cuánto suaviza cada toque. Suaviza el relieve esculpido, no el terreno natural.
+**Novedades 0.58:**
+- **Subdividir transiciones** (*Geometría de la pista → Transiciones de ancho*, marcada por defecto): donde la pista pasa de un ancho a otro (tramos, atajos) se agregan divisiones a lo largo y una sección cada ~1 m, así la línea segmentada y las líneas de borde no se tuercen en zigzag. Solo en la transición: la pista normal y la parte ya ensanchada o angostada no cambian (en esa parte la textura se reparte pareja, sin torcerse). Las uniones con el resto se cierran en abanico (sin vértices sueltos) y la textura no salta. Las divisiones se ven sobre una barra con la textura de la pista a lo ancho: se arrastran para alinearlas con las líneas pintadas (lo ideal: una a cada lado de cada línea), clic en una para escribir su posición, *+ División* / *− División* (hasta 12) y *Por defecto* (4, que calzan con la textura de asfalto por defecto). Costo: unos 2 triángulos por división y por sección, solo en las transiciones.
+- **Auto 3D propio** (barra de la cámara de juego → *Auto 3D…*, FBX o GLB): se orienta con su lado más largo hacia adelante, se escala (uniforme, sin deformarlo) para caber en la caja del auto por defecto, se centra y se apoya en la pista. *Ajuste auto 3D*: *Altura* (si queda enterrado o flotando por su pivote), *Escala X, Y, Z* y *Giro* (0/90/180/270°, si mira hacia atrás). *Quitar auto 3D* vuelve al auto por defecto. Se guarda con el proyecto (hasta 40 MB). En primera persona el auto propio no se ve.
+- **Exportar** abre una ventana (se mueve, se reescala y se cierra con ✕ o Esc) con la escena (.glb / .fbx), las curvas (Blender, 3ds Max, JSON, OBJ) y sus opciones. El menú desplegable anterior quedaba tapado por los paneles; la sección *Exportación* de la barra lateral pasó a la ventana.
+
+**Novedades 0.57:**
+- **Triggers** (sección *Triggers*, grupo *Juego*): cubos invisibles de todo el ancho de la pista (calzada + camino de tierra + barrera), alineados con ella, exportados en el grupo `triggers` con el material `trigger` (transparente) y, en glTF, extras que dicen de qué se trata (`trigger`: `tunnel_enter`, `tunnel_exit` o `custom`; `tunnel`; `label`; medidas). *Triggers en la entrada y la salida de los túneles* agrega `trigger_tunel_NN_entrada` / `_salida` en cada boca (según el sentido de marcha), con *Profundidad* y *Alto*: sirven, por ejemplo, para cambiar la iluminación del auto en el motor. **Triggers propios:** *+ Nuevo trigger* y clic en la pista (mapa); se arrastran con *Navegar*, se renombran en su tarjeta (se exportan como `trigger_<nombre>`), tienen profundidad y alto propios y Supr los quita. En la vista 3D y en el mapa se ven semitransparentes (naranjo = túneles, celeste = propios); *Mostrar los triggers* los oculta.
+- **Bocas de túnel con la forma del túnel:** el marco sigue el contorno del túnel (arco, círculo, óvalo…) en vez de un rectángulo, y el cerro se recorta con esa forma (sin huecos en las esquinas). En los naturales se usa un contorno limpio (envolvente del borde irregular); con costado abierto el cerro se sigue despejando entre los pilares.
+- **Camino de tierra con ancho a cada lado:** *Ancho izquierdo* y *Ancho derecho* en *Bordes de la pista* y en cada atajo. Cada tramo tiene *Ancho: Como la pista* (por defecto) o *Propio a cada lado*. El terreno, la barrera, los túneles y los triggers usan esos anchos.
+- **Faldones** (ahora en *Geometría de la pista*): del lado donde hay camino de tierra la pista no pone su faldón (el camino tiene el suyo hasta el terreno), fila por fila, también en los tramos. *Alto del faldón* configurable (pista y camino de tierra).
+- *Más detalle en lo esculpido* también en la barra del pincel *Esculpir relieve*.
+- **Arreglo:** *Suavizar alturas* (perfil) no hacía nada: la barra compartía el identificador con la casilla «También alturas» de *Suavizar tramo*. Las pruebas de interfaz ahora revisan que no haya identificadores repetidos.
+- Los mensajes de error o instrucción duran 3,3 s (el 60 % de antes).
+
+**Novedades 0.56 (pruebas):** nuevas pruebas de interfaz en un solo archivo, `test/ui-tests.cjs`: abren la app una sola vez en Chromium sin ventana y recorren 25 funciones (herramientas y Esc, menús, mensajes, avisos, perfil —Aplanar, escalar, suavizar—, tramos, puentes con pilares, pinceles, cerros y túneles —Quitar cerro—, cavernas, árboles y decoración con Single mesh, guardar/abrir, exportaciones y cámara de juego). En vez de esperas fijas esperan a que la app quede quieta, así toman alrededor de un minuto. Cada prueba verifica el resultado; si falla, deja una captura de la pantalla. Para correrlas: `npm install`, `npx playwright install chromium` (la primera vez) y `npm run test:ui`; con palabras (`npm run test:ui -- arbol tunel`) corre solo esas. `npm run test:all` corre todo.
+
 **Novedades 0.55:** *Aumentar / Disminuir subd.* aparece solo con *Pintar subdivisión* (antes se veía también en Esculpir relieve, Cerros y Ríos, aunque ahí no hacía nada). En *Esculpir relieve*, **Elevar / hundir** y **Suavizar** son dos botones en vez de un menú.
 
 **Novedades 0.54:**
@@ -239,7 +254,8 @@ js/export-glb.js            escena .glb (y la escena compartida con el FBX)
 js/export-fbx.js            escritor FBX binario 7.4
 js/gamecam.js               cámara de juego
 js/editor2d.js, profile.js, preview3d.js   vistas
-test/run-tests.js           tests del núcleo: npm test
+test/run-tests.js           tests del núcleo (geometría, elevación, terreno, exportación): npm test
+test/ui-tests.cjs           pruebas de interfaz en Chromium sin ventana: npm run test:ui (o npm run test:ui -- arbol tunel)
 ```
 
 ## Límites conocidos

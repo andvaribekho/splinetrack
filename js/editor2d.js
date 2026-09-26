@@ -206,6 +206,11 @@ export class Editor2D {
             this.caveDrag = { c: { tid, kind: cvI.kind, key: cvI.key }, off: [sx - px0, sy - py0], pos: null };
             return;
           }
+          // «+ Nuevo trigger»: el clic lo ubica en la pista
+          if (tool === 'pan' && this.app.placingTrigger && this.app.placingTrigger()) { this.app.placeTriggerAt(this.toLayout(sx, sy)); this.draw(); return; }
+          // trigger propio: seleccionar y arrastrar a lo largo de la pista
+          const tg = tool === 'pan' ? this.hitTrigger(sx, sy) : null;
+          if (tg) { this.app.selectTrigger(tg.custom); this.app.beginTriggerDrag(tg.custom); this.trigDrag = true; return; }
           // árbol o adorno de un grupo sin «single mesh»: seleccionar y arrastrar (en planta, apoyado en el suelo)
           const vg = tool === 'pan' ? this.hitVeg(sx, sy) : null;
           if (vg) {
@@ -257,6 +262,7 @@ export class Editor2D {
         this.draw();
         return;
       }
+      if (this.trigDrag) { this.app.moveTriggerLayout(p); return; }
       if (this.vegDrag) {
         const L0 = this.app.state.layout, [lx, ly] = this.toLayout(sx - this.vegDrag.off[0], sy - this.vegDrag.off[1]);
         const [wx, wy] = L0.toWorld(lx, ly);
@@ -308,6 +314,8 @@ export class Editor2D {
       if (this.hitCar(sx, sy)) { cv.style.cursor = 'grab'; return; }
       if (tl === 'paint' || tl === 'hill' || tl === 'itemPaint' || tl === 'sculpt' || tl === 'river') { this.paintCursor = p; cv.style.cursor = 'none'; this.draw(); return; }
       if (tl === 'pan' && this.hitCave(sx, sy)) { cv.style.cursor = 'move'; return; }
+      if (tl === 'pan' && this.app.placingTrigger && this.app.placingTrigger()) { cv.style.cursor = 'copy'; return; }
+      if (tl === 'pan' && this.hitTrigger(sx, sy)) { cv.style.cursor = 'move'; return; }
       if (tl === 'pan' && this.hitVeg(sx, sy)) { cv.style.cursor = 'move'; return; }
       if (tl === 'pan' && this.app.itemAtLayout(p, 6 / this.view.zoom)) { cv.style.cursor = 'move'; return; }
       if (tl === 'pan' && this.app.state.ref3d && this.app.state.ref3d.sel && !this.app.state.ref3d.locked && this.hitRef3d(p)) { cv.style.cursor = 'move'; return; }
@@ -340,6 +348,7 @@ export class Editor2D {
       if (this.carDrag) { this.carDrag = false; this.app.endCarDrag(); cv.style.cursor = 'grab'; return; }
       if (this.painting) { const ses = this.painting; this.painting = null; this.app.endPaint(ses.kind, ses); this.draw(); return; }
       if (this.caveDrag) { const d = this.caveDrag; this.caveDrag = null; if (d.pos) this.app.commitCaveMove(d.c, d.pos); else this.draw(); return; }
+      if (this.trigDrag) { this.trigDrag = false; this.app.endTriggerDrag(); return; }
       if (this.vegDrag) { const d = this.vegDrag; this.vegDrag = null; if (d.pos) this.app.commitVegMove(d.v, d.pos); else this.draw(); return; }
       if (this.itemDrag) { this.itemDrag = null; this.app.endItemDrag(); return; }
       if (this.bridgeDrag) { this.bridgeDrag = null; this.app.endBridgeDrag(); return; }
@@ -556,6 +565,45 @@ export class Editor2D {
       ctx.beginPath(); ctx.arc(cx, cy, r + 2, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
     }
     ctx.restore();
+  }
+  /** Triggers: rectángulos a lo ancho de la pista (naranjo = bocas de túneles, celeste = propios, amarillo = seleccionado). */
+  drawTriggers(L) {
+    const list = this.app.triggerShapes ? this.app.triggerShapes() : [];
+    if (!list.length || this.app.state.scene.showTriggers === false) return;
+    const { ctx } = this, sel = this.app.state.selTrigger;
+    ctx.save();
+    ctx.font = '11px system-ui, sans-serif';
+    for (const t of list) {
+      const isSel = t.kind === 'custom' && sel != null && t.custom === sel;
+      const col = isSel ? '#ffe066' : t.kind === 'custom' ? '#3fd7ff' : '#ff9f40';
+      ctx.beginPath();
+      t.corners.forEach(([x, y], i) => { const [lx, ly] = L.toLayout(x, y); const [px, py] = this.toScreen(lx, ly); if (i) ctx.lineTo(px, py); else ctx.moveTo(px, py); });
+      ctx.closePath();
+      ctx.fillStyle = col + (isSel ? '66' : '33'); ctx.fill();
+      ctx.lineWidth = isSel ? 2 : 1.2; ctx.strokeStyle = col; ctx.stroke();
+      if (t.kind === 'custom' || isSel) {
+        const [lx, ly] = L.toLayout(t.corners[2][0], t.corners[2][1]);
+        const [px, py] = this.toScreen(lx, ly);
+        ctx.fillStyle = col; ctx.fillText(t.label || t.name, px + 4, py - 4);
+      }
+    }
+    ctx.restore();
+  }
+  /** Trigger propio bajo el cursor (en píxeles de pantalla). */
+  hitTrigger(sx, sy) {
+    const L = this.app.state.layout;
+    const list = L && this.app.triggerShapes ? this.app.triggerShapes().filter((t) => t.kind === 'custom') : [];
+    if (this.app.state.scene.showTriggers === false) return null;
+    for (const t of list) {
+      const P = t.corners.map(([x, y]) => this.toScreen(...L.toLayout(x, y)));
+      let inside = false;
+      for (let i = 0, j = P.length - 1; i < P.length; j = i++) {
+        if ((P[i][1] > sy) !== (P[j][1] > sy) && sx < ((P[j][0] - P[i][0]) * (sy - P[i][1])) / (P[j][1] - P[i][1]) + P[i][0]) inside = !inside;
+      }
+      const cx = P.reduce((a, q) => a + q[0], 0) / 4, cy = P.reduce((a, q) => a + q[1], 0) / 4;
+      if (inside || Math.hypot(sx - cx, sy - cy) < 7) return t;
+    }
+    return null;
   }
   /** Árbol o adorno editable bajo el cursor (en píxeles de pantalla). */
   hitVeg(sx, sy) {
@@ -1115,6 +1163,7 @@ export class Editor2D {
     if (L && E) this.drawItems(L);
     if (L && E) this.drawCaveItems(L);
     if (L && E) this.drawVegItems(L);
+    if (L && E) this.drawTriggers(L);
     if (L && st.selAlt != null) this.drawSelectedAlt(L);
     if (L && st.selBridge != null) this.drawSelectedBridge(L);
     if (L && this.app.state.gameActive && this.gameS != null) this.drawGameCar(L);

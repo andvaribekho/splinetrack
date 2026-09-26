@@ -79,6 +79,7 @@ const state = {
   selCross: null, // id del cruce seleccionado
   selBridge: null, // índice del puente seleccionado
   items: { puddle: [], pad: [], strip: [] }, // grupos de elementos de pista
+  triggers: [], // triggers propios [{id, name, p:[x, y] en coords del mapa, depth, height}]
   selItem: null, // {type, gid, idx}
   itemPaintTarget: null, // {type, gid} al pintar zonas de un grupo
   paintErase: false,
@@ -103,7 +104,7 @@ const state = {
 const undoStack = [];
 function snapshot() {
   const ref = state.ref ? { x: state.ref.x, y: state.ref.y, scale: state.ref.scale, opacity: state.ref.opacity } : null;
-  return JSON.stringify({ elevMode: state.elev.mode || 'auto', project: state.project, flatZones: state.flatZones, suspZones: state.suspZones, cutZones: state.cutZones, overrides: state.overrides, ref, refCanvas: !!state.ref, densityPaint: state.densityPaint, terrainSculpt: state.terrainSculpt, sculptCurves: state.sculptCurves, decoSets: state.decoSets, hills: state.hills, selHill: state.selHill, rivers: state.rivers, items: state.items, tunnelOverrides: state.scene ? state.scene.tunnelOverrides || [] : [], treeEdit: state.scene ? { single: state.scene.treeSingle !== false, bake: state.scene.treeBake || null } : null });
+  return JSON.stringify({ elevMode: state.elev.mode || 'auto', project: state.project, flatZones: state.flatZones, suspZones: state.suspZones, cutZones: state.cutZones, overrides: state.overrides, ref, refCanvas: !!state.ref, densityPaint: state.densityPaint, terrainSculpt: state.terrainSculpt, sculptCurves: state.sculptCurves, decoSets: state.decoSets, hills: state.hills, selHill: state.selHill, rivers: state.rivers, items: state.items, triggers: state.triggers, tunnelOverrides: state.scene ? state.scene.tunnelOverrides || [] : [], treeEdit: state.scene ? { single: state.scene.treeSingle !== false, bake: state.scene.treeBake || null } : null });
 }
 function pushUndo() {
   undoStack.push(snapshot());
@@ -132,6 +133,7 @@ function undo() {
     if (typeof preview !== 'undefined') preview.buildTreeMesh();
     if (typeof syncTreeEdit === 'function') syncTreeEdit();
   }
+  if (o.triggers) { state.triggers = o.triggers; if (!state.triggers.some((t) => t.id === state.selTrigger)) state.selTrigger = null; if (typeof renderTriggerPanel === 'function') { renderTriggerPanel(); triggersChanged(); } }
   if (o.decoSets && state.selVeg && state.selVeg.kind === 'deco') state.selVeg = null;
   if (o.tunnelOverrides && state.scene && JSON.stringify(o.tunnelOverrides) !== JSON.stringify(state.scene.tunnelOverrides || [])) state.scene.tunnelOverrides = o.tunnelOverrides; // ajustes por túnel (rocas y estalactitas movidas…)
   if (o.terrainSculpt) { state.terrainSculpt = o.terrainSculpt; if (typeof refreshSculptInfo === 'function') refreshSculptInfo(); }
@@ -367,6 +369,8 @@ function clearAllSelections() {
   state.selTunnel = null;
   state.selCave = null;
   if (state.selVeg) { state.selVeg = null; refreshVegEditInfo(); }
+  if (state.placingTrigger) setTriggerPlacing(false);
+  if (state.selTrigger != null) { state.selTrigger = null; renderTriggerPanel(); preview.buildTriggerMeshes(); }
   refreshArcBox();
   if (typeof editor !== 'undefined') { editor.draw(); profile.draw(); preview.updateHandles(); preview.setHillSelection(null); }
 }
@@ -1010,10 +1014,10 @@ const app = {
   },
   /** La barra «Suavizar alturas» vuelve a 0 cuando cambia la selección. */
   syncSmoothZ() {
-    const S = state.smoothZ, el = $('smoothZ');
+    const S = state.smoothZ, el = $('profSmooth');
     if (!el || !S || el === rangeDrag) return;
     const H = app.selHeights(), sig = H ? `${H.key}:${H.list.map((q) => q.idx).join(',')}` : '';
-    if (sig !== S.sig) { state.smoothZ = null; el.value = 0; $('smoothZVal').textContent = '0'; }
+    if (sig !== S.sig) { state.smoothZ = null; el.value = 0; $('profSmoothVal').textContent = '0'; }
   },
 
   // ---- edición de puntos de control ----
@@ -1850,6 +1854,29 @@ const app = {
   selectCave(c, refresh = true) { selectCave(c, refresh); },
   commitCaveMove(c, P) { commitCaveMove(c, P); },
   selectVeg(v, refresh = true) { selectVeg(v, refresh); },
+  // ---- triggers ----
+  /** Triggers propios en metros (p en el mundo) para buildTriggers. */
+  triggersWorld() { const L = state.layout; if (!L) return []; return state.triggers.map((t) => ({ ...t, p: L.toWorld(t.p[0], t.p[1]) })); },
+  /** Triggers para dibujar en el mapa (bocas de túneles y propios): [{..., corners: [[x,y]x4] en el mundo}]. */
+  triggerShapes() {
+    return (preview.triggerData || []).map((t) => {
+      const hw = t.w / 2, hd = t.d / 2, T = t.T, Lh = [t.L[0], t.L[1]], l = Math.hypot(Lh[0], Lh[1]) || 1, lx = Lh[0] / l, ly = Lh[1] / l;
+      const c = t.center;
+      return { ...t, corners: [[-hd, -hw], [hd, -hw], [hd, hw], [-hd, hw]].map(([a, b]) => [c[0] + T[0] * a + lx * b, c[1] + T[1] * a + ly * b]) };
+    });
+  },
+  placingTrigger() { return !!state.placingTrigger; },
+  placeTriggerAt(p) { return placeTriggerAt(p); },
+  selectTrigger(id) { selectTrigger(id); },
+  beginTriggerDrag(id) { state.trigDrag = { id, pushed: false }; },
+  moveTriggerLayout(p) {
+    const d = state.trigDrag, t = d && state.triggers.find((q) => q.id === d.id);
+    if (!t) return;
+    if (!d.pushed) { pushUndo(); d.pushed = true; }
+    t.p = [+p[0].toFixed(2), +p[1].toFixed(2)];
+    preview.buildTriggerMeshes(); editor.draw();
+  },
+  endTriggerDrag() { state.trigDrag = null; renderTriggerPanel(); },
   commitVegMove(v, P) { commitVegMove(v, P); },
   moveVegLive(v, x, y) { return preview.moveVegLive(v, x, y); },
   onVegLive() { editor.draw(); },
@@ -2681,6 +2708,49 @@ function bindDropMenu(btnId, menuId, wrapId) {
   document.addEventListener('pointerdown', (e) => { if (!menu.hidden && !e.target.closest('#' + wrapId)) close(); });
   window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !menu.hidden) { e.stopPropagation(); close(); } }, true); // Esc solo cierra el menú
 }
+/**
+ * Ventana emergente (como «Ajustes»): se abre con su botón, se mueve arrastrando el título, se reescala por la esquina
+ * y se cierra con ✕, con el mismo botón o con Esc (Esc solo la cierra). Recuerda su posición y tamaño en el navegador.
+ */
+function bindPopup(popId, btnId, closeId, key, onOpen = null) {
+  const pop = $(popId), btn = $(btnId), head = pop.querySelector('.instr-head');
+  const store = () => { try { return JSON.parse(localStorage.getItem('tsg.pop.' + key) || 'null'); } catch { return null; } };
+  const fit = () => {
+    pop.style.left = `${clamp(pop.offsetLeft, 0, Math.max(0, window.innerWidth - Math.min(pop.offsetWidth, 120)))}px`;
+    pop.style.top = `${clamp(pop.offsetTop, 44, Math.max(44, window.innerHeight - 40))}px`;
+    if (pop.offsetHeight > window.innerHeight - 50) pop.style.height = `${window.innerHeight - 50}px`;
+  };
+  const save = () => { if (pop.hidden) return; try { localStorage.setItem('tsg.pop.' + key, JSON.stringify({ x: pop.offsetLeft, y: pop.offsetTop, w: pop.offsetWidth, h: pop.offsetHeight })); } catch { /* sin almacenamiento */ } };
+  const open = () => {
+    pop.hidden = false;
+    const g = store();
+    if (g && g.w) { pop.style.width = `${g.w}px`; pop.style.height = `${g.h}px`; pop.style.left = `${g.x}px`; pop.style.top = `${g.y}px`; }
+    else { const r = btn.getBoundingClientRect(); pop.style.left = `${Math.max(8, Math.min(window.innerWidth - pop.offsetWidth - 8, r.right - pop.offsetWidth))}px`; pop.style.top = `${r.bottom + 6}px`; }
+    fit();
+    bringToFront(pop);
+    btn.classList.add('on');
+    if (onOpen) onOpen();
+  };
+  const close = () => { save(); pop.hidden = true; btn.classList.remove('on'); };
+  pop._close = close;
+  btn.addEventListener('click', () => (pop.hidden ? open() : close()));
+  $(closeId).addEventListener('click', close);
+  pop.addEventListener('pointerdown', () => bringToFront(pop));
+  pop.addEventListener('pointerup', save);
+  head.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || e.target.closest('.instr-x')) return;
+    e.preventDefault();
+    head.setPointerCapture(e.pointerId);
+    const sx = e.clientX, sy = e.clientY, x0 = pop.offsetLeft, y0 = pop.offsetTop;
+    const move = (ev) => { pop.style.left = `${clamp(x0 + ev.clientX - sx, 0, window.innerWidth - 60)}px`; pop.style.top = `${clamp(y0 + ev.clientY - sy, 44, window.innerHeight - 30)}px`; };
+    const up = () => { head.removeEventListener('pointermove', move); head.removeEventListener('pointerup', up); save(); };
+    head.addEventListener('pointermove', move);
+    head.addEventListener('pointerup', up);
+  });
+  window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !pop.hidden) { e.stopPropagation(); close(); } }, true); // Esc solo cierra la ventana
+  window.addEventListener('resize', () => { if (!pop.hidden) fit(); });
+  return { open, close };
+}
 /** ¿La ruta principal tiene trabajo encima que se perdería al reemplazarla? */
 function trackHasWork() {
   const m = state.project && state.project.main;
@@ -2788,6 +2858,7 @@ function refreshBridgeList() {
     // camino de tierra y barrera: como la pista (por defecto en los tramos de pista), a ambos lados, a uno o sin
     const modeOf = (on, side) => (on == null ? 'inherit' : on ? side || 'both' : 'none');
     const dMode = modeOf(b.dirt, b.dirtSide), bMode = modeOf(b.barrier, b.barrierSide);
+    const EPm = edgeParams(state.scene, false), dirtW0 = { l: EPm.dirtWidthL, r: EPm.dirtWidthR }; // anchos de la pista (valor inicial de los propios)
     const modeSel = (cls, v, noneTxt) => `<select class="${cls}" title="Lado según el sentido de marcha; «Como la pista» sigue lo que tenga la pista principal">${[['inherit', 'Como la pista'], ['both', 'Ambos lados'], ['left', 'Izquierda'], ['right', 'Derecha'], ['none', noneTxt]].map(([k, t]) => `<option value="${k}"${v === k ? ' selected' : ''}>${t}</option>`).join('')}</select>`;
     d.innerHTML = `<div class="head"><span class="row" style="gap:4px;min-width:0"><button class="x btoggle" title="Mostrar u ocultar los parámetros del tramo">${b.collapsed ? '▸' : '▾'}</button><strong>${tName} ${i + 1}</strong></span><button class="x bdel" title="Quitar el tramo (vuelve a ser pista normal)">✕</button></div>
       <div class="meta">${inf ? `${(inf.s1 - inf.s0).toFixed(0)} m · s ${inf.s0.toFixed(0)}–${inf.s1.toFixed(0)} m` : ''}</div>
@@ -2807,7 +2878,10 @@ function refreshBridgeList() {
       ${texRow('deck', 'Quitar la propia')}
       <h4 class="mini">Camino de tierra</h4>
       <div class="field">${modeSel('bdirtMode', dMode, 'Sin camino')}</div>
-      <div class="bdirtBox"${dMode === 'none' ? ' hidden' : ''}>${texRow('dirt', 'Como la pista')}</div>
+      <div class="bdirtBox"${dMode === 'none' ? ' hidden' : ''}>
+        <div class="field"><label>Ancho</label><select class="bdw" title="Ancho del camino de tierra en este tramo: el de la pista o uno propio a cada lado"><option value="inherit"${b.dirtOwnW ? '' : ' selected'}>Como la pista</option><option value="own"${b.dirtOwnW ? ' selected' : ''}>Propio a cada lado</option></select></div>
+        <div class="row gap bdwBox"${b.dirtOwnW ? '' : ' hidden'}><label class="small">Izq. <input type="number" class="bdwL" min="0" max="40" step="0.1" style="width:58px" value="${Number.isFinite(b.dirtWL) ? b.dirtWL : dirtW0.l}"> m</label><label class="small">Der. <input type="number" class="bdwR" min="0" max="40" step="0.1" style="width:58px" value="${Number.isFinite(b.dirtWR) ? b.dirtWR : dirtW0.r}"> m</label></div>
+        ${texRow('dirt', 'Como la pista')}</div>
       <h4 class="mini">Barrera de contención</h4>
       <div class="field">${modeSel('bbarMode', bMode, 'Sin barrera')}</div>
       <div class="bbarBox"${bMode === 'none' ? ' hidden' : ''}>${texRow('barrier', 'Como la pista')}</div>
@@ -2842,6 +2916,15 @@ function refreshBridgeList() {
     // camino de tierra y barrera propios del puente
     const setMode = (onKey, sideKey, v) => { pushUndo(); if (v === 'inherit') b[onKey] = null; else if (v === 'none') b[onKey] = false; else { b[onKey] = true; b[sideKey] = v; } refreshBridgeList(); scheduleBuild(); };
     d.querySelector('.bdirtMode').addEventListener('change', (e) => setMode('dirt', 'dirtSide', e.target.value));
+    // ancho del camino de tierra del tramo: como la pista o propio a cada lado
+    d.querySelector('.bdw').addEventListener('change', (e) => {
+      pushUndo();
+      b.dirtOwnW = e.target.value === 'own';
+      if (b.dirtOwnW) { if (!Number.isFinite(b.dirtWL)) b.dirtWL = dirtW0.l; if (!Number.isFinite(b.dirtWR)) b.dirtWR = dirtW0.r; }
+      d.querySelector('.bdwBox').hidden = !b.dirtOwnW;
+      scheduleBuild();
+    });
+    for (const [cls, key] of [['.bdwL', 'dirtWL'], ['.bdwR', 'dirtWR']]) d.querySelector(cls).addEventListener('change', (e) => { const v = parseFloat(e.target.value); if (!Number.isFinite(v) || v < 0) return; pushUndo(); b[key] = Math.min(40, v); scheduleBuild(); });
     d.querySelector('.bbarMode').addEventListener('change', (e) => setMode('barrier', 'barrierSide', e.target.value));
     d.querySelector('.btype').addEventListener('change', (e) => { pushUndo(); b.type = e.target.value; if (b.type === 'cut' && !b.walls) { b.walls = 'art'; b.wallSubdiv = 2; } refreshBridgeList(); scheduleBuild(); });
     d.querySelector('.bwalls').addEventListener('change', (e) => { pushUndo(); b.walls = e.target.value; scheduleBuild(); });
@@ -3753,7 +3836,7 @@ function refreshPanels() {
   $('emptyMsg').hidden = !!(state.project.main || state.image);
   $('btnTrace').disabled = !state.image;
   const hasOut = !!(L && E);
-  for (const id of ['btnExportBlender', 'btnExportMax', 'btnExportJSON', 'btnExportOBJ', 'btnExportGLB', 'btnExportGLB2', 'btnExportFBX', 'btnExportFBX2']) $(id).disabled = !hasOut;
+  for (const id of ['btnExportBlender', 'btnExportMax', 'btnExportJSON', 'btnExportOBJ', 'btnExportGLB', 'btnExportFBX']) $(id).disabled = !hasOut;
   // cruces
   const cl = $('crossList');
   const skipCross = draggingIn(cl);
@@ -3843,7 +3926,8 @@ function refreshPanels() {
       <h4 class="mini adirtH">Camino de tierra</h4>
       <div class="field"><label>Lado</label>${sideSel('dirtSide')}</div>
       <div class="adirtBox${E.dirtSide === 'none' ? ' disabled' : ''}">
-        ${numF('dirtWidth', 'Ancho', 0.2, 15, 0.1)}
+        ${numF('dirtWidthL', 'Ancho izquierdo', 0, 15, 0.1)}
+        ${numF('dirtWidthR', 'Ancho derecho', 0, 15, 0.1)}
         ${numF('dirtTile', 'Repetición de la textura', 0.5, 30, 0.5)}
         ${texRow('dirt', 'Como la pista')}
       </div>
@@ -4342,8 +4426,8 @@ function bindControls() {
   app.loadFeatureParams = loadFeatureParams;
   // aplanar (en la barra del perfil): una sola vez, los puntos siguen editables
   $('btnFlatten').addEventListener('click', () => { app.flattenSelected(); });
-  $('smoothZ').addEventListener('input', (e) => { const v = parseFloat(e.target.value) || 0; $('smoothZVal').textContent = String(v); if (!app.smoothSelHeights(v)) { e.target.value = 0; $('smoothZVal').textContent = '0'; } });
-  $('smoothZ').addEventListener('change', () => { state.smoothZWarned = false; if (state.smoothZ) toast(`Alturas suavizadas al ${$('smoothZ').value} % (Ctrl+Z lo deshace).`); });
+  $('profSmooth').addEventListener('input', (e) => { const v = parseFloat(e.target.value) || 0; $('profSmoothVal').textContent = String(v); if (!app.smoothSelHeights(v)) { e.target.value = 0; $('profSmoothVal').textContent = '0'; } });
+  $('profSmooth').addEventListener('change', () => { state.smoothZWarned = false; if (state.smoothZ) toast(`Alturas suavizadas al ${$('profSmooth').value} % (Ctrl+Z lo deshace).`); });
   $('btnProfileFit').addEventListener('click', () => profile.resetView());
   // rizo: el botón de la barra muestra sus parámetros; «Añadir rizo» lo crea en los puntos seleccionados
   $('btnLoop').addEventListener('click', () => {
@@ -4440,7 +4524,7 @@ function bindControls() {
   $('btnNew').addEventListener('click', () => {
     pushUndo();
     state.project = { main: null, alts: [], start: null, reverse: false };
-    state.flatZones = []; state.profileZones = []; state.profileSel = null; state.suspZones = []; state.cutZones = []; state.overrides = []; state.image = null; state.valDismissed = null;
+    state.flatZones = []; state.profileZones = []; state.profileSel = null; state.suspZones = []; state.cutZones = []; state.overrides = []; state.image = null; state.valDismissed = null; state.triggers = []; state.selTrigger = null; renderTriggerPanel();
     syncControls(); scheduleBuild(); setTool('draw');
     setTimeout(() => editor.fit(), 0);
   });
@@ -4500,6 +4584,13 @@ function bindControls() {
     } else if (state.selVeg) {
       e.preventDefault();
       deleteSelectedVeg();
+    } else if (state.selTrigger != null) {
+      e.preventDefault();
+      pushUndo();
+      state.triggers = state.triggers.filter((q) => q.id !== state.selTrigger);
+      state.selTrigger = null;
+      renderTriggerPanel(); triggersChanged();
+      toast('Trigger quitado (Ctrl+Z para deshacer).');
     } else if (state.selAlt != null) {
       e.preventDefault();
       const i = state.selAlt;
@@ -4707,7 +4798,9 @@ function loadSample(k) {
   setTimeout(() => editor.fit(), 0);
 }
 
-function saveProject() {
+function saveProject() { download('pista.tsg.json', JSON.stringify(projectData()), 'application/json'); }
+/** Datos del proyecto (lo que se guarda en el .tsg.json). */
+function projectData() {
   let thumbnail = null;
   try { thumbnail = makeTrackThumbnail(state.layout, state.result, app.hillsWorld()); } catch (err) { console.warn('miniatura', err); }
   const data = {
@@ -4729,7 +4822,9 @@ function saveProject() {
     hills: state.hills,
     rivers: state.rivers,
     items: state.items,
+    triggers: state.triggers,
     game: state.game,
+    carModel: state.carModel && state.carModel.buffer.byteLength <= 40 * 1048576 ? { name: state.carModel.name, data: bufToB64(state.carModel.buffer) } : null,
     sky: state.skyCustom && state.skyTex ? state.skyTex.toDataURL('image/jpeg', 0.9) : null,
     trackTex: state.trackTex ? state.trackTex.toDataURL('image/png') : null,
     bridgeTexs: Object.fromEntries(Object.entries(state.bridgeTexs).filter(([uid]) => ((state.project.main && state.project.main.bridges) || []).some((b) => b.uid === uid)).map(([uid, t]) => [uid, Object.fromEntries(Object.entries(t).map(([k, cv]) => [k, cv ? cv.toDataURL('image/png') : null]))])),
@@ -4748,7 +4843,7 @@ function saveProject() {
     ref: state.ref ? { image: state.ref.canvas.toDataURL('image/png'), x: state.ref.x, y: state.ref.y, scale: state.ref.scale, opacity: state.ref.opacity, visible: state.ref.visible, above: !!state.ref.above } : null,
     imageOpacity: state.imageOpacity,
   };
-  download('pista.tsg.json', JSON.stringify(data), 'application/json');
+  return data;
 }
 
 /** Miniatura de respaldo para proyectos guardados sin ella: dibuja los puntos de la ruta principal y los atajos. */
@@ -4973,10 +5068,14 @@ async function openProject(text) {
   state.selHill = null;
   refreshHillPanel();
   state.items = d.items || { puddle: [], pad: [], strip: [] };
+  state.triggers = Array.isArray(d.triggers) ? d.triggers : []; state.selTrigger = null; if (typeof renderTriggerPanel === 'function') renderTriggerPanel();
   state.selItem = null;
   renderItemsPanel();
   itemsChanged();
   if (d.game) Object.assign(state.game, d.game);
+  state.carModel = null;
+  if (d.carModel && d.carModel.data) { try { state.carModel = await loadAsset(b64ToBuf(d.carModel.data), d.carModel.name); } catch (err) { toastErr(`No se pudo cargar el auto 3D: ${err.message}`); } }
+  if (app.applyCar) app.applyCar();
   if (app.syncGameCam) app.syncGameCam();
   if (d.sky) { state.skyTex = await toCanvas(d.sky); state.skyCustom = true; } else { state.skyTex = makeDefaultSky(); state.skyCustom = false; }
   refreshSkyThumb();
@@ -5030,7 +5129,7 @@ function toast(msg, kind = 'info') {
   t.textContent = msg;
   t.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (t.hidden = true), kind === 'err' ? 5500 : 4500);
+  toastTimer = setTimeout(() => (t.hidden = true), kind === 'err' ? 3300 : 4500);
 }
 function toastErr(msg) { toast(msg, 'err'); }
 
@@ -5047,7 +5146,7 @@ function shadowTexCanvas() {
 }
 let shadowTimer = null;
 /** Rehace solo los planos de sombra (sin reconstruir el terreno), con una pequeña espera mientras se arrastra. */
-function scheduleShadows() { clearTimeout(shadowTimer); shadowTimer = setTimeout(() => { if (preview.buildShadowMesh) preview.buildShadowMesh(); }, 90); }
+function scheduleShadows() { clearTimeout(shadowTimer); shadowTimer = setTimeout(() => { shadowTimer = null; if (preview.buildShadowMesh) preview.buildShadowMesh(); }, 90); }
 function drawSunPad() {
   const cv = $('sunPad');
   if (!cv) return;
@@ -5190,6 +5289,7 @@ function syncSceneControls() {
   for (const k of VEG_NUMS) { const el = $(k + 'Val'); if (el) el.textContent = VEG_FMT[k](sc[k]); }
   $('treeHillBox').classList.toggle('disabled', !(sc.treeOnSlopes || sc.treeOnTops));
   syncTreeEdit();
+  if (typeof renderTransDivs === 'function' && $('transDivBar')) renderTransDivs();
   $('grassHillBox').classList.toggle('disabled', !(sc.grassOnSlopes || sc.grassOnTops));
   set('hillBrush', Math.min(250, sc.hillBrush)); set('hillBrushNum', sc.hillBrush);
   set('trackTexReps', Math.min(1000, sc.trackTexReps)); set('trackTexRepsNum', sc.trackTexReps);
@@ -5205,7 +5305,7 @@ function syncSceneControls() {
   set('paintSubMode', sc.paintSubMode === 'dec' ? 'dec' : 'inc'); document.querySelectorAll('#sculptMode button').forEach((b) => b.classList.toggle('on', b.dataset.smode === (sc.sculptMode === 'smooth' ? 'smooth' : 'raise')));
   if ($('sculptHint')) $('sculptHint').textContent = sc.sculptMode === 'smooth' ? 'clic: suaviza el relieve' : 'clic izq. eleva · clic der. hunde';
   set('sculptStrength', sc.sculptStrength); set('sculptStrengthP', sc.sculptStrength); set('sculptBrushP', Math.min(200, sc.sculptBrush));
-  set('sculptDetail', sc.sculptDetail !== false);
+  set('sculptDetail', sc.sculptDetail !== false); set('sculptDetailBar', sc.sculptDetail !== false);
   if ($('sculptStrengthVal')) $('sculptStrengthVal').textContent = `${sc.sculptStrength} m`;
   if ($('sculptStrengthPVal')) $('sculptStrengthPVal').textContent = `${sc.sculptStrength} m`;
   if ($('sculptBrushPVal')) $('sculptBrushPVal').textContent = `${sc.sculptBrush} m`;
@@ -5251,7 +5351,9 @@ function syncSceneControls() {
       ? `Del lado de la costa, la tierra sigue la pista unos ${sc.coastLand} m (irregular) y luego baja como playa hasta el agua; ${sc.coastSide === 'both' ? 'la costa está a ambos lados' : 'al otro lado el terreno es de bosque'}. Se agrega un plano de agua («agua» en la exportación). Izquierda y derecha, según el sentido de marcha.`
       : tt === 'mountain' ? `Del lado del acantilado queda una franja de tierra de unos ${sc.coastLand} m y luego un corte de ${sc.cliffHeight} m hasta el agua; al otro lado se levanta una pared de roca de ${sc.wallHeight} m. Izquierda y derecha, según el sentido de marcha.` : '';
   }
-  for (const k of ['dirtWidth', 'dirtTile', 'barrierHeight', 'barrierThick', 'barrierTile']) { set(k, sc[k]); set(k + 'Num', sc[k]); }
+  for (const k of ['dirtTile', 'barrierHeight', 'barrierThick', 'barrierTile']) { set(k, sc[k]); set(k + 'Num', sc[k]); }
+  { const h = Math.max((sc.terrainGap ?? 0.3) + 0.1, Number.isFinite(sc.skirtHeight) ? sc.skirtHeight : (sc.terrainGap ?? 0.3) + 0.8); set('skirtHeight', h); set('skirtHeightNum', h); $('skirtBox').classList.toggle('disabled', !sc.skirts); }
+  for (const k of ['dirtWidthL', 'dirtWidthR']) { const v = Number.isFinite(sc[k]) ? sc[k] : sc.dirtWidth; set(k, v); set(k + 'Num', v); } // ancho a cada lado (si no, el general)
   $('dirtBox').classList.toggle('disabled', !sc.dirtSide || sc.dirtSide === 'none');
   $('barrierBox').classList.toggle('disabled', !sc.barrierSide || sc.barrierSide === 'none');
   set('trackTexOpacity', sc.trackTexOpacity ?? 1);
@@ -5355,6 +5457,172 @@ function bufToB64(buf) {
 function b64ToBuf(b64) { const bin = atob(b64); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u.buffer; }
 const REF3D_KEEP = ['pos', 'rotZ', 'scale', 'visible', 'show2d', 'locked', 'look', 'color', 'opacity', 'gizmo', 'unitOpt', 'upOpt'];
 function ref3dSettings() { const R = state.ref3d; const o = {}; for (const k of REF3D_KEEP) o[k] = R[k]; return o; }
+// ---------- divisiones de las transiciones de ancho ----------
+const TRANS_DIVS_DEFAULT = [0.07, 0.47, 0.53, 0.93];
+let transDivSel = -1;
+/** Barra con la textura de la pista a lo ancho (izquierda → derecha) y una marca por división. */
+function renderTransDivs() {
+  const sc = state.scene, bar = $('transDivBar');
+  if (!bar) return;
+  $('transSubdiv').checked = sc.transSubdiv !== false;
+  $('transDivBox').classList.toggle('disabled', sc.transSubdiv === false);
+  if (!Array.isArray(sc.transDivs)) sc.transDivs = TRANS_DIVS_DEFAULT.slice();
+  // textura: a lo ancho de la pista es la X de la imagen (orientación vertical) o su Y (horizontal)
+  const cv = $('transDivCanvas'), W = Math.max(50, Math.round(bar.clientWidth || 260)), H = 44;
+  cv.width = W; cv.height = H;
+  const g = cv.getContext('2d'), img = state.trackTex || defaultTrackCanvas();
+  g.clearRect(0, 0, W, H);
+  try {
+    if (sc.trackTexDir === 'horizontal') { g.save(); g.translate(0, H); g.rotate(-Math.PI / 2); g.drawImage(img, 0, 0, img.width, Math.min(img.height, img.width), 0, 0, H, W); g.restore(); }
+    else g.drawImage(img, 0, 0, img.width, Math.min(img.height, img.width), 0, 0, W, H);
+  } catch { /* textura no lista */ }
+  bar.querySelectorAll('.tdiv-mark').forEach((m) => m.remove());
+  const divs = sc.transDivs;
+  if (transDivSel >= divs.length) transDivSel = divs.length - 1;
+  divs.forEach((t, i) => {
+    const m = document.createElement('div');
+    m.className = 'tdiv-mark' + (i === transDivSel ? ' sel' : '');
+    m.style.left = `${t * 100}%`;
+    m.title = `División ${i + 1}: ${(t * 100).toFixed(1)} % del ancho`;
+    m.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      m.setPointerCapture(e.pointerId);
+      transDivSel = i;
+      bar.querySelectorAll('.tdiv-mark').forEach((q, k) => q.classList.toggle('sel', k === i));
+      showTransDivEdit();
+      const r = bar.getBoundingClientRect();
+      const move = (ev) => {
+        const v = Math.max(0.005, Math.min(0.995, (ev.clientX - r.left) / r.width));
+        divs[i] = +v.toFixed(4);
+        m.style.left = `${v * 100}%`;
+        m.title = `División ${i + 1}: ${(v * 100).toFixed(1)} % del ancho`;
+        showTransDivEdit();
+      };
+      const up = () => { m.removeEventListener('pointermove', move); m.removeEventListener('pointerup', up); sortTransDivs(); sceneChanged(); };
+      m.addEventListener('pointermove', move);
+      m.addEventListener('pointerup', up);
+    });
+    bar.appendChild(m);
+  });
+  showTransDivEdit();
+}
+function sortTransDivs() {
+  const sc = state.scene, cur = sc.transDivs[transDivSel];
+  sc.transDivs.sort((a, b) => a - b);
+  transDivSel = sc.transDivs.indexOf(cur);
+  renderTransDivs();
+}
+/** Valor exacto de la división seleccionada (o la lista, si no hay ninguna seleccionada). */
+function showTransDivEdit() {
+  const el = $('transDivEdit'), sc = state.scene, divs = sc.transDivs || [];
+  if (transDivSel < 0 || transDivSel >= divs.length) {
+    el.innerHTML = `<span class="small muted">${divs.length} división(es): ${divs.map((t) => `${(t * 100).toFixed(1)} %`).join(' · ') || '—'}</span>`;
+    return;
+  }
+  const inp = el.querySelector('input');
+  if (inp && document.activeElement === inp) return;
+  el.innerHTML = `<label class="small">División ${transDivSel + 1} <input type="number" min="0.5" max="99.5" step="0.1" value="${(divs[transDivSel] * 100).toFixed(1)}"> % del ancho</label>`;
+  el.querySelector('input').addEventListener('change', (e) => { const v = parseFloat(e.target.value); if (!Number.isFinite(v)) return; divs[transDivSel] = +Math.max(0.005, Math.min(0.995, v / 100)).toFixed(4); sortTransDivs(); sceneChanged(); });
+}
+function bindTransDivs() {
+  const sc = state.scene;
+  $('transSubdiv').addEventListener('change', (e) => { sc.transSubdiv = e.target.checked; renderTransDivs(); sceneChanged(); });
+  $('btnTransDivAdd').addEventListener('click', () => {
+    const d = (sc.transDivs || []).slice().sort((a, b) => a - b);
+    if (d.length >= 12) { toastErr('Hasta 12 divisiones.'); return; }
+    const pts = [0, ...d, 1];
+    let best = 0;
+    for (let i = 1; i < pts.length - 1; i++) if (pts[i + 1] - pts[i] > pts[best + 1] - pts[best]) best = i;
+    const v = +((pts[best] + pts[best + 1]) / 2).toFixed(4);
+    sc.transDivs = [...d, v].sort((a, b) => a - b);
+    transDivSel = sc.transDivs.indexOf(v);
+    renderTransDivs(); sceneChanged();
+  });
+  $('btnTransDivDel').addEventListener('click', () => {
+    const d = sc.transDivs || [];
+    if (!d.length) return;
+    d.splice(transDivSel >= 0 && transDivSel < d.length ? transDivSel : d.length - 1, 1);
+    transDivSel = -1;
+    renderTransDivs(); sceneChanged();
+  });
+  $('btnTransDivReset').addEventListener('click', () => { sc.transDivs = TRANS_DIVS_DEFAULT.slice(); transDivSel = -1; renderTransDivs(); sceneChanged(); });
+  new ResizeObserver(() => renderTransDivs()).observe($('transDivBar'));
+  renderTransDivs();
+}
+
+// ---------- triggers (bocas de túneles y propios) ----------
+function triggersChanged() { preview.buildTriggerMeshes(); editor.draw(); }
+function selectTrigger(id, focus = true) {
+  state.selTrigger = id;
+  if (id != null) {
+    if (state.selVeg) state.selVeg = null;
+    if (state.selItem) { state.selItem = null; preview.buildItems(); refreshItemsInfo(); }
+  }
+  renderTriggerPanel();
+  triggersChanged();
+  if (focus && id != null) setTimeout(() => { try { focusPanel('triggers', document.querySelector(`#triggerList .item[data-id="${id}"]`)); } catch { /* iniciando */ } }, 0);
+}
+/** «+ Nuevo trigger»: el próximo clic en la pista (mapa) lo ubica. */
+function setTriggerPlacing(on) {
+  state.placingTrigger = !!on;
+  if (on && state.tool !== 'pan') setTool('pan');
+  $('triggerPlaceHint').hidden = !on;
+  $('btnTriggerNew').classList.toggle('active', !!on);
+}
+function placeTriggerAt(p) {
+  const L = state.layout;
+  if (!L) return false;
+  const [x, y] = L.toWorld(p[0], p[1]);
+  let best = Infinity;
+  for (const r of L.routes) best = Math.min(best, nearestOnSamples(r, x, y).d);
+  if (best > 40) { toastErr('Haz clic sobre la pista (o cerca de ella) para ubicar el trigger.'); return false; }
+  pushUndo();
+  let n = state.triggers.length + 1;
+  while (state.triggers.some((t) => t.name === `trigger_${n}`)) n++;
+  const t = { id: `tg${Date.now().toString(36)}${n}`, name: `trigger_${n}`, p: [+p[0].toFixed(2), +p[1].toFixed(2)], depth: 2, height: 6 };
+  state.triggers.push(t);
+  setTriggerPlacing(false);
+  selectTrigger(t.id);
+  toast(`${t.name} creado: arrástralo con «Navegar» a lo largo de la pista; nombre y medidas en «Triggers».`);
+  return true;
+}
+function renderTriggerPanel() {
+  const el = $('triggerList');
+  if (!el) return;
+  const sc = state.scene;
+  if ($('tunnelTriggers')) {
+    $('tunnelTriggers').checked = sc.tunnelTriggers !== false;
+    $('showTriggers').checked = sc.showTriggers !== false;
+    $('triggerDepth').value = sc.triggerDepth ?? 1; $('triggerDepthVal').textContent = `${(+(sc.triggerDepth ?? 1)).toFixed(1)} m`;
+    $('triggerHeight').value = sc.triggerHeight ?? 6; $('triggerHeightVal').textContent = `${(+(sc.triggerHeight ?? 6)).toFixed(1)} m`;
+    $('tunnelTrigBox').classList.toggle('disabled', sc.tunnelTriggers === false);
+  }
+  el.innerHTML = state.triggers.length ? '' : '<div class="meta">Sin triggers propios.</div>';
+  const data = preview.triggerData || [];
+  state.triggers.forEach((t) => {
+    const d = document.createElement('div');
+    d.className = 'item trigger-card' + (state.selTrigger === t.id ? ' sel' : '');
+    d.dataset.id = t.id;
+    const inf = data.find((q) => q.custom === t.id);
+    d.innerHTML = `<div class="head"><span class="row" style="gap:6px;min-width:0"><input class="tgn" value="${t.name.replace(/"/g, '&quot;')}" title="Nombre del trigger (se exporta como «trigger_<nombre>»)" style="width:150px"></span><button class="x" title="Quitar el trigger">✕</button></div>
+      <div class="meta">${inf ? `${inf.name} · ${state.layout.routes[inf.k].name} · s ${inf.s.toFixed(0)} m · ancho ${inf.w.toFixed(1)} m` : ''}</div>
+      <div class="row gap"><label class="small">Profundidad <input type="number" class="tgd" min="0.1" max="50" step="0.1" style="width:58px" value="${t.depth ?? 2}"> m</label><label class="small">Alto <input type="number" class="tgh" min="0.1" max="100" step="0.5" style="width:58px" value="${t.height ?? 6}"> m</label></div>`;
+    d.addEventListener('click', (e) => { if (e.target.closest('input,button')) return; selectTrigger(t.id, false); });
+    d.querySelector('.tgn').addEventListener('change', (e) => { const v = e.target.value.trim(); if (!v) { e.target.value = t.name; return; } pushUndo(); t.name = v; renderTriggerPanel(); triggersChanged(); });
+    for (const [cls, key] of [['.tgd', 'depth'], ['.tgh', 'height']]) d.querySelector(cls).addEventListener('change', (e) => { const v = parseFloat(e.target.value); if (!(v > 0)) return; pushUndo(); t[key] = v; triggersChanged(); renderTriggerPanel(); });
+    d.querySelector('button.x').addEventListener('click', () => { pushUndo(); state.triggers = state.triggers.filter((q) => q !== t); if (state.selTrigger === t.id) state.selTrigger = null; renderTriggerPanel(); triggersChanged(); });
+    el.appendChild(d);
+  });
+}
+function bindTriggerControls() {
+  const sc = state.scene;
+  $('tunnelTriggers').addEventListener('change', (e) => { sc.tunnelTriggers = e.target.checked; renderTriggerPanel(); triggersChanged(); });
+  $('showTriggers').addEventListener('change', (e) => { sc.showTriggers = e.target.checked; triggersChanged(); });
+  for (const k of ['triggerDepth', 'triggerHeight']) $(k).addEventListener('input', (e) => { const v = parseFloat(e.target.value); if (!Number.isFinite(v)) return; sc[k] = v; $(k + 'Val').textContent = `${v.toFixed(1)} m`; triggersChanged(); });
+  $('btnTriggerNew').addEventListener('click', () => setTriggerPlacing(!state.placingTrigger));
+  renderTriggerPanel();
+}
+
 // ---------- decoración: biblioteca de assets y sets ----------
 /** Lo que la exportación necesita de la decoración: biblioteca, sets y sus zonas pintadas. */
 function decoExportInfo() { return { assetById: (id) => app.assetById(id), sets: state.decoSets, paintFor: (set) => app.decoPaintWorld(set) }; }
@@ -5688,8 +5956,7 @@ function focusPanel(id, sub = null) {
 const PANEL_FOR_BUTTON = {
   'tool:edit': 'spline', 'tool:draw': 'trace', 'tool:extend': 'trace', 'tool:alt': 'alts', 'tool:start': 'gate', 'tool:ref': 'ref',
   btnDecoNew: 'deco', 'tool:hill': 'hills', 'tool:river': 'rivers', 'tool:paint': 'relief', 'tool:sculpt': 'relief', 'tool:profile': 'elev', btnSculptTool: 'relief', btnRef3dTop: 'ref3d',
-  btnGame: 'sky', btnExportBlender: 'export', btnExportMax: 'export', btnExportJSON: 'export', btnExportOBJ: 'export',
-  btnExportGLB2: 'export', btnExportFBX2: 'export', btnTbRadius: 'spline', btnTbFork: 'spline', btnTbBridge: 'bridges', btnGenTerrain: 'terrain', btnGenTrees: 'trees',
+  btnGame: 'sky', btnTbRadius: 'spline', btnTbFork: 'spline', btnTbBridge: 'bridges', btnGenTerrain: 'terrain', btnGenTrees: 'trees',
 };
 const PANEL_SUB = { 'tool:sculpt': 'sculptCurveBox', btnSculptTool: 'sculptCurveBox', btnTbRadius: 'arcControls', btnTbFork: 'forkControls' }; // elemento interior al que se baja
 function bindPanelFocus() {
@@ -5819,7 +6086,7 @@ function bindSceneControls() {
   $('paintSubMode').addEventListener('change', (e) => { sc.paintSubMode = e.target.value; syncSceneControls(); });
   $('sculptStrengthP').addEventListener('input', (e) => sStr(parseFloat(e.target.value)));
   $('sculptBrushP').addEventListener('input', (e) => { sc.sculptBrush = Math.round(parseFloat(e.target.value)); syncSceneControls(); editor.draw(); });
-  $('sculptDetail').addEventListener('change', (e) => { sc.sculptDetail = e.target.checked; sceneChanged(); });
+  for (const id of ['sculptDetail', 'sculptDetailBar']) $(id).addEventListener('change', (e) => { sc.sculptDetail = e.target.checked; syncSceneControls(); sceneChanged(); });
   initSculptCurveEditor();
   refreshSculptInfo();
   // decoración: biblioteca y sets
@@ -5930,6 +6197,40 @@ function bindSceneControls() {
   $('btnGameCamReset').addEventListener('click', () => { Object.assign(state.game, CAM_DEF); syncCam(); });
   syncCam();
   app.syncGameCam = syncCam;
+  // auto 3D propio (FBX / GLB): se escala solo al tamaño del auto por defecto; ajuste de altura, escala por eje y giro
+  const CAR_DEF = { dz: 0, sx: 1, sy: 1, sz: 1, rot: 0 };
+  const carCtl = [['carDz', 'dz', (v) => `${v >= 0 ? '+' : ''}${v.toFixed(2)} m`], ['carSx', 'sx', (v) => `×${v.toFixed(2)}`], ['carSy', 'sy', (v) => `×${v.toFixed(2)}`], ['carSz', 'sz', (v) => `×${v.toFixed(2)}`]];
+  const carAdj = () => (state.game.carAdj = { ...CAR_DEF, ...(state.game.carAdj || {}) });
+  const syncCar = () => {
+    const a = carAdj();
+    for (const [id, k, fmt] of carCtl) { $(id).value = a[k]; $(id + 'Val').textContent = fmt(+a[k]); }
+    $('carRot').value = String(a.rot || 0);
+    const inf = game.carInfo;
+    $('carInfo').textContent = inf ? `${inf.name} · ${inf.size.map((v) => v.toFixed(2)).join(' × ')} m (escala automática ×${inf.k.toFixed(3)})` : 'Auto por defecto. Carga un auto 3D con «Auto 3D…».';
+    $('btnCarRemove').disabled = !state.carModel;
+    $('btnCarLoad').classList.toggle('on', !!state.carModel);
+  };
+  const applyCar = () => { game.setCarModel(state.carModel || null, carAdj()); syncCar(); };
+  app.applyCar = applyCar;
+  for (const [id, k] of carCtl) $(id).addEventListener('input', (e) => { carAdj()[k] = parseFloat(e.target.value); applyCar(); });
+  $('carRot').addEventListener('change', (e) => { carAdj().rot = parseInt(e.target.value, 10) || 0; applyCar(); });
+  $('btnCarAdj').addEventListener('click', () => { $('carAdjBox').hidden = !$('carAdjBox').hidden; $('btnCarAdj').classList.toggle('active', !$('carAdjBox').hidden); syncCar(); });
+  $('btnCarAdjReset').addEventListener('click', () => { state.game.carAdj = { ...CAR_DEF }; applyCar(); });
+  $('btnCarRemove').addEventListener('click', () => { state.carModel = null; applyCar(); toast('Auto por defecto.'); });
+  $('btnCarLoad').addEventListener('click', () => $('fileCar').click());
+  $('fileCar').addEventListener('change', async (e) => {
+    const f = e.target.files[0];
+    e.target.value = '';
+    if (!f) return;
+    try {
+      state.carModel = await loadAsset(await f.arrayBuffer(), f.name);
+      state.game.carAdj = { ...CAR_DEF };
+      applyCar();
+      $('carAdjBox').hidden = false; $('btnCarAdj').classList.add('active');
+      toast(`Auto 3D cargado: ${f.name}. Si queda enterrado o mirando al revés, usa «Ajuste auto 3D».`);
+    } catch (err) { console.warn(err); toastErr(`No se pudo leer ${f.name}: ${err.message}`); }
+  });
+  syncCar();
   // velocidad: negativa = marcha atrás
   const speedLabel = (v) => `${v} km/h${v < 0 ? ' (marcha atrás)' : v === 0 ? ' (detenido)' : ''}`;
   const setSpeed = (v, from) => {
@@ -6056,7 +6357,9 @@ function bindSceneControls() {
   pair('wallHeight', 'wallHeightNum', 'wallHeight', 1, true);
   // bordes de la pista: camino de tierra y barrera
   for (const k of ['dirtSide', 'barrierSide']) $(k).addEventListener('change', (e) => { sc[k] = e.target.value; syncSceneControls(); sceneChanged(); });
-  pair('dirtWidth', 'dirtWidthNum', 'dirtWidth', 0.2, false);
+  pair('skirtHeight', 'skirtHeightNum', 'skirtHeight', 0.2, false);
+  pair('dirtWidthL', 'dirtWidthLNum', 'dirtWidthL', 0, false);
+  pair('dirtWidthR', 'dirtWidthRNum', 'dirtWidthR', 0, false);
   pair('dirtTile', 'dirtTileNum', 'dirtTile', 0.5, false);
   pair('barrierHeight', 'barrierHeightNum', 'barrierHeight', 0.1, false);
   pair('barrierThick', 'barrierThickNum', 'barrierThick', 0, false); // 0 = plano de una cara
@@ -6096,28 +6399,26 @@ function bindSceneControls() {
     const { exportGLB } = await import('./export-glb.js');
     toast('Generando escena .glb…');
     try {
-      const { buffer, info } = await exportGLB(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas() }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
+      const { buffer, info } = await exportGLB(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas(), triggers: app.triggersWorld() }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
       download('track_scene.glb', buffer, 'model/gltf-binary');
       toast(`Escena exportada: pista ${info.trackTris.toLocaleString('es')} triángulos${info.terrainTris ? `, terreno ${info.terrainTris.toLocaleString('es')}` : ''}${info.hills ? `, ${info.hills} cerro(s)` : ''}${info.tunnels ? `, ${info.tunnels} túnel(es)` : ''}${info.gateTris ? ', pórtico de salida' : ''}${info.items ? `, ${info.items} elementos de pista` : ''}${info.trees ? `, ${info.trees} árboles` : ''}. Todo como objetos separados.`);
     } catch (err) { console.error(err); toastErr('No se pudo exportar la escena: ' + err.message); }
   };
   $('btnExportGLB').addEventListener('click', glb);
   // menús desplegables: «Exportar ▾» (encabezado) y «Elementos de pista ▾» (barra del mapa)
-  bindDropMenu('btnExportMenu', 'exportMenu', 'exportMenuWrap');
+  bindPopup('exportPop', 'btnExportMenu', 'btnExportClose', 'exportPop');
   bindDropMenu('btnItemsMenu', 'itemsMenu', 'itemsMenuWrap');
-  $('btnExportGLB2').addEventListener('click', glb);
   const fbx = async () => {
     if (!state.layout || !state.result) return;
     const { exportFBX } = await import('./export-fbx.js');
     toast('Generando escena .fbx…');
     try {
-      const { buffer, info } = await exportFBX(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas() }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
+      const { buffer, info } = await exportFBX(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas(), triggers: app.triggersWorld() }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
       download('track_scene.fbx', buffer, 'application/octet-stream');
       toast(`FBX exportado (${(buffer.length / 1048576).toFixed(1)} MB): pista${info.terrainTris ? ', terreno' : ''}${info.hills ? `, ${info.hills} cerro(s)` : ''}${info.tunnels ? `, ${info.tunnels} túnel(es)` : ''}${info.gateTris ? ', pórtico' : ''}${info.items ? `, ${info.items} elementos de pista` : ''}${info.trees ? `, ${info.trees} árboles` : ''}${info.grass ? ', hierba' : ''}. Z arriba, en metros, con texturas incrustadas.`);
     } catch (err) { console.error(err); toastErr('No se pudo exportar el FBX: ' + err.message); }
   };
   $('btnExportFBX').addEventListener('click', fbx);
-  $('btnExportFBX2').addEventListener('click', fbx);
   app.onTrackMeshInfo = (m) => {
     const el = $('trackMeshInfo');
     if (!el) return;
@@ -6242,7 +6543,6 @@ const HINTS = {
   treeSpread: 'Cuánto se alejan al azar, más allá de la distancia mínima.',
   treeSeed: 'Semilla de la distribución de árboles.',
   btnExportFBX: 'Exporta la misma escena en FBX binario (7.4): cada elemento como objeto propio con su pivote, materiales y texturas incrustadas, Z arriba y en metros. Probado en Blender; pensado también para 3ds Max, Maya, Unity o Unreal.',
-  btnExportFBX2: 'Escena 3D completa en FBX (Blender, 3ds Max, Maya, Unity, Unreal).',
   btnExportGLB: 'Exporta pista con UV, terreno y árboles, con las texturas incrustadas, en un .glb (glTF binario).',
   paintSubdiv: 'Subdivisiones extra de las pinceladas que hagas ahora: cada lado de la celda del terreno se divide n + 1 veces ((n + 1)² más polígonos). Las pinceladas ya hechas conservan su valor. El tope de polígonos se sigue respetando.',
   paintSubdivP: 'Subdivisiones extra de las pinceladas que hagas ahora: cada lado de la celda del terreno se divide n + 1 veces ((n + 1)² más polígonos). Las pinceladas ya hechas conservan su valor. El tope de polígonos se sigue respetando.',
@@ -6257,7 +6557,7 @@ const HINTS = {
   cliffHeight: 'Caída del acantilado: el agua queda esta altura bajo el punto más bajo de la pista.', cliffHeightNum: 'Altura exacta del acantilado.',
   wallHeight: 'Altura media de la pared de roca del lado opuesto al acantilado.', wallHeightNum: 'Altura media exacta de la pared de roca.',
   dirtSide: 'Camino de tierra a un costado o a ambos (izquierda / derecha según el sentido de marcha). Si hay barrera, ésta nace donde termina el camino.',
-  dirtWidth: 'Ancho del camino de tierra en metros.', dirtWidthNum: 'Ancho exacto del camino de tierra.',
+  dirtWidthL: 'Ancho del camino de tierra del lado izquierdo (según el sentido de marcha), en metros.', dirtWidthLNum: 'Ancho exacto del camino de tierra izquierdo.', dirtWidthR: 'Ancho del camino de tierra del lado derecho (según el sentido de marcha), en metros.', dirtWidthRNum: 'Ancho exacto del camino de tierra derecho.',
   dirtTile: 'Cada cuántos metros de pista se repite la textura del camino de tierra.', dirtTileNum: 'Metros por repetición de la textura del camino.',
   barrierSide: 'Barrera de contención a un costado o a ambos. Se abre sola en las salidas de los atajos; dentro de los túneles sigue, con la pared del túnel después.',
   barrierHeight: 'Altura de la barrera.', barrierHeightNum: 'Altura exacta de la barrera en metros.',
@@ -6508,6 +6808,8 @@ state.skyTex = makeDefaultSky();
 bindControls();
 bindSceneControls();
 bindItemsPanel();
+bindTriggerControls();
+bindTransDivs();
 bindPanelFocus();
 renderItemsPanel();
 refreshSkyThumb();
@@ -6525,4 +6827,20 @@ setTool('pan');
 loadSample('figure8');
 undoStack.length = 0;
 $('btnUndo').disabled = true;
-window.__tsg = { state, app, editor, preview, profile, openProject, scheduleBuild, refreshBridgeList, refreshPanels }; // para depuración
+/** ¿Queda trabajo pendiente (trazado, elevación, terreno, sombras)? Lo usan las pruebas de interfaz para no esperar a ciegas. */
+function busy() { return buildPending || elevPending || tickQueued || !!shadowTimer || !!(preview && preview.extrasTimer) || !!(preview && preview.pendingUpdate); }
+/** Promesa que se cumple cuando la app queda quieta (dos cuadros seguidos sin trabajo pendiente). */
+function idle(timeout = 30000) {
+  const t0 = performance.now();
+  return new Promise((res, rej) => {
+    let calm = 0;
+    const step = () => {
+      if (!busy()) calm++; else calm = 0;
+      if (calm >= 3) return res(true);
+      if (performance.now() - t0 > timeout) return rej(new Error('la app no quedó quieta'));
+      setTimeout(step, 16);
+    };
+    step();
+  });
+}
+window.__tsg = { state, app, editor, preview, profile, openProject, scheduleBuild, refreshBridgeList, refreshPanels, projectData, busy, idle }; // para depuración y pruebas // para depuración

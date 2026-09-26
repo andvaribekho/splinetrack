@@ -5,7 +5,7 @@ import Delaunator from '../vendor/delaunator.js';
 import { riverField, subdivFactor } from './rivers.js';
 import { DEFAULT_SCULPT_CURVE } from './sculptcurve.js';
 import { SHADOW_DEFAULTS } from './shadows.js';
-import { hillFieldOne, detectTunnels, tunnelTop, buildTunnelGeometry, applyTunnelOverrides, portalBox, frameAt, edgeExtents, tunnelInnerWidth } from './tunnels.js';
+import { convexHull2, hillFieldOne, detectTunnels, tunnelTop, buildTunnelGeometry, applyTunnelOverrides, portalBox, frameAt, edgeExtents, edgeParams, dirtWidthAt, tunnelInnerWidth } from './tunnels.js';
 
 export const DEFAULT_SCENE = {
   ...SHADOW_DEFAULTS, // planos de sombra (shadows.js)
@@ -19,6 +19,13 @@ export const DEFAULT_SCENE = {
   trackMaxTris: 200000, // tope de triángulos de la pista (manda sobre la densidad)
   trackAdapt: 0.5, // 0..1 (optimizado): 0 = las curvas tienen algo más que las rectas; 1 = las rectas mucho menos
   skirts: true, // faldones laterales hacia el terreno
+  tunnelTriggers: true, // triggers (cubos invisibles) en la entrada y la salida de cada túnel
+  triggerDepth: 1, // m a lo largo de la pista (triggers de túnel)
+  triggerHeight: 6, // m de alto (triggers de túnel)
+  showTriggers: true, // se ven en la vista 3D (semitransparentes); en la exportación son invisibles
+  transSubdiv: true, // «Subdividir transiciones»: divisiones a lo largo donde la pista cambia de ancho (la textura no se tuerce)
+  transDivs: [0.07, 0.47, 0.53, 0.93], // posiciones de esas divisiones (fracción del ancho desde el borde izquierdo)
+  skirtHeight: 1.1, // m que bajan los faldones desde el borde (pista y camino de tierra); como mínimo la separación del terreno + 0.1
   // terreno
   terrain: false,
   terrainMargin: 120, // m alrededor de la pista
@@ -125,16 +132,21 @@ export function terrainCell(area, sp) {
 }
 
 export { edgeExtents } from './tunnels.js';
+/** Cuánto bajan los faldones (pista y camino de tierra) desde el borde. */
+export function skirtDepth(sp) { const g = sp.terrainGap ?? 0.3; const h = Number.isFinite(sp.skirtHeight) ? sp.skirtHeight : g + 0.8; return Math.max(g + 0.1, h); }
 
 function trackSamples(layout, elev, sp = {}) {
   const out = [];
-  const XR = layout.routes.map((r) => edgeExtents(sp, r)); // bordes de cada ruta (cada atajo tiene los suyos)
+  // bordes de cada ruta (cada atajo tiene los suyos): barrera de la ruta + camino de tierra en cada muestra (los tramos
+  // pueden tener lados y anchos propios)
+  const PR = layout.routes.map((r) => edgeParams(sp, r));
+  const barExt = (P, key) => (P.barrierSide === 'both' || P.barrierSide === key ? Math.max(0.05, P.barrierThick ?? 0.25) + 0.15 : 0);
   layout.routes.forEach((r, k) => {
     const e = elev.routes[k];
     for (let i = 0; i < r.n; i++) {
       const low = e.z[i] - Math.abs(Math.sin(e.roll[i])) * r.w[i] / 2;
       const bridge = !!(r.bridges && r.bridges.some((b) => { if (b.type === 'track' || b.type === 'cut') return false; const d = r.closed ? (((r.s[i] - b.s0) % r.L) + r.L) % r.L : r.s[i] - b.s0; return d >= 0 && d <= b.s1 - b.s0; }));
-      const X = XR[k];
+      const P = PR[k], X = { left: dirtWidthAt(sp, r, k, r.s[i], 1, P) + barExt(P, 'left'), right: dirtWidthAt(sp, r, k, r.s[i], -1, P) + barExt(P, 'right') };
       // sección socavada: como un tramo suspendido (el terreno no se adapta), pero además la pista socava el terreno
       const cut = sp.cutRanges && sp.cutRanges.length ? cutZoneAt(layout, k, r.s[i], sp.cutRanges) : null;
       // puente o tramo suspendido: el terreno no se adapta (queda su relieve natural; solo se baja si tocaría la calzada)
@@ -233,6 +245,13 @@ function bridgeIndexAt(r, sv) {
 export function trackDivsOf(sp) { return Math.max(0, Math.min(16, Math.round(sp.trackDivs ?? 0))); }
 /** Columnas de vértices de cada sección de la malla de la pista. */
 export function trackCols(sp) { return trackDivsOf(sp) + 2 + (sp.skirts ? 2 : 0); }
+/** Divisiones de las transiciones de ancho (ordenadas, dentro de (0, 1)); [] si no se subdivide. */
+export function transDivsOf(sp) {
+  if (sp.transSubdiv === false || !Array.isArray(sp.transDivs)) return [];
+  return [...new Set(sp.transDivs.filter((t) => Number.isFinite(t) && t > 0.002 && t < 0.998).map((t) => +t.toFixed(4)))].sort((a, b) => a - b);
+}
+/** ¿Cambia el ancho de la ruta entre las muestras q y q + 1? (transición entre un ancho y otro) */
+function widthChanges(r, q) { const n = r.n, a = ((q % n) + n) % n, b = (((q + 1) % n) + n) % n; return Math.abs(r.w[a] - r.w[b]) > 1e-4; }
 
 export function trackRows(layout, elev, spIn = {}) {
   const sp = { ...DEFAULT_SCENE, ...spIn };
@@ -313,6 +332,18 @@ export function trackRows(layout, elev, spIn = {}) {
       // así la proporción entre rectas y curvas se respeta y el total nunca supera al uniforme
       rowsSet = pick(N);
     }
+    // «Subdividir transiciones»: más secciones donde cambia el ancho (una cada ~1 m), así los trapecios son chicos
+    if (transDivsOf(sp).length) {
+      const step = Math.max(1, Math.round(1 / r.ds));
+      let inT = false, last = -1e9;
+      for (let q = 0; q < nq; q++) {
+        const ch = widthChanges(r, q);
+        if (ch && (!inT || q - last >= step)) { rowsSet.add(q); last = q; }
+        if (!ch && inT) rowsSet.add(q); // fin de la transición
+        inT = ch;
+      }
+      if (inT) rowsSet.add(nq);
+    }
     return [...rowsSet].filter((q) => q >= 0 && q <= nq).sort((a, b) => a - b);
   });
 }
@@ -322,7 +353,7 @@ export function buildTrackMesh(layout, elev, spIn = {}) {
   const sp = { ...DEFAULT_SCENE, ...spIn };
   const Lmain = layout.routes[0].L;
   const repsPerM = Math.max(0.01, sp.trackTexReps) / Lmain;
-  const skirt = sp.skirts ? sp.terrainGap + 0.8 : 0;
+  const skirt = sp.skirts ? skirtDepth(sp) : 0;
   const rowLists = trackRows(layout, elev, sp);
   const parts = layout.routes.map((r, k) => {
     const pos = [], uv = [], idx = [];
@@ -331,8 +362,15 @@ export function buildTrackMesh(layout, elev, spIn = {}) {
     const qList = rowLists[k];
     const rows = qList.length;
     // columnas: [faldón izq], borde izq, divisiones a lo ancho (trackDivs, por defecto ninguna), borde der, [faldón der]
-    const cols = trackCols(sp), divs = trackDivsOf(sp);
-    for (const q of qList) {
+    const divs = trackDivsOf(sp), tdivs = transDivsOf(sp);
+    const baseT = Array.from({ length: divs + 2 }, (_, c2) => c2 / (divs + 1));
+    // filas que tocan una transición de ancho: llevan además las divisiones de «Subdividir transiciones»
+    const segChanges = (qa, qb) => { for (let q2 = qa; q2 < qb; q2++) if (widthChanges(r, q2)) return true; return false; };
+    const inTrans = tdivs.length ? qList.map((qq, j) => (j > 0 && segChanges(qList[j - 1], qq)) || (j < qList.length - 1 && segChanges(qq, qList[j + 1]))) : null;
+    const tsAll = tdivs.length ? [...new Set([...baseT, ...tdivs])].sort((a, b) => a - b) : baseT;
+    const rowV = []; // por fila: {surf: [[t, índice]] de izquierda a derecha, skL, skR}
+    for (let j = 0; j < qList.length; j++) {
+      const q = qList[j];
       const i = q % n;
       const s = q === n ? r.L : r.s[i];
       const along = s * repsPerM;
@@ -340,20 +378,16 @@ export function buildTrackMesh(layout, elev, spIn = {}) {
       const c = Math.cos(e.roll[i]), sn = Math.sin(e.roll[i]);
       const hw = r.w[i] / 2;
       const ox = lx * c * hw, oy = ly * c * hw, oz = sn * hw;
-      const P = [];
-      for (let c2 = 0; c2 <= divs + 1; c2++) {
-        const t = c2 / (divs + 1), f = 1 - 2 * t; // la sección es una recta (el peralte es rígido)
-        P.push([r.x[i] + ox * f, r.y[i] + oy * f, e.z[i] + oz * f, t]);
-      }
+      const put = (x, y, z, t) => { pos.push(x, y, z); if (sp.trackTexDir === 'horizontal') uv.push(along, t); else uv.push(t, along); return pos.length / 3 - 1; };
+      const ts = inTrans && inTrans[j] ? tsAll : baseT;
+      const surf = ts.map((t) => { const f = 1 - 2 * t; return [t, put(r.x[i] + ox * f, r.y[i] + oy * f, e.z[i] + oz * f, t)]; }); // la sección es una recta (el peralte es rígido)
+      const row = { surf, skL: -1, skR: -1 };
       if (sp.skirts) {
-        P.unshift([P[0][0] + lx * 0.2, P[0][1] + ly * 0.2, P[0][2] - skirt, -0.05]);
-        P.push([P[P.length - 1][0] - lx * 0.2, P[P.length - 1][1] - ly * 0.2, P[P.length - 1][2] - skirt, 1.05]);
+        const a = surf[0][1], b = surf[surf.length - 1][1];
+        row.skL = put(pos[a * 3] + lx * 0.2, pos[a * 3 + 1] + ly * 0.2, pos[a * 3 + 2] - skirt, -0.05);
+        row.skR = put(pos[b * 3] - lx * 0.2, pos[b * 3 + 1] - ly * 0.2, pos[b * 3 + 2] - skirt, 1.05);
       }
-      for (const p of P) {
-        pos.push(p[0], p[1], p[2]);
-        if (sp.trackTexDir === 'horizontal') uv.push(along, p[3]);
-        else uv.push(p[3], along);
-      }
+      rowV.push(row);
     }
     // tablero de cada puente (tramo con el ancho del puente, sin las transiciones): índices aparte, con su propia textura
     const bIdx = (r.bridges || []).map(() => []);
@@ -368,15 +402,29 @@ export function buildTrackMesh(layout, elev, spIn = {}) {
       }
       return -1;
     };
+    // faldones: no van del lado donde hay camino de tierra (el camino tiene su propio faldón hasta el terreno)
+    const P = sp.skirts ? edgeParams(sp, r) : null;
+    const dirtRow = sp.skirts ? qList.map((qq) => { const sv = qq === n ? r.L : r.s[qq % n]; return [dirtWidthAt(sp, r, k, sv, 1, P) > 0, dirtWidthAt(sp, r, k, sv, -1, P) > 0]; }) : null;
     for (let q = 0; q < rows - 1; q++) {
       const qa = qList[q], qb = qList[q + 1];
       const sa = r.s[qa % n], sb = qb === n ? r.L : r.s[qb % n];
+      const noSkL = sp.skirts && (dirtRow[q][0] || dirtRow[q + 1][0]), noSkR = sp.skirts && (dirtRow[q][1] || dirtRow[q + 1][1]);
       const ba = bridgeOf(sa), bb = bridgeOf(sb === r.L && r.closed ? 0 : sb);
       // material del cuadro: tablero de puente > tramo cubierto (túnel o bajo un cruce) > pista (o atajo)
       const tgt = ba >= 0 && ba === bb ? bIdx[ba] : isCovered(layout, k, (sa + sb) / 2, sp.coveredRanges) ? cIdx : isCovered(layout, k, (sa + sb) / 2, sp.suspRanges) ? sIdx : idx;
-      for (let c2 = 0; c2 < cols - 1; c2++) {
-        const a = q * cols + c2, b = a + 1, d = a + cols, e2 = d + 1;
-        tgt.push(a, d, b, b, d, e2);
+      const A = rowV[q], B = rowV[q + 1];
+      // faldones (el izquierdo y el derecho, salvo bajo el camino de tierra)
+      if (sp.skirts && !noSkL) { const a = A.skL, b = A.surf[0][1], d = B.skL, e2 = B.surf[0][1]; tgt.push(a, d, b, b, d, e2); }
+      if (sp.skirts && !noSkR) { const a = A.surf[A.surf.length - 1][1], b = A.skR, d = B.surf[B.surf.length - 1][1], e2 = B.skR; tgt.push(a, d, b, b, d, e2); }
+      // calzada: «cremallera» entre las dos filas (con las mismas divisiones son cuadros; si una tiene más, se une en
+      // abanico, sin vértices sueltos)
+      const SA = A.surf, SB = B.surf;
+      let ia = 0, ib = 0;
+      while (ia < SA.length - 1 || ib < SB.length - 1) {
+        const ta = ia < SA.length - 1 ? SA[ia + 1][0] : Infinity, tb = ib < SB.length - 1 ? SB[ib + 1][0] : Infinity;
+        if (Math.abs(ta - tb) < 1e-9) { tgt.push(SA[ia][1], SB[ib][1], SA[ia + 1][1], SA[ia + 1][1], SB[ib][1], SB[ib + 1][1]); ia++; ib++; }
+        else if (ta < tb) { tgt.push(SA[ia][1], SB[ib][1], SA[ia + 1][1]); ia++; }
+        else { tgt.push(SA[ia][1], SB[ib][1], SB[ib + 1][1]); ib++; }
       }
     }
     return { name: r.name, k, alt: r.kind === 'alt', positions: new Float32Array(pos), uvs: new Float32Array(uv), indices: idx, coveredIdx: cIdx, suspIdx: sIdx, bridgeIdx: bIdx, bridgeNo: (r.bridges || []).map((b, k) => (b.idx ?? k) + 1), bridgeTy: (r.bridges || []).map((b) => b.type || 'bridge') };
@@ -986,6 +1034,16 @@ export function buildHills(layout, elev, spIn, T, hills) {
     g.hillIds = [...ids];
   }
   const boxById = new Map(res.tunnelGeo.map((g) => [g.id, g.box]));
+  // contorno de cada boca (con la forma del túnel) para recortar el cerro: polígono convexo en (u lateral, altura sobre
+  // la calzada), que baja un poco bajo el nivel de la calzada; cada lado con su función «afuera» (> 0 fuera del polígono)
+  const c0vAll = -Math.min(0.25, gap * 0.8);
+  const clipById = new Map(res.tunnelGeo.filter((g) => g.outline && g.outline.length >= 3).map((g) => {
+    const floor = g.outline.filter((q) => q[1] <= 0.01).map((q) => q[0]);
+    const u0 = floor.length ? Math.min(...floor) : -g.box.A, u1 = floor.length ? Math.max(...floor) : g.box.A;
+    const poly = convexHull2([...g.outline, [u0, c0vAll], [u1, c0vAll]]);
+    const edges = poly.map((a, i) => { const b = poly[(i + 1) % poly.length], ex = b[0] - a[0], ey = b[1] - a[1], l = Math.hypot(ex, ey) || 1; return { ax: a[0], ay: a[1], nx: ey / l, ny: -ex / l }; });
+    return [g.id, edges];
+  }));
   const boxA = Math.max(box.A, ...res.tunnelGeo.map((g) => (g.box ? g.box.A : 0)));
   const { minX: bx0, minY: by0, maxX: bx1, maxY: by1 } = T.bounds;
   const sink = 0.4;
@@ -1153,18 +1211,29 @@ export function buildHills(layout, elev, spIn, T, hills) {
           const { p } = nt;
           const U = (q) => (q.x - p.x) * -p.ty + (q.y - p.y) * p.tx;
           const ZL = (q) => q.z - (p.zc + p.sr * clamp(U(q), -p.w / 2, p.w / 2));
-          const bx = boxById.get(p.tun) || box;
-          const B = bx.B, A = bx.A, c0v = -Math.min(0.25, gap * 0.8);
-          const reg = (q) => { const zl = ZL(q), u = U(q); if (zl >= B) return 0; if (zl <= c0v) return 3; if (u >= A) return 1; if (u <= -A) return 2; return 4; };
           const V3 = [vert(a), vert(b), vert(cI)];
-          const R = V3.map(reg);
-          if (R[0] === R[1] && R[1] === R[2]) { if (R[0] === 4) return; idx.push(a, b, cI); keptTri[ti] = 1; return; }
-          const pieces = [
-            [(q) => ZL(q) - B],
-            [(q) => B - ZL(q), (q) => ZL(q) - c0v, (q) => U(q) - A],
-            [(q) => B - ZL(q), (q) => ZL(q) - c0v, (q) => -A - U(q)],
-            [(q) => c0v - ZL(q)],
-          ];
+          const edges = clipById.get(p.tun);
+          let pieces;
+          if (edges) {
+            // afuera del contorno de la boca (con la forma del túnel): lado i afuera y los anteriores adentro
+            const fOut = edges.map((E2) => (q) => (U(q) - E2.ax) * E2.nx + (ZL(q) - E2.ay) * E2.ny);
+            const vals = V3.map((q) => fOut.map((fn) => fn(q)));
+            if (vals.every((vs) => vs.every((v) => v <= 0))) return; // dentro del hueco de la boca
+            for (let e2 = 0; e2 < fOut.length; e2++) if (vals.every((vs) => vs[e2] >= 0)) { idx.push(a, b, cI); keptTri[ti] = 1; return; } // todo fuera de un mismo lado
+            pieces = fOut.map((fn, e2) => [fn, ...fOut.slice(0, e2).map((g2) => (q) => -g2(q))]);
+          } else {
+            const bx = boxById.get(p.tun) || box;
+            const B = bx.B, A = bx.A, c0v = -Math.min(0.25, gap * 0.8);
+            const reg = (q) => { const zl = ZL(q), u = U(q); if (zl >= B) return 0; if (zl <= c0v) return 3; if (u >= A) return 1; if (u <= -A) return 2; return 4; };
+            const R = V3.map(reg);
+            if (R[0] === R[1] && R[1] === R[2]) { if (R[0] === 4) return; idx.push(a, b, cI); keptTri[ti] = 1; return; }
+            pieces = [
+              [(q) => ZL(q) - B],
+              [(q) => B - ZL(q), (q) => ZL(q) - c0v, (q) => U(q) - A],
+              [(q) => B - ZL(q), (q) => ZL(q) - c0v, (q) => -A - U(q)],
+              [(q) => c0v - ZL(q)],
+            ];
+          }
           for (const planes of pieces) {
             let poly = V3;
             for (const fn of planes) { poly = clipPoly(poly, fn); if (poly.length < 3) break; }
@@ -1977,5 +2046,58 @@ export function bridgePillars(layout, elev, terrain = null, sp = null) {
       if (n === 1) break;
     }
   });
+  return out;
+}
+
+
+/** Nombre seguro para un objeto exportado (sin espacios ni signos raros). */
+export function triggerSafeName(name) {
+  return String(name || 'trigger').trim().replace(/[^\w\-áéíóúñÁÉÍÓÚÑ ]/g, '').replace(/\s+/g, '_') || 'trigger';
+}
+
+/**
+ * Triggers: cubos invisibles de todo el ancho de la pista (calzada + camino de tierra + barrera), alineados con ella.
+ * - Túneles (sp.tunnelTriggers): uno en cada boca, «trigger_tunel_NN_entrada» / «_salida» (según el sentido de marcha).
+ * - Propios: custom = [{id, name, p:[x, y] en el mundo, depth, height}] en la ruta más cercana.
+ * tunnels = [{id, k, e0, e1, name}] (bocas de cada túnel). Devuelve [{name, kind, tunnel, k, s, center:[x,y,z],
+ * T, L, U (ejes: a lo largo, lateral, arriba), w, d, h, custom}] con el centro de la base sobre la calzada.
+ */
+export function buildTriggers(layout, elev, spIn, custom = [], tunnels = []) {
+  const sp = { ...DEFAULT_SCENE, ...spIn };
+  const out = [];
+  if (!layout || !elev) return out;
+  const make = (k, sv, d, h, extra) => {
+    const r = layout.routes[k], e = elev.routes[k];
+    if (!r || !e) return null;
+    const F = frameAt(r, e, sv);
+    const P = edgeParams(sp, r);
+    const bar = (key) => (P.barrierSide === 'both' || P.barrierSide === key ? Math.max(0.05, P.barrierThick ?? 0.25) + 0.15 : 0);
+    const wl = F.w / 2 + dirtWidthAt(sp, r, k, sv, 1, P) + bar('left'), wr = F.w / 2 + dirtWidthAt(sp, r, k, sv, -1, P) + bar('right');
+    const off = (wl - wr) / 2; // centro del ancho total (el camino de tierra puede ser distinto a cada lado)
+    const c = F.at(off, 0);
+    return { k, s: sv, center: c, T: [F.tx, F.ty, 0], L: F.L, U: F.U, w: wl + wr, d: Math.max(0.1, d), h: Math.max(0.1, h), ...extra };
+  };
+  if (sp.tunnelTriggers) {
+    for (const t of tunnels || []) {
+      const nm = t.name || `tunel_${String(t.id + 1).padStart(2, '0')}`;
+      const h = Math.max(sp.triggerHeight ?? 6, 1);
+      const a = make(t.k, t.e0, sp.triggerDepth ?? 1, h, { name: `trigger_${nm}_entrada`, kind: 'tunnel_enter', tunnel: nm });
+      const b = make(t.k, t.e1, sp.triggerDepth ?? 1, h, { name: `trigger_${nm}_salida`, kind: 'tunnel_exit', tunnel: nm });
+      if (a) out.push(a);
+      if (b) out.push(b);
+    }
+  }
+  const used = new Set(out.map((q) => q.name));
+  for (const c of custom || []) {
+    if (!c || !c.p) continue;
+    let best = null;
+    layout.routes.forEach((r, k) => { const q = nearestOnSamples(r, c.p[0], c.p[1]); if (!best || q.d < best.d) best = { ...q, k }; });
+    if (!best) continue;
+    let name = `trigger_${triggerSafeName(c.name)}`;
+    for (let n = 2; used.has(name); n++) name = `trigger_${triggerSafeName(c.name)}_${n}`;
+    used.add(name);
+    const tr = make(best.k, best.s, c.depth ?? 2, c.height ?? 6, { name, kind: 'custom', custom: c.id, label: c.name });
+    if (tr) out.push(tr);
+  }
   return out;
 }

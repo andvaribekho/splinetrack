@@ -10,9 +10,9 @@ import { edgeSamples } from '../js/export.js';
 import { computeItems, defaultGroup, itemAt } from '../js/items.js';
 import { nearestOnSamples } from '../js/geometry.js';
 import { buildEdgeMeshes } from '../js/edges.js';
-import { edgeExtents } from '../js/tunnels.js';
+import { edgeExtents, dirtWidthAt, edgeParams, convexHull2 } from '../js/tunnels.js';
 import { buildRivers } from '../js/rivers.js';
-import { sculptField, bakeTreeList, bakeDecoList, moveTree, treeConeVerts, vegPlace } from '../js/scene.js';
+import { buildTriggers, sculptField, bakeTreeList, bakeDecoList, moveTree, treeConeVerts, vegPlace } from '../js/scene.js';
 import { treeModelItems, decoSetItems } from '../js/deco.js';
 import { buildShadows, shadowCasters, sunShadowDir } from '../js/shadows.js';
 import { SCULPT_PRESETS, curveLUT, curveEval, normCurve, presetOf } from '../js/sculptcurve.js';
@@ -121,6 +121,11 @@ for (const [key, s] of Object.entries(SAMPLES)) {
       check(HS.hills.length === 2 && HS.hills.every((h) => h.tris > 50 && h.tris <= 30000 * 1.15), `${key}: mallas de cerros (${HS.hills.map((h) => h.tris).join(', ')})`);
       const g = HS.tunnelGeo[0];
       check(g && g.walls.indices.length && g.ceiling.indices.length && g.portals.length === 2 && g.portals.every((p) => p.geo.indices.length), `${key}: túnel con paredes, techo y bocas`);
+      if (tunnelOpen === 'none') { // boca con la forma del túnel (círculo): la esquina de la caja queda fuera del contorno
+        const O = g.outline, A = g.box.A, Bb = g.box.B;
+        const inside = (u, v) => O.every((a, i) => { const b2 = O[(i + 1) % O.length]; return (b2[0] - a[0]) * (v - a[1]) - (b2[1] - a[1]) * (u - a[0]) >= -1e-9; });
+        check(O && O.length > 6 && !inside(A * 0.97, Bb * 0.97) && inside(0, Bb * 0.9), `${key}: boca con la forma del túnel (${O ? O.length : 0} vértices)`);
+      }
     }
     // «Quitar cerro»: el cerro del túnel no se genera, el túnel sigue y tiene cáscara exterior
     {
@@ -1229,6 +1234,84 @@ for (const [key, s] of Object.entries(SAMPLES)) {
   // sin terreno: se apoyan a la altura de la calzada más cercana
   const nb = buildTrees(L, E, { ...sp, treeBake: bake.slice(0, 5) }, null);
   check(nb.count === 5 && nb.trees.every((t) => Number.isFinite(t.z)), 'árboles: lista fija sin terreno');
+}
+
+// ---- 0.57: camino de tierra con ancho por lado (y propio en los tramos), faldones, triggers y bocas con forma ----
+{
+  const proj = SAMPLES.oval.build();
+  const L0 = buildLayout(proj, { lapLength: 1000 });
+  proj.main.ctrl = deriveControlPoints(proj.main.pts, true, 30 / L0.scale, 3);
+  const c = proj.main.ctrl;
+  proj.main.bridges = [{ a: c[5].slice(0, 2), b: c[9].slice(0, 2), w: 14, type: 'track', dirt: null, dirtOwnW: true, dirtWL: 6, dirtWR: 0.5 }];
+  const L = buildLayout(proj, { lapLength: 1000 }), r = L.routes[0], b = r.bridges[0];
+  const E = computeElevation(L, { hills: 0 });
+  const sp = { dirtSide: 'both', dirtWidth: 3, dirtWidthL: 2, dirtWidthR: 4, barrierSide: 'none' };
+  const sOut = (b.s1 + 60) % r.L, sIn = (b.s0 + b.s1) / 2;
+  check(dirtWidthAt(sp, r, 0, sOut, 1) === 2 && dirtWidthAt(sp, r, 0, sOut, -1) === 4, `camino de tierra: ancho izq./der. de la pista (${dirtWidthAt(sp, r, 0, sOut, 1)}, ${dirtWidthAt(sp, r, 0, sOut, -1)})`);
+  check(dirtWidthAt(sp, r, 0, sIn, 1) === 6 && dirtWidthAt(sp, r, 0, sIn, -1) === 0.5, 'camino de tierra: anchos propios del tramo');
+  check(edgeParams({ dirtWidth: 3 }).dirtWidthL === 3, 'proyectos anteriores: el ancho general vale para ambos lados');
+  const B = buildEdgeMeshes(L, E, sp);
+  const dl = B.dirt.find((m) => m.name === 'camino_tierra_ruta_principal_izq' || (m.side === 1 && m.bridge == null));
+  const ws = [];
+  if (dl) for (const a of dl.segs) { const i = a * dl.per; const dx = dl.positions[(i + 1) * 3] - dl.positions[i * 3], dy = dl.positions[(i + 1) * 3 + 1] - dl.positions[i * 3 + 1]; ws.push(Math.hypot(dx, dy)); }
+  ws.sort((x, y) => x - y);
+  const med = ws[Math.floor(ws.length / 2)] || 0;
+  check(dl && Math.abs(med - 2) < 0.05, `camino de tierra izquierdo de 2 m (${med.toFixed(2)})`);
+  // faldones: sin faldón de la pista donde hay camino de tierra
+  const T1 = buildTrackMesh(L, E, { ...sp, skirts: true }), T0 = buildTrackMesh(L, E, { ...sp, dirtSide: 'none', skirts: true });
+  check(T1.indices.length < T0.indices.length && T0.indices.length - T1.indices.length >= (T0.rows[0] - 2) * 12, `faldones: no van bajo el camino de tierra (${T0.indices.length / 3} → ${T1.indices.length / 3} tri.)`);
+  const Tl = buildTrackMesh(L, E, { ...sp, dirtSide: 'left', skirts: true });
+  check(Tl.indices.length > T1.indices.length && Tl.indices.length < T0.indices.length, 'faldones: con camino a un lado, el otro conserva su faldón');
+  const Th = buildTrackMesh(L, E, { dirtSide: 'none', skirts: true, skirtHeight: 3 });
+  let minZ = Infinity, minZ0 = Infinity;
+  for (let q = 2; q < Th.positions.length; q += 3) minZ = Math.min(minZ, Th.positions[q]);
+  for (let q = 2; q < T0.positions.length; q += 3) minZ0 = Math.min(minZ0, T0.positions[q]);
+  check(minZ < minZ0 - 1.5, `alto del faldón configurable (${minZ0.toFixed(2)} → ${minZ.toFixed(2)})`);
+  // triggers
+  const tun = [{ id: 0, k: 0, e0: 100, e1: 160, name: 'tunel_01' }];
+  const TR = buildTriggers(L, E, { ...sp, barrierSide: 'both', barrierThick: 0.25 }, [{ id: 'a', name: 'Meta intermedia', p: [r.x[50], r.y[50]], depth: 3, height: 5 }], tun);
+  const en = TR.find((t) => t.name === 'trigger_tunel_01_entrada'), ex = TR.find((t) => t.name === 'trigger_tunel_01_salida'), cu = TR.find((t) => t.kind === 'custom');
+  check(en && ex && Math.abs(en.s - 100) < 1e-6 && Math.abs(ex.s - 160) < 1e-6, 'triggers en la entrada y la salida del túnel');
+  const wExp = r.w[Math.round(100 / r.ds)] + 2 + 4 + 2 * 0.4;
+  check(Math.abs(en.w - wExp) < 0.2, `trigger de todo el ancho (calzada + camino + barrera): ${en.w.toFixed(2)} ≈ ${wExp.toFixed(2)}`);
+  check(cu && cu.name === 'trigger_Meta_intermedia' && cu.d === 3 && cu.h === 5 && Math.abs(cu.s - r.s[50]) < 1, `trigger propio con nombre (${cu && cu.name}, s ${cu && cu.s.toFixed(1)})`);
+  const TRoff = buildTriggers(L, E, { ...sp, tunnelTriggers: false }, [], tun);
+  check(TRoff.length === 0, 'sin triggers de túnel si se desactivan');
+  const dot = (a, b2) => a[0] * b2[0] + a[1] * b2[1] + a[2] * b2[2];
+  check(Math.abs(dot(en.T, en.L)) < 1e-6 && Math.abs(dot(en.L, en.U)) < 1e-6 && Math.abs(dot(en.T, en.U)) < 1e-6, 'trigger alineado con la pista (ejes ortogonales)');
+  check(convexHull2([[0, 0], [2, 0], [1, 1], [2, 2], [0, 2]]).length === 4, 'envolvente convexa');
+}
+
+// ---- 0.58: subdividir transiciones de ancho ----
+{
+  const proj = SAMPLES.oval.build();
+  const L0 = buildLayout(proj, { lapLength: 1000 });
+  proj.main.ctrl = deriveControlPoints(proj.main.pts, true, 30 / L0.scale, 3);
+  const c = proj.main.ctrl;
+  proj.main.bridges = [{ a: c[5].slice(0, 2), b: c[9].slice(0, 2), w: 24, off: 1, type: 'track' }];
+  const L = buildLayout(proj, { lapLength: 1000 }), E = computeElevation(L, { hills: 0 });
+  const M0 = buildTrackMesh(L, E, { transSubdiv: false }), M1 = buildTrackMesh(L, E, { transSubdiv: true, transDivs: [0.07, 0.47, 0.53, 0.93] });
+  const P = M1.positions, I = M1.indices;
+  let degen = 0, down = 0;
+  for (let t = 0; t < I.length; t += 3) {
+    const a = I[t] * 3, b = I[t + 1] * 3, d = I[t + 2] * 3;
+    const ux = P[b] - P[a], uy = P[b + 1] - P[a + 1], vx = P[d] - P[a], vy = P[d + 1] - P[a + 1];
+    const cz = ux * vy - uy * vx;
+    if (Math.abs(cz) < 1e-9) degen++; else if (cz > 0) down++;
+  }
+  const extra = M1.indices.length / 3 - M0.indices.length / 3;
+  check(extra > 0 && extra < 1200, `subdividir transiciones: +${extra} triángulos solo en las transiciones`);
+  check(degen === 0 && (down === 0 || down === I.length / 3), `transiciones: sin triángulos degenerados ni volteados (${degen}, ${down})`);
+  // aristas: cada arista interior la comparten exactamente 2 triángulos (sin vértices sueltos en las uniones)
+  const cnt = new Map();
+  for (let t = 0; t < I.length; t += 3) for (const [x, y] of [[I[t], I[t + 1]], [I[t + 1], I[t + 2]], [I[t + 2], I[t]]]) { const k2 = x < y ? `${x},${y}` : `${y},${x}`; cnt.set(k2, (cnt.get(k2) || 0) + 1); }
+  let bad = 0;
+  for (const v of cnt.values()) if (v > 2) bad++;
+  // aristas de borde: solo a lo largo de los bordes de la pista (su número ≈ 2 por sección), no en las uniones
+  const border = [...cnt.values()].filter((v) => v === 1).length;
+  check(bad === 0 && border <= 2 * M1.rows[0] + 8, `transiciones: malla cerrada en las uniones (aristas de borde ${border}, filas ${M1.rows[0]})`);
+  const Mn = buildTrackMesh(L, E, { transSubdiv: true, transDivs: [] });
+  check(Mn.indices.length === M0.indices.length || Mn.rows[0] >= M0.rows[0], 'sin divisiones no cambia la calzada');
 }
 
 function hillsZeroFlat(L) {
