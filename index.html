@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Track Spline Generator v0.65</title>
+  <title>Track Spline Generator v0.66</title>
   <link rel="stylesheet" href="styles.css">
   <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.65</span></div>
+    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.66</span></div>
     <label class="proj-name-wrap" title="Nombre del proyecto: se usa al guardar (<nombre>.tsg.json) y en los autoguardados (<nombre>_auto_…)"><input id="projectName" class="proj-name" value="pista" spellcheck="false" maxlength="80"><span class="small muted" id="autosaveState"></span></label>
     <div class="top-actions">
       <button id="btnNew" title="Empezar de cero">Nuevo</button>
@@ -460,6 +460,18 @@
               <div class="field"><label>Radio <span class="val" id="hillCtrlRVal"></span></label><input type="range" id="hillCtrlR" min="1" max="200" step="0.5" title="Radio de la zona que mueve el punto"></div>
               <div class="row gap"><button id="btnHillCtrlDel" class="small" title="Quita este punto (también con Supr)">Quitar punto</button></div>
             </div>
+            <h4 class="mini">Caja de edición</h4>
+            <div class="row gap"><button id="btnHillLat" class="small" title="Pone sobre el cerro una grilla de puntos unidos por líneas: cada punto sube o baja y el cerro se curva suave entre ellos">Caja de edición</button><button id="btnHillLatDel" class="small" hidden title="Quita la caja de edición (el cerro vuelve a su forma sin ella)">Quitar caja</button></div>
+            <div id="hillLatBox" hidden>
+              <div class="row gap"><label class="small">Columnas <input type="number" id="hillLatNx" min="2" max="12" step="1" style="width:48px"></label><label class="small">Filas <input type="number" id="hillLatNy" min="2" max="12" step="1" style="width:48px"></label></div>
+              <p class="meta" id="hillLatInfo"></p>
+              <div id="hillLatSel" hidden>
+                <div class="field"><label>Subir / hundir <span class="val" id="hillLatDzVal"></span></label><input type="range" id="hillLatDz" min="-40" max="40" step="0.1" title="Altura de este punto de la caja: el cerro pasa por él y se curva suave hasta los vecinos"></div>
+                <div class="row gap"><button id="btnHillLatZero" class="small" title="Deja este punto en 0 (también con Supr)">Poner en 0</button></div>
+              </div>
+              <div class="row gap"><button id="btnHillLatFlat" class="small" title="Deja todos los puntos de la caja en 0">Todos en 0</button></div>
+              <p class="hint">Clic en un punto de la caja (mapa o vista 3D) para elegirlo; súbelo o húndelo con el gizmo o la barra. En el mapa, arrastra el cuadrado del centro para mover la caja y las esquinas para agrandarla.</p>
+            </div>
           </div>
         </div>
         <h3 class="subhead">Túneles</h3>
@@ -759,6 +771,7 @@
           <label class="check small"><input type="checkbox" id="wireOn"> Wireframe</label>
           <input type="color" id="wireColor" value="#ffffff" class="color-in">
           <input type="range" id="wireOpacity" min="0.05" max="1" step="0.05" value="0.35" style="width:70px">
+          <label class="check small" title="Muestra u oculta los triggers (bocas de túneles y propios) en la vista 3D. Es la misma opción que «Mostrar los triggers en la vista 3D» del panel Triggers; se siguen exportando igual"><input type="checkbox" id="trigOn3d"> Triggers</label>
           <button id="btnGenTerrain" class="gen">Generar terreno</button>
           <button id="btnGenTrees" class="gen">Generar árboles y decoración</button>
           <button id="btnGame" class="primary" title="Un auto recorre la pista solo, con cámara en tercera o primera persona. Arrastrar con clic izquierdo orbita alrededor del auto; clic derecho vuelve a la cámara normal">Cámara de juego</button>

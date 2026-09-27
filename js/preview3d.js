@@ -129,6 +129,31 @@ export class Preview3D {
       this.app.moveHillCtrl(d.i, { x: +lx.toFixed(3), y: +ly.toFixed(3), dz: +dz.toFixed(2) }, false);
       this.needsFrame = true;
     });
+    // caja de edición del cerro: gizmo solo en Z para el punto elegido
+    this.latProxy = new THREE.Object3D();
+    this.scene.add(this.latProxy);
+    this.latTc = new TransformControls(this.camera, this.renderer.domElement);
+    this.latTc.setSpace('world');
+    this.latTc.setSize(0.9);
+    this.latTc.showX = false; this.latTc.showY = false;
+    this.scene.add(this.latTc.getHelper());
+    this.latTc.enabled = false;
+    this.latTc.addEventListener('change', () => (this.needsFrame = true));
+    this.latTc.addEventListener('dragging-changed', (e) => {
+      this.controls.enabled = !e.value;
+      const d = this.latDrag;
+      if (!d) return;
+      if (e.value) { d.z0 = this.latProxy.position.z; d.active = true; this.app.beginHillCtrlDrag(); }
+      else if (d.active) { d.active = false; this.app.setHillLatDz(d.i, d.dz, true); }
+    });
+    this.latTc.addEventListener('objectChange', () => {
+      const d = this.latDrag;
+      if (!d || !d.active) return;
+      d.dz = d.dz0 + (this.latProxy.position.z - d.z0) / Math.max(0.01, this.zExag);
+      if (d.sphere) d.sphere.position.z = this.latProxy.position.z;
+      this.app.setHillLatDz(d.i, d.dz, false);
+      this.needsFrame = true;
+    });
     // bordes de la pista (camino de tierra y barrera), extruidos de la malla de la pista
     this.edgeGroup = new THREE.Group();
     this.scene.add(this.edgeGroup);
@@ -146,7 +171,7 @@ export class Preview3D {
     this.refTc.addEventListener('objectChange', () => { if (this.refOuter && this.app.onRef3dMove) { const p = this.refOuter.position; this.app.onRef3dMove([p.x, p.y, p.z], THREE.MathUtils.radToDeg(this.refOuter.rotation.z)); } });
     const dom = this.renderer.domElement;
     let down = null;
-    dom.addEventListener('pointerdown', (e) => { down = [e.clientX, e.clientY, e.button]; this.tcUsed = !!this.tc.axis || !!(this.refTc && this.refTc.axis && this.refTc.enabled) || !!(this.hillTc && this.hillTc.axis && this.hillTc.enabled) || !!(this.hctrlTc && this.hctrlTc.axis && this.hctrlTc.enabled); });
+    dom.addEventListener('pointerdown', (e) => { down = [e.clientX, e.clientY, e.button]; this.tcUsed = !!this.tc.axis || !!(this.refTc && this.refTc.axis && this.refTc.enabled) || !!(this.hillTc && this.hillTc.axis && this.hillTc.enabled) || !!(this.hctrlTc && this.hctrlTc.axis && this.hctrlTc.enabled) || !!(this.latTc && this.latTc.axis && this.latTc.enabled); });
     // pintar subdivisión, cerros o ríos directamente sobre el terreno en 3D
     this.paintMode = null;
     // aro del pincel: una cinta que se amolda a la superficie (se rehace en cada movimiento)
@@ -1266,7 +1291,37 @@ export class Preview3D {
     const st = this.app.state, L = st.layout;
     const h = st.selHill != null ? (st.hills || []).find((q) => q.id === st.selHill) : null;
     const off = () => { this.hctrlTc.detach(); this.hctrlTc.enabled = false; this.hctrlDrag = null; };
-    if (!h || !L || (this.game && this.game.active) || !(h.ctrl && h.ctrl.length)) { off(); return; }
+    const offLat = () => { this.latTc.detach(); this.latTc.enabled = false; if (!this.latDrag || !this.latDrag.active) this.latDrag = null; };
+    // caja de edición: esferas en cada punto y líneas entre vecinos, apoyadas en la superficie del cerro
+    const G = h && L && !(this.game && this.game.active) ? h.lattice : null;
+    if (G) {
+      const P = [];
+      for (let i = 0; i < G.nx * G.ny; i++) { const [lx, ly] = this.app.latPointL(G, i), [x, y] = L.toWorld(lx, ly); P.push(new THREE.Vector3(x, y, (this.surfaceZ(x, y) ?? 0) + 0.6)); }
+      const seg = [];
+      for (let r = 0; r < G.ny; r++) for (let c = 0; c < G.nx; c++) {
+        const k = r * G.nx + c;
+        if (c < G.nx - 1) seg.push(P[k], P[k + 1]);
+        if (r < G.ny - 1) seg.push(P[k], P[k + G.nx]);
+      }
+      const lines = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(seg), new THREE.LineBasicMaterial({ color: 0x7fd6ff, depthTest: false, transparent: true, opacity: 0.85 }));
+      lines.renderOrder = 9;
+      this.hillCtrlGroup.add(lines);
+      P.forEach((p, i) => {
+        const sel = i === st.selHillLat, v = G.dz[i] || 0;
+        const m = new THREE.Mesh(new THREE.SphereGeometry(sel ? 1.1 : 0.8, 12, 8), new THREE.MeshBasicMaterial({ color: sel ? 0xffb74d : v > 0.05 ? 0x7fd6ff : v < -0.05 ? 0x335577 : 0xbfe9ff, depthTest: false }));
+        m.renderOrder = 10;
+        m.position.copy(p);
+        m.userData = { hillLat: i };
+        this.hillCtrlGroup.add(m);
+        if (sel && (!this.latDrag || !this.latDrag.active)) {
+          this.latProxy.position.copy(p); this.latProxy.updateMatrixWorld();
+          this.latTc.attach(this.latProxy); this.latTc.enabled = true;
+          this.latDrag = { i, dz0: v, dz: v, sphere: m, active: false };
+        }
+      });
+      if (st.selHillLat == null || st.selHillLat >= P.length) offLat();
+    } else offLat();
+    if (!h || !L || (this.game && this.game.active) || !(h.ctrl && h.ctrl.length)) { off(); this.needsFrame = true; return; }
     h.ctrl.forEach((c, i) => {
       const [x, y] = L.toWorld(c.x, c.y), z = (this.surfaceZ(x, y) ?? 0) + 0.6;
       const sel = i === st.selHillCtrl;
@@ -1295,7 +1350,7 @@ export class Preview3D {
     const st = this.app.state;
     const meshes = (this.hillMeshes || []).filter((m) => st.selHill != null && m.userData.hillId === st.selHill);
     const hill = st.selHill != null ? (st.hills || []).find((h) => h.id === st.selHill) : null;
-    if (!meshes.length || !hill || (this.game && this.game.active) || st.tool === 'edit' || st.hillCtrlMode || st.selHillCtrl != null) { this.hillTc.detach(); this.hillTc.enabled = false; this.hillDrag = null; return; }
+    if (!meshes.length || !hill || (this.game && this.game.active) || st.tool === 'edit' || st.hillCtrlMode || st.selHillCtrl != null || st.selHillLat != null) { this.hillTc.detach(); this.hillTc.enabled = false; this.hillDrag = null; return; }
     let best = null, zb = Infinity;
     for (const m of meshes) {
       const P = m.geometry.getAttribute('position');
@@ -1393,7 +1448,8 @@ export class Preview3D {
     const objs = [...refMeshes, ...edgeMeshes, ...(this.riverMeshes || []), ...(this.wallMeshes || []), ...water, ...decoMeshes, ...this.itemsGroup.children, ...this.hillMeshes, ...(this.tunnelMeshes || []), ...(this.tunnelDecoMeshes || []), ...(this.terrainMesh ? [this.terrainMesh] : []), ...this.trackGroup.children, ...veg];
     const st0 = this.app.state;
     // puntos de control del cerro seleccionado (se ven y se eligen a través del cerro)
-    const hcs = this.hillCtrlGroup ? ray.intersectObjects(this.hillCtrlGroup.children, false) : [];
+    const hcs = this.hillCtrlGroup ? ray.intersectObjects(this.hillCtrlGroup.children.filter((o) => o.isMesh), false) : [];
+    if (hcs.length && hcs[0].object.userData.hillLat != null) { this.app.selectHillLat(hcs[0].object.userData.hillLat); return; }
     if (hcs.length) { this.app.selectHillCtrl(hcs[0].object.userData.hillCtrl); return; }
     if (st0.selHill != null && this.app.hillCtrlMode && this.app.hillCtrlMode()) {
       const hh = ray.intersectObjects((this.hillMeshes || []).filter((m) => m.userData.hillId === st0.selHill), false);

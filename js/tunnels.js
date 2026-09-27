@@ -41,7 +41,7 @@ function edt(mask, nx, ny) {
 export function hillFieldOne(hill) {
   const adds = hill.strokes.filter((q) => !q.e);
   if (!adds.length) return null;
-  const key = JSON.stringify([hill.height, hill.hard, hill.flat, hill.strokes, hill.ctrl || null]);
+  const key = JSON.stringify([hill.height, hill.hard, hill.flat, hill.strokes, hill.ctrl || null, hill.lattice || null]);
   const cached = fieldCache.get(hill.id);
   if (cached && cached.key === key) return cached.field;
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -112,6 +112,14 @@ export function hillFieldOne(hill) {
       f[k] = Math.max(0.05, f[k] + c.dz * (1 - t2) * (1 - t2));
     }
   }
+  // 0.66: caja de edición (grilla de puntos que solo suben o bajan): el cerro se curva suave entre los puntos
+  const LO = latticeOffset(hill.lattice);
+  if (LO) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+    const k = j * nx + i;
+    if (!mask[k]) continue;
+    const o = LO(minX + i * hc, minY + j * hc);
+    if (o) f[k] = Math.max(0.05, f[k] + o);
+  }
   const sample = (x, y) => {
     const fx = (x - minX) / hc, fy = (y - minY) / hc;
     if (fx < 0 || fy < 0 || fx >= nx - 1 || fy >= ny - 1) return 0;
@@ -122,6 +130,34 @@ export function hillFieldOne(hill) {
   const field = { id: hill.id, sample, minX, minY, maxX, maxY, cell: hc, area: count * hc * hc, Dmax, height: H };
   fieldCache.set(hill.id, { key, field });
   return field;
+}
+
+/**
+ * Desplazamiento en Z de la caja de edición de un cerro en (x, y). lat = {ax, ay, bx, by, nx, ny, dz: [ny*nx]} con las
+ * esquinas (ax, ay) = punto (0, 0) y (bx, by) = punto (nx-1, ny-1) de la grilla. Entre los puntos se interpola con
+ * Catmull-Rom (la superficie pasa por cada punto); fuera de la caja se desvanece suave en un margen del 20 %.
+ */
+export function latticeOffset(lat) {
+  if (!lat || !(lat.nx >= 2) || !(lat.ny >= 2) || !Array.isArray(lat.dz) || !lat.dz.some((v) => v)) return null;
+  const { ax, ay, bx, by, nx, ny, dz } = lat;
+  if (Math.abs(bx - ax) < 1e-6 || Math.abs(by - ay) < 1e-6) return null;
+  const at = (i, j) => dz[clamp(j, 0, ny - 1) * nx + clamp(i, 0, nx - 1)] || 0;
+  const cr = (p0, p1, p2, p3, t) => 0.5 * (2 * p1 + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t + (-p0 + 3 * p1 - 3 * p2 + p3) * t * t * t);
+  const W = Math.abs(bx - ax), H = Math.abs(by - ay), marg = 0.2;
+  return (x, y) => {
+    let u = (x - ax) / (bx - ax), v = (y - ay) / (by - ay); // 0..1 dentro de la caja
+    // fuera de la caja: el borde se desvanece en un margen (así no queda un escalón en el borde)
+    const du = u < 0 ? -u : u > 1 ? u - 1 : 0, dv = v < 0 ? -v : v > 1 ? v - 1 : 0;
+    const dOut = Math.hypot(du * W, dv * H) / (marg * Math.max(W, H));
+    if (dOut >= 1) return 0;
+    u = clamp(u, 0, 1); v = clamp(v, 0, 1);
+    const fu = u * (nx - 1), fv = v * (ny - 1);
+    const i = Math.min(nx - 2, Math.floor(fu)), j = Math.min(ny - 2, Math.floor(fv)), tu = fu - i, tv = fv - j;
+    const row = (jj) => cr(at(i - 1, jj), at(i, jj), at(i + 1, jj), at(i + 2, jj), tu);
+    const val = cr(row(j - 1), row(j), row(j + 1), row(j + 2), tv);
+    const fade = dOut > 0 ? 1 - dOut * dOut * (3 - 2 * dOut) : 1;
+    return val * fade;
+  };
 }
 
 /** Punto dentro de la huella de un cerro (según el orden de sus toques). */

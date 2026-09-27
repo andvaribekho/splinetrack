@@ -22,7 +22,7 @@ import { loadAsset, builtinAsset } from './assets.js';
 import { defaultDecoSet } from './deco.js';
 import { makeGrassCanvas, makePadCanvas, makeGlowCanvas, makeAsphaltCanvas, makeBridgeCanvas, makeBarrierCanvas, makeSandCanvas } from './gatetex.js';
 import { GameCam, makeDefaultSky } from './gamecam.js';
-import { tunnelResolution, edgeParams } from './tunnels.js';
+import { tunnelResolution, edgeParams, latticeOffset } from './tunnels.js';
 import { initButtonIcons, decorateButton } from './icons.js';
 import { initI18n, t as _t, setLang, getLang, LANGS, onLangChange, orig, origText, missingTexts, localizeCtx } from './i18n.js';
 import { initSearch } from './search.js';
@@ -743,7 +743,7 @@ function altAt(p, tolLayout) {
   return best;
 }
 function selectHill(id, redraw = true) {
-  if (id !== state.selHill) { state.selHillCtrl = null; state.hillCtrlMode = false; }
+  if (id !== state.selHill) { state.selHillCtrl = null; state.hillCtrlMode = false; state.selHillLat = null; }
   state.selHill = id;
   state.selTunnel = null;
   state.selCave = null;
@@ -803,6 +803,67 @@ function deleteHillCtrl(i) {
   refreshHillCtrlUI();
   sceneChanged();
 }
+// ---------- caja de edición del cerro (grilla de puntos que solo suben o bajan) ----------
+// h.lattice = {x0, y0, x1, y1 (lienzo), nx, ny, dz: [ny*nx] metros}. El cerro se curva suave entre los puntos.
+function latPointL(G, i) { const c = i % G.nx, r = Math.floor(i / G.nx); return [G.x0 + ((G.x1 - G.x0) * c) / (G.nx - 1), G.y0 + ((G.y1 - G.y0) * r) / (G.ny - 1)]; }
+function createHillLattice() {
+  const h = selHillObj();
+  if (!h) return;
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (const q of h.strokes) if (!q.e) { x0 = Math.min(x0, q.x - q.r); x1 = Math.max(x1, q.x + q.r); y0 = Math.min(y0, q.y - q.r); y1 = Math.max(y1, q.y + q.r); }
+  if (!Number.isFinite(x0)) return;
+  pushUndo();
+  const m = Math.max(x1 - x0, y1 - y0) * 0.04;
+  h.lattice = { x0: +(x0 - m).toFixed(3), y0: +(y0 - m).toFixed(3), x1: +(x1 + m).toFixed(3), y1: +(y1 + m).toFixed(3), nx: 4, ny: 4, dz: new Array(16).fill(0) };
+  state.selHillLat = null;
+  refreshHillCtrlUI();
+  sceneChanged();
+  toast('Caja de edición: clic en un punto (mapa o 3D) y súbelo o húndelo con el gizmo o la barra. En el mapa, el cuadrado del centro mueve la caja y las esquinas la agrandan.');
+}
+function removeHillLattice() {
+  const h = selHillObj();
+  if (!h || !h.lattice) return;
+  pushUndo();
+  delete h.lattice;
+  state.selHillLat = null;
+  refreshHillCtrlUI();
+  sceneChanged();
+}
+/** Cambia columnas y filas conservando la forma (los puntos nuevos toman la altura interpolada de la grilla anterior). */
+function setHillLatSize(nx, ny) {
+  const h = selHillObj(), G = h && h.lattice;
+  if (!G) return;
+  nx = Math.max(2, Math.min(12, Math.round(nx) || 4)); ny = Math.max(2, Math.min(12, Math.round(ny) || 4));
+  if (nx === G.nx && ny === G.ny) return;
+  pushUndo();
+  const f = latticeOffset({ ax: 0, ay: 0, bx: 1, by: 1, nx: G.nx, ny: G.ny, dz: G.dz });
+  const dz = [];
+  for (let r = 0; r < ny; r++) for (let c = 0; c < nx; c++) dz.push(f ? +f(c / (nx - 1), r / (ny - 1)).toFixed(2) : 0);
+  Object.assign(G, { nx, ny, dz });
+  state.selHillLat = null;
+  refreshHillCtrlUI();
+  sceneChanged();
+}
+function selectHillLat(i) {
+  state.selHillLat = i;
+  refreshHillCtrlUI();
+  if (typeof editor !== 'undefined') { editor.draw(); preview.setHillSelection(state.selHill, true); }
+}
+/** Altura de un punto de la caja; commit = true rehace el cerro (si no, solo redibuja). */
+function setHillLatDz(i, dz, commit) {
+  const h = selHillObj(), G = h && h.lattice;
+  if (!G || i == null || i < 0 || i >= G.dz.length) return;
+  G.dz[i] = +(+dz).toFixed(2);
+  refreshHillCtrlUI();
+  if (commit) sceneChanged(); else if (typeof editor !== 'undefined') editor.draw();
+}
+/** Mueve o agranda la caja (en el lienzo). */
+function setHillLatBox(box, commit) {
+  const h = selHillObj(), G = h && h.lattice;
+  if (!G) return;
+  Object.assign(G, box);
+  if (commit) sceneChanged(); else if (typeof editor !== 'undefined') editor.draw();
+}
 function refreshHillCtrlUI() {
   const box = document.getElementById('hillCtrlBox');
   if (!box) return;
@@ -814,6 +875,17 @@ function refreshHillCtrlUI() {
   $('hillCtrlInfo').textContent = n ? (c ? `Punto ${i + 1} de ${n}` : `${n} punto(s). Clic en uno para ajustarlo.`) : 'Sin puntos.';
   $('hillCtrlSel').hidden = !c;
   $('btnHillCtrlClear').disabled = !n;
+  // caja de edición
+  const G = h.lattice;
+  $('btnHillLat').hidden = !!G; $('btnHillLatDel').hidden = !G; $('hillLatBox').hidden = !G;
+  if (G) {
+    if (document.activeElement !== $('hillLatNx')) $('hillLatNx').value = G.nx;
+    if (document.activeElement !== $('hillLatNy')) $('hillLatNy').value = G.ny;
+    const li = state.selHillLat, ok = li != null && li >= 0 && li < G.dz.length;
+    $('hillLatSel').hidden = !ok;
+    $('hillLatInfo').textContent = ok ? `Punto ${(li % G.nx) + 1}, ${Math.floor(li / G.nx) + 1} de la caja (${G.nx} × ${G.ny})` : `${G.nx} × ${G.ny} puntos. Clic en uno (mapa o 3D) para subirlo o hundirlo.`;
+    if (ok) { const H = Math.max(10, Math.round(h.height)); $('hillLatDz').min = String(-H); $('hillLatDz').max = String(H); $('hillLatDz').value = G.dz[li]; $('hillLatDzVal').textContent = `${G.dz[li] >= 0 ? '+' : ''}${(+G.dz[li]).toFixed(1)} m`; }
+  }
   if (c) {
     const L = state.layout, H = h.height;
     $('hillCtrlDz').min = String(-Math.round(H)); $('hillCtrlDz').max = String(Math.round(H));
@@ -829,6 +901,14 @@ function bindHillCtrl() {
   $('hillCtrlR').addEventListener('input', (e) => { if (!gesture) { pushUndo(); gesture = true; } const L = state.layout; moveHillCtrl(state.selHillCtrl, { r: +(parseFloat(e.target.value) / (L ? L.scale : 1)).toFixed(3) }, true); });
   for (const id of ['hillCtrlDz', 'hillCtrlR']) $(id).addEventListener('change', () => { gesture = false; });
   $('btnHillCtrlDel').addEventListener('click', () => deleteHillCtrl(state.selHillCtrl));
+  $('btnHillLat').addEventListener('click', createHillLattice);
+  $('btnHillLatDel').addEventListener('click', removeHillLattice);
+  for (const id of ['hillLatNx', 'hillLatNy']) $(id).addEventListener('change', () => setHillLatSize(parseFloat($('hillLatNx').value), parseFloat($('hillLatNy').value)));
+  let lg = false;
+  $('hillLatDz').addEventListener('input', (e) => { if (!lg) { pushUndo(); lg = true; } setHillLatDz(state.selHillLat, parseFloat(e.target.value), true); });
+  $('hillLatDz').addEventListener('change', () => { lg = false; });
+  $('btnHillLatZero').addEventListener('click', () => { pushUndo(); setHillLatDz(state.selHillLat, 0, true); });
+  $('btnHillLatFlat').addEventListener('click', () => { const h = selHillObj(); if (!h || !h.lattice) return; pushUndo(); h.lattice.dz = h.lattice.dz.map(() => 0); refreshHillCtrlUI(); sceneChanged(); });
   $('btnHillCtrlClear').addEventListener('click', () => { const h = selHillObj(); if (!h || !h.ctrl || !h.ctrl.length) return; pushUndo(); h.ctrl = []; state.selHillCtrl = null; refreshHillCtrlUI(); sceneChanged(); });
 }
 
@@ -1851,6 +1931,7 @@ const app = {
       strokes: h.strokes.map((q) => { const [x, y] = L.toWorld(q.x, q.y); return { x, y, r: q.r * L.scale, e: q.e }; }),
       subdiv: (h.subdiv || []).map((q) => { const [x, y] = L.toWorld(q.x, q.y); return { x, y, r: q.r * L.scale, e: q.e, f: q.f }; }),
       ctrl: (h.ctrl || []).map((c) => { const [x, y] = L.toWorld(c.x, c.y); return { x, y, r: c.r * L.scale, dz: c.dz }; }),
+      lattice: h.lattice ? (() => { const G = h.lattice, [ax, ay] = L.toWorld(G.x0, G.y0), [bx, by] = L.toWorld(G.x1, G.y1); return { ax, ay, bx, by, nx: G.nx, ny: G.ny, dz: G.dz }; })() : null,
       falls: (rw || []).filter((rv) => rv.kind === 'fall' && rv.hill === h.id),
     }));
   },
@@ -1861,6 +1942,11 @@ const app = {
   addHillCtrlWorld(x, y) { const L = state.layout; if (!L) return false; return addHillCtrl(L.toLayout(x, y)); },
   beginHillCtrlDrag() { pushUndo(); },
   moveHillCtrl(i, patch, commit) { moveHillCtrl(i, patch, commit); },
+  hillLattice() { const h = selHillObj(); return h ? h.lattice || null : null; },
+  latPointL(G, i) { return latPointL(G, i); },
+  selectHillLat(i) { selectHillLat(i); },
+  setHillLatDz(i, dz, commit) { setHillLatDz(i, dz, commit); },
+  setHillLatBox(box, commit) { setHillLatBox(box, commit); },
   // ---- elementos de pista ----
   itemInstances() { return itemInstances(); },
   itemAtLayout(p, tolPx) { const L = state.layout; if (!L) return null; const [x, y] = L.toWorld(p[0], p[1]); return itemAt(itemInstances(), x, y, tolPx * L.scale); },
@@ -4891,6 +4977,9 @@ function bindControls() {
       state.selItem = null;
       renderItemsPanel(); itemsChanged(); preview.updateHandles();
       toast(`${nm} borrado («Restablecer» en su grupo lo recupera).`);
+    } else if (state.selHill != null && state.selHillLat != null) {
+      e.preventDefault();
+      pushUndo(); setHillLatDz(state.selHillLat, 0, true); // punto de la caja: vuelve a 0 (la caja queda)
     } else if (state.selHill != null && state.selHillCtrl != null) {
       e.preventDefault();
       deleteHillCtrl(state.selHillCtrl); // punto de control del cerro (el cerro queda)
@@ -6076,6 +6165,7 @@ function renderTriggerPanel() {
   if ($('tunnelTriggers')) {
     $('tunnelTriggers').checked = sc.tunnelTriggers !== false;
     $('showTriggers').checked = sc.showTriggers !== false;
+    $('trigOn3d').checked = sc.showTriggers !== false;
     $('triggerDepth').value = sc.triggerDepth ?? 1; $('triggerDepthVal').textContent = `${(+(sc.triggerDepth ?? 1)).toFixed(1)} m`;
     $('triggerHeight').value = sc.triggerHeight ?? 6; $('triggerHeightVal').textContent = `${(+(sc.triggerHeight ?? 6)).toFixed(1)} m`;
     $('tunnelTrigBox').classList.toggle('disabled', sc.tunnelTriggers === false);
@@ -6100,7 +6190,8 @@ function renderTriggerPanel() {
 function bindTriggerControls() {
   const sc = state.scene;
   $('tunnelTriggers').addEventListener('change', (e) => { sc.tunnelTriggers = e.target.checked; renderTriggerPanel(); triggersChanged(); });
-  $('showTriggers').addEventListener('change', (e) => { sc.showTriggers = e.target.checked; triggersChanged(); });
+  $('showTriggers').addEventListener('change', (e) => { sc.showTriggers = e.target.checked; $('trigOn3d').checked = e.target.checked; triggersChanged(); });
+  $('trigOn3d').addEventListener('change', (e) => { sc.showTriggers = e.target.checked; $('showTriggers').checked = e.target.checked; triggersChanged(); }); // mismo ajuste, en la barra de la vista 3D
   for (const k of ['triggerDepth', 'triggerHeight']) $(k).addEventListener('input', (e) => { const v = parseFloat(e.target.value); if (!Number.isFinite(v)) return; sc[k] = v; $(k + 'Val').textContent = `${v.toFixed(1)} m`; triggersChanged(); });
   $('btnTriggerNew').addEventListener('click', () => setTriggerPlacing(!state.placingTrigger));
   renderTriggerPanel();

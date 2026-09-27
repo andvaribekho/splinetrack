@@ -1,5 +1,5 @@
 // Editor 2D: muestra la imagen, el trazado coloreado por altura, los cruces y permite dibujar.
-import { edgeParams } from './tunnels.js';
+import { edgeParams, edgeExtents } from './tunnels.js';
 import { taubinSmooth, resampleUniform } from './geometry.js';
 import { localizeCtx } from './i18n.js';
 
@@ -212,6 +212,14 @@ export class Editor2D {
           if (tool === 'pan' && this.app.state.selHill != null) {
             const hc = this.hitHillCtrl(sx, sy);
             if (hc != null) { this.app.selectHillCtrl(hc); this.hctrlDrag = { i: hc, moved: false, sx, sy }; return; }
+            // caja de edición: un punto se elige; el cuadrado del centro mueve la caja y las esquinas la agrandan
+            const lh = this.hitHillLat(sx, sy);
+            if (lh) {
+              if (lh.kind === 'pt') { this.app.selectHillLat(lh.i); return; }
+              const G = this.app.hillLattice();
+              this.latDrag = { kind: lh.kind, c: lh.c, p0: this.toLayout(sx, sy), box: { x0: G.x0, y0: G.y0, x1: G.x1, y1: G.y1 }, moved: false };
+              return;
+            }
             if (this.app.hillCtrlMode()) {
               const pl0 = this.toLayout(sx, sy), h0 = this.app.hillAt(pl0);
               if (h0 && h0.id === this.app.state.selHill) { this.app.addHillCtrl(pl0); return; }
@@ -274,6 +282,18 @@ export class Editor2D {
         return;
       }
       if (this.trigDrag) { this.app.moveTriggerLayout(p); return; }
+      if (this.latDrag) {
+        const d = this.latDrag, b = d.box, dx = p[0] - d.p0[0], dy = p[1] - d.p0[1];
+        if (!d.moved) { d.moved = true; this.app.beginHillCtrlDrag(); }
+        if (d.kind === 'move') this.app.setHillLatBox({ x0: b.x0 + dx, y0: b.y0 + dy, x1: b.x1 + dx, y1: b.y1 + dy }, false);
+        else {
+          const nb = { ...b };
+          if (d.c === 0 || d.c === 3) nb.x0 = b.x0 + dx; else nb.x1 = b.x1 + dx;
+          if (d.c === 0 || d.c === 1) nb.y0 = b.y0 + dy; else nb.y1 = b.y1 + dy;
+          if (Math.abs(nb.x1 - nb.x0) > 1 && Math.abs(nb.y1 - nb.y0) > 1) this.app.setHillLatBox(nb, false);
+        }
+        return;
+      }
       if (this.hctrlDrag) {
         const d = this.hctrlDrag;
         if (!d.moved && Math.hypot(sx - d.sx, sy - d.sy) < 3) return;
@@ -368,6 +388,7 @@ export class Editor2D {
       if (this.caveDrag) { const d = this.caveDrag; this.caveDrag = null; if (d.pos) this.app.commitCaveMove(d.c, d.pos); else this.draw(); return; }
       if (this.trigDrag) { this.trigDrag = false; this.app.endTriggerDrag(); return; }
       if (this.hctrlDrag) { const d = this.hctrlDrag; this.hctrlDrag = null; if (d.moved) this.app.moveHillCtrl(d.i, {}, true); return; }
+      if (this.latDrag) { const d = this.latDrag; this.latDrag = null; if (d.moved) this.app.setHillLatBox({}, true); return; }
       if (this.vegDrag) { const d = this.vegDrag; this.vegDrag = null; if (d.pos) this.app.commitVegMove(d.v, d.pos); else this.draw(); return; }
       if (this.itemDrag) { this.itemDrag = null; this.app.endItemDrag(); return; }
       if (this.bridgeDrag) { this.bridgeDrag = null; this.app.endBridgeDrag(); return; }
@@ -451,6 +472,32 @@ export class Editor2D {
       ctx.beginPath(); ctx.arc(x, y, 12, 0, Math.PI * 2); ctx.stroke();
       ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fillStyle = 'rgb(140,230,140)'; ctx.fill();
     }
+  }
+
+  /** Divisiones de los tramos: una línea rosa a lo ancho de la pista (con camino de tierra y barrera) en cada extremo. */
+  drawTramoDivisions(L) {
+    const r = L.routes[0];
+    if (!r || !r.bridges || !r.bridges.length) return;
+    const sp = this.app.state.scene || {}, X = edgeExtents(sp, r);
+    const cuts = [];
+    for (const b of r.bridges) for (const sv of [b.s0, b.s1]) {
+      const ss = r.closed ? ((sv % r.L) + r.L) % r.L : sv;
+      if (!cuts.some((c) => Math.abs(c - ss) < 0.6 || (r.closed && Math.abs(Math.abs(c - ss) - r.L) < 0.6))) cuts.push(ss);
+    }
+    const { ctx } = this;
+    const toS = (x, y) => { const [lx, ly] = L.toLayout(x, y); return this.toScreen(lx, ly); };
+    ctx.save();
+    ctx.lineCap = 'round';
+    for (const ss of cuts) {
+      const i = ((Math.round(ss / r.ds) % r.n) + r.n) % r.n;
+      const lx = -r.ty[i], ly = r.tx[i], hw = r.w[i] / 2;
+      const a = toS(r.x[i] + lx * (hw + X.left + 0.5), r.y[i] + ly * (hw + X.left + 0.5)), b = toS(r.x[i] - lx * (hw + X.right + 0.5), r.y[i] - ly * (hw + X.right + 0.5));
+      ctx.strokeStyle = 'rgba(20,10,20,0.55)'; ctx.lineWidth = 5;
+      ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+      ctx.strokeStyle = '#ff5fc8'; ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+    }
+    ctx.restore();
   }
 
   /** Puente seleccionado: tramo iluminado en amarillo. */
@@ -723,6 +770,26 @@ export class Editor2D {
     ctx.restore();
   }
 
+  /** Caja de edición del cerro seleccionado bajo el cursor: {kind: 'pt', i} | {kind: 'move'} | {kind: 'corner', c} | null. */
+  hitHillLat(sx, sy) {
+    const G = this.app.hillLattice && this.app.hillLattice();
+    if (!G) return null;
+    const sc = (x, y) => this.toScreen(x, y);
+    const n = G.nx * G.ny;
+    let best = null, bd = 9;
+    for (let i = 0; i < n; i++) { const [x, y] = sc(...this.app.latPointL(G, i)), d = Math.hypot(x - sx, y - sy); if (d < bd) { bd = d; best = { kind: 'pt', i }; } }
+    this.latCornerHandles(G).forEach(([px, py], c) => { if (Math.abs(px - sx) < 7 && Math.abs(py - sy) < 7) best = { kind: 'corner', c }; });
+    const [cx, cy] = sc((G.x0 + G.x1) / 2, (G.y0 + G.y1) / 2);
+    if (Math.abs(cx - sx) < 9 && Math.abs(cy - sy) < 9 && !best) best = { kind: 'move' };
+    return best;
+  }
+
+  /** Tiradores de las esquinas de la caja (en pantalla), corridos hacia afuera para no tapar los puntos de las esquinas. */
+  latCornerHandles(G) {
+    const [cx, cy] = this.toScreen((G.x0 + G.x1) / 2, (G.y0 + G.y1) / 2);
+    return [[G.x0, G.y0], [G.x1, G.y0], [G.x1, G.y1], [G.x0, G.y1]].map(([x, y]) => { const [px, py] = this.toScreen(x, y), d = Math.hypot(px - cx, py - cy) || 1; return [px + ((px - cx) / d) * 14, py + ((py - cy) / d) * 14]; });
+  }
+
   /** Índice del punto de control del cerro seleccionado bajo el cursor (o null). */
   hitHillCtrl(sx, sy) {
     const st = this.app.state, h = st.selHill != null ? (st.hills || []).find((q) => q.id === st.selHill) : null;
@@ -733,6 +800,7 @@ export class Editor2D {
   }
 
   drawPaint() {
+    const hsel0 = (st) => (st.selHill != null ? (st.hills || []).find((h) => h.id === st.selHill) : null);
     const st = this.app.state;
     const tool = st.tool;
     const hillCol = (q) => {
@@ -760,6 +828,33 @@ export class Editor2D {
         ctx.fillStyle = sel ? '#ffe082' : 'rgba(255,235,200,0.75)';
         ctx.fillText(`${h.name} · ${h.height} m`, x, y);
       }
+      ctx.restore();
+    }
+    // caja de edición del cerro seleccionado: grilla de líneas, puntos, esquinas y cuadrado del centro
+    const G = hsel0(st) && hsel0(st).lattice;
+    if (G) {
+      const ctx = this.ctx, P = [];
+      for (let i = 0; i < G.nx * G.ny; i++) P.push(this.toScreen(...this.app.latPointL(G, i)));
+      ctx.save();
+      ctx.strokeStyle = 'rgba(127,214,255,0.8)'; ctx.lineWidth = 1.3;
+      ctx.beginPath();
+      for (let r = 0; r < G.ny; r++) for (let c = 0; c < G.nx; c++) {
+        const k = r * G.nx + c;
+        if (c < G.nx - 1) { ctx.moveTo(...P[k]); ctx.lineTo(...P[k + 1]); }
+        if (r < G.ny - 1) { ctx.moveTo(...P[k]); ctx.lineTo(...P[k + G.nx]); }
+      }
+      ctx.stroke();
+      P.forEach(([x, y], k) => {
+        const sel = k === st.selHillLat, v = G.dz[k] || 0;
+        ctx.beginPath(); ctx.arc(x, y, sel ? 6 : 4, 0, Math.PI * 2);
+        ctx.fillStyle = sel ? '#ffb74d' : v > 0.05 ? '#7fd6ff' : v < -0.05 ? '#1b2a3a' : 'rgba(127,214,255,0.35)'; ctx.fill();
+        ctx.strokeStyle = '#dff4ff'; ctx.lineWidth = 1.3; ctx.stroke();
+        if (sel || Math.abs(v) > 0.05) { ctx.fillStyle = '#dff4ff'; ctx.font = '10px system-ui, sans-serif'; ctx.textAlign = 'left'; ctx.fillText(`${v >= 0 ? '+' : ''}${v.toFixed(1)} m`, x + 7, y - 6); }
+      });
+      ctx.fillStyle = '#7fd6ff';
+      for (const [px, py] of this.latCornerHandles(G)) ctx.fillRect(px - 4, py - 4, 8, 8);
+      const [cx, cy] = this.toScreen((G.x0 + G.x1) / 2, (G.y0 + G.y1) / 2);
+      ctx.strokeStyle = '#7fd6ff'; ctx.lineWidth = 2; ctx.strokeRect(cx - 6, cy - 6, 12, 12);
       ctx.restore();
     }
     // puntos de control del cerro seleccionado: círculo de su radio y el punto (lleno si sube, hueco si hunde)
@@ -1210,6 +1305,7 @@ export class Editor2D {
     if (L && E) this.drawVegItems(L);
     if (L && E) this.drawTriggers(L);
     if (L && st.selAlt != null) this.drawSelectedAlt(L);
+    if (L) this.drawTramoDivisions(L);
     if (L && st.selBridge != null) this.drawSelectedBridge(L);
     if (L && this.app.state.gameActive && this.gameS != null) this.drawGameCar(L);
     if (ref && ref.visible && ref.above) this.drawRef(ref);

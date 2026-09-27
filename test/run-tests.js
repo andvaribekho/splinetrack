@@ -612,6 +612,16 @@ for (const [key, s] of Object.entries(SAMPLES)) {
     const up = Fu.sample(30, 0) - F0.sample(30, 0), dn = Fd.sample(30, 0), mid = Fu.sample(40, 0) - F0.sample(40, 0), out = Math.abs(Fu.sample(-30, 0) - F0.sample(-30, 0));
     check(Math.abs(up - 12) < 0.8 && dn >= 0 && dn < 0.5 && mid > 2 && mid < 11 && out < 1e-6, `puntos de control del cerro: +${up.toFixed(2)} m en el centro, borde suave ${mid.toFixed(2)}, hundir no baja del suelo (${dn.toFixed(2)}), afuera igual`);
   }
+  // 0.66: caja de edición del cerro: la superficie pasa por cada punto y se curva suave; fuera de la caja (y su margen) igual
+  {
+    const base = { id: 94, height: 20, hard: false, flat: 0.5, strokes: [{ x: 0, y: 0, r: 80, e: false }] };
+    const dz = new Array(16).fill(0); dz[5] = 9; dz[6] = 9; // dos puntos del centro suben 9 m
+    const lat = { ax: -60, ay: -60, bx: 60, by: 60, nx: 4, ny: 4, dz };
+    const F0 = hillFieldOne(base), FL = hillFieldOne({ ...base, id: 95, lattice: lat });
+    const p5 = [-60 + 40, -60 + 40]; // punto (1, 1) de la grilla
+    const up = FL.sample(...p5) - F0.sample(...p5), mid = FL.sample(0, -20) - F0.sample(0, -20), far = Math.abs(FL.sample(-75, 70) - F0.sample(-75, 70));
+    check(Math.abs(up - 9) < 0.8 && mid > 7 && far < 1e-6, `caja de edición del cerro: pasa por el punto (+${up.toFixed(2)} m), curva suave entre puntos (${mid.toFixed(2)}), afuera igual`);
+  }
   // subdivisión pintada sobre el cerro
   const A2 = { ...A, subdiv: [{ x: cx, y: cy, r: 25, e: false, f: 16 }] };
   const Hsub = buildHills(L, E, sp, T, [A2]), Hno = buildHills(L, E, sp, T, [A]);

@@ -907,6 +907,78 @@ test('tramo socavado: paredes lisas extruidas desde la pista (malla y objeto pro
   expect(opts.includes('Lisas (extruidas de la pista)') && opts.includes('Naturales (del terreno)'), `tipos de pared: ${opts}`);
 });
 
+test('mapa: línea rosa en cada división de tramos; triggers en la barra de la vista 3D', async () => {
+  await reset();
+  await makeTramo('track', [5, 6, 7, 8, 9]);
+  await tool('pan');
+  const px = await ev(() => {
+    const t = window.__tsg, L = t.state.layout, r = L.routes[0], b = r.bridges[0], i = Math.round(b.s0 / r.ds) % r.n;
+    t.editor.draw();
+    const [lx, ly] = L.toLayout(r.x[i], r.y[i]), [sx, sy] = t.editor.toScreen(lx, ly), cv = document.getElementById('canvas2d'), k = cv.width / cv.getBoundingClientRect().width;
+    const d = cv.getContext('2d').getImageData(Math.round(sx * k), Math.round(sy * k), 1, 1).data;
+    return [d[0], d[1], d[2]];
+  });
+  expect(px[0] > 190 && px[1] < 150 && px[2] > 140, `línea rosa en la división: rgb ${px}`);
+  // check «Triggers» en la barra de la vista 3D (el mismo ajuste que el del panel)
+  await ev(() => { window.__tsg.state.triggers = [{ id: 'tg1', name: 'uno', p: [100, 100], depth: 2, height: 6 }]; });
+  await ev(() => { const el = document.getElementById('trigOn3d'); el.checked = false; el.dispatchEvent(new Event('change', { bubbles: true })); });
+  const off = await ev(() => [window.__tsg.state.scene.showTriggers, document.getElementById('showTriggers').checked, window.__tsg.preview.triggerGroup.children.length]);
+  expect(off[0] === false && off[1] === false && off[2] === 0, `ocultar triggers en 3D: ${off}`);
+  await ev(() => { const el = document.getElementById('trigOn3d'); el.checked = true; el.dispatchEvent(new Event('change', { bubbles: true })); });
+  expect(await ev(() => window.__tsg.state.scene.showTriggers !== false && document.getElementById('showTriggers').checked), 'mostrar triggers de nuevo');
+});
+
+test('cerros: caja de edición (grilla, subir un punto, mover y agrandar la caja, filas y columnas)', async () => {
+  await reset();
+  await page.click('#btnGenTerrain');
+  await idle();
+  await addHill(0.6, { hard: false, flat: 0.6, height: 20 });
+  await idle();
+  await ev(() => window.__tsg.app.selectHill(1));
+  await page.click('#btnHillLat');
+  await idle();
+  const G0 = await ev(() => JSON.parse(JSON.stringify(window.__tsg.state.hills[0].lattice)));
+  expect(G0 && G0.nx === 4 && G0.ny === 4 && G0.dz.length === 16, `caja creada: ${JSON.stringify(G0)}`);
+  expect(await ev(() => window.__tsg.preview.hillCtrlGroup.children.some((o) => o.isLineSegments) && window.__tsg.preview.hillCtrlGroup.children.filter((o) => o.userData.hillLat != null).length === 16), 'líneas y 16 puntos de la caja en 3D');
+  // clic en el punto (1, 1) del mapa y subirlo 8 m con la barra
+  const scr = (x, y) => ev(([x, y]) => { const t = window.__tsg, [a, b] = t.editor.toScreen(x, y), r = document.getElementById('canvas2d').getBoundingClientRect(); return [a + r.left, b + r.top]; }, [x, y]);
+  const pL = await ev(() => window.__tsg.app.latPointL(window.__tsg.state.hills[0].lattice, 5));
+  const [sx, sy] = await scr(pL[0], pL[1]);
+  const hW = (p) => ev(([x, y]) => { const t = window.__tsg, [wx, wy] = t.state.layout.toWorld(x, y); return t.preview.hillData.hillSample(1, wx, wy); }, p);
+  const h0 = await hW(pL);
+  await page.mouse.click(sx, sy);
+  expect(await ev(() => window.__tsg.state.selHillLat === 5 && window.__tsg.preview.latTc.enabled), 'punto de la caja elegido (con gizmo en 3D)');
+  await ev(() => { const el = document.getElementById('hillLatDz'); el.value = '8'; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); });
+  await idle();
+  const h1 = await hW(pL);
+  expect(h1 - h0 > 6.5, `el cerro pasa por el punto: ${h0.toFixed(1)} → ${h1.toFixed(1)} m`);
+  // arrastrar el cuadrado del centro mueve la caja
+  const G1 = await ev(() => window.__tsg.state.hills[0].lattice);
+  const [cx, cy] = await scr((G1.x0 + G1.x1) / 2, (G1.y0 + G1.y1) / 2);
+  await drag(cx, cy, cx + 30, cy, 5);
+  await idle();
+  const G2 = await ev(() => window.__tsg.state.hills[0].lattice);
+  expect(Math.abs(G2.x0 - G1.x0) > 0.5 && Math.abs((G2.x1 - G2.x0) - (G1.x1 - G1.x0)) < 1e-6, `mover la caja: x0 ${G1.x0.toFixed(1)} → ${G2.x0.toFixed(1)}`);
+  // arrastrar el tirador de una esquina agranda la caja
+  const [hx, hy] = await ev(() => { const t = window.__tsg, G = t.state.hills[0].lattice, [x, y] = t.editor.latCornerHandles(G)[2], r = document.getElementById('canvas2d').getBoundingClientRect(); return [x + r.left, y + r.top]; });
+  await drag(hx, hy, hx + 25, hy + 25, 5);
+  await idle();
+  const G2b = await ev(() => window.__tsg.state.hills[0].lattice);
+  expect((G2b.x1 - G2b.x0) > (G2.x1 - G2.x0) + 0.5, `agrandar la caja: ancho ${(G2.x1 - G2.x0).toFixed(1)} → ${(G2b.x1 - G2b.x0).toFixed(1)}`);
+  // filas y columnas: 5 × 3 conserva la forma aproximada
+  await ev(() => { const a = document.getElementById('hillLatNx'), b = document.getElementById('hillLatNy'); a.value = '5'; b.value = '3'; a.dispatchEvent(new Event('change', { bubbles: true })); });
+  await idle();
+  const G3 = await ev(() => window.__tsg.state.hills[0].lattice);
+  expect(G3.nx === 5 && G3.ny === 3 && G3.dz.length === 15 && Math.max(...G3.dz) > 3, `filas y columnas: ${G3.nx} × ${G3.ny}, máx ${Math.max(...G3.dz)}`);
+  // se guarda en el proyecto y Ctrl+Z deshace
+  const back = await ev(async () => { const t = window.__tsg, d = JSON.parse(JSON.stringify(await t.projectData())); await t.openProject(d); await t.idle(); return t.state.hills[0].lattice && t.state.hills[0].lattice.nx; });
+  expect(back === 5, `guardar y abrir: ${back}`);
+  await ev(() => window.__tsg.app.selectHill(1));
+  await page.click('#btnHillLatDel');
+  await idle();
+  expect(await ev(() => !window.__tsg.state.hills[0].lattice), 'quitar caja');
+});
+
 // ---------------------------------------------------------------------------------------------------------------
 /** Corre las pruebas elegidas en un navegador propio (un proceso). Devuelve {pass, fails, total}. */
 async function runTests(run, port) {
