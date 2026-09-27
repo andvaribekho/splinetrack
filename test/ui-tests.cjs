@@ -41,6 +41,7 @@ async function sample(name) {
 }
 async function tool(t) { await ev((t) => document.querySelector(`[data-tool=${t}]`).click(), t); await idle(); }
 const LANG = process.env.TSG_LANG || 'es';
+let dialogs = []; // mensajes de confirm/alert vistos (se aceptan solos)
 async function freshPage() {
   await page.goto(URL);
   await ev((lang) => { localStorage.clear(); localStorage.setItem('tsg.autosave', JSON.stringify({ on: false })); localStorage.setItem('tsg.lang', lang); }, LANG); // sin autoguardado; idioma fijo (español salvo TSG_LANG)
@@ -57,7 +58,7 @@ async function drag(x0, y0, x1, y1, steps = 3) { await page.mouse.move(x0, y0); 
 /** Nombres de los objetos de la escena exportada, agrupados por su padre. */
 const exportNames = () => ev(async () => {
   const t = window.__tsg, m = await import('/js/export-glb.js');
-  const { root } = await m.buildExportScene(t.state.layout, t.state.result, t.state.scene, { deco: { assetById: (id) => t.app.assetById(id), sets: t.state.decoSets, paintFor: (s) => t.app.decoPaintWorld(s) }, triggers: t.app.triggersWorld() }, t.app.terrainPaintWorld ? t.app.terrainPaintWorld() : null, t.app.hillsWorld(), null);
+  const { root } = await m.buildExportScene(t.state.layout, t.state.result, t.state.scene, { deco: { assetById: (id) => t.app.assetById(id), sets: t.state.decoSets, paintFor: (s) => t.app.decoPaintWorld(s) }, triggers: t.app.triggersWorld(), tunnelTex: (uid, k) => t.app.tunnelTexCanvas(uid, k), assetById: (id) => t.app.assetById(id) }, t.app.terrainPaintWorld ? t.app.terrainPaintWorld() : null, t.app.hillsWorld(), null);
   const out = {};
   root.traverse((o) => { if (o !== root && o.name && o.parent) (out[o.parent.name || '?'] = out[o.parent.name || '?'] || []).push(o.name); });
   return out;
@@ -640,6 +641,25 @@ test('cámara de juego: entra, oculta triggers, orbita (clic derecho restablece)
   await page.mouse.click(cx, cy, { button: 'right' });
   expect(await ev(() => { const g = window.__tsg.preview.game; return !g.orbit.on && g.orbit.yaw === 0 && g.orbit.pitch === 0; }), 'el clic derecho no restableció la cámara');
   await ev(() => { document.getElementById('btnGamePause').click(); });
+  // rueda: cambia «Distancia» del ajuste de cámara
+  const d0 = await ev(() => window.__tsg.state.game.camDist);
+  await page.mouse.move(cx, cy); await page.mouse.wheel(0, 400); await page.waitForTimeout(100);
+  const d1 = await ev(() => [window.__tsg.state.game.camDist, document.getElementById('gameCamDist').value]);
+  expect(d1[0] > d0 + 1 && +d1[1] === d1[0], `rueda: distancia ${d0} → ${d1}`);
+  // derrape: en curva el auto gira hacia adentro (más a más velocidad); con Derrape 0 no
+  const drift = await ev(async () => {
+    const g = window.__tsg.preview.game, st = window.__tsg.state, r = st.layout.routes[0];
+    let sc = 0, best = 0; for (let i = 0; i < r.n; i++) if (Math.abs(r.k[i]) > best) { best = Math.abs(r.k[i]); sc = r.s[i]; }
+    g.paused = false; st.game.speed = 1; g.s = sc; g.driftYaw = 0;
+    const wait = () => new Promise((res) => setTimeout(res, 1200));
+    st.game.speed = 0.01; st.game.drift = 50; g.update(0.016);
+    // simula varios cuadros a 150 km/h en la curva
+    const run = (spd, amt) => { st.game.drift = amt; st.game.speed = spd; g.driftYaw = 0; for (let k = 0; k < 90; k++) { g.s = sc; g.update(1 / 60); } return g.driftAngle(); };
+    const a1 = run(150, 50), a0 = run(150, 0), aSlow = run(60, 50);
+    st.game.speed = 120; st.game.drift = 50;
+    return [a1, a0, aSlow, Math.sign(r.k[Math.round(sc / r.ds)])];
+  });
+  expect(Math.abs(drift[0]) > 0.15 && Math.sign(drift[0]) === drift[3] && Math.abs(drift[1]) < 1e-3 && Math.abs(drift[2]) < Math.abs(drift[0]), `derrape: ${drift.map((v) => v.toFixed(3))}`);
   // brillo del auto (Ajuste auto 3D)
   if (await page.locator('#carAdjBox').isHidden()) await page.click('#btnCarAdj');
   const bri = await ev(() => {
@@ -724,6 +744,121 @@ test('buscador: Ctrl+K, herramientas, parámetros en paneles plegados, ventanas 
   await ev(() => window.__tsg.i18n.setLang('es'));
 });
 
+test('dibujar: en un circuito cerrado se redibuja el arco corto; una pista nueva siempre pregunta', async () => {
+  await reset('figure8');
+  const r = await ev(async () => {
+    const t = window.__tsg, m = t.state.project.main, P = m.ctrl || m.pts, n = P.length;
+    const i = Math.floor(n / 4), j = (i + 3) % n, a = P[i], c = P[j];
+    const tx = P[(i + 1) % n][0] - a[0], ty = P[(i + 1) % n][1] - a[1], tl = Math.hypot(tx, ty), nx = -ty / tl, ny = tx / tl;
+    // el trazo sale un poco hacia atrás (antes eso reemplazaba casi todo el circuito)
+    const S = [];
+    for (let k = 0; k <= 20; k++) { const u = k / 20, off = Math.sin(Math.PI * u) * 60, back = 30 * Math.sin(Math.PI * u) * (1 - u); S.push([a[0] + (c[0] - a[0]) * u + nx * off - (tx / tl) * back, a[1] + (c[1] - a[1]) * u + ny * off - (ty / tl) * back]); }
+    t.app.commitStroke('extend', S, 1);
+    await t.idle();
+    return [n, (t.state.project.main.ctrl || t.state.project.main.pts).length];
+  });
+  expect(r[1] > r[0] * 0.9, `redibujar: ${r[0]} → ${r[1]} puntos (no debe reemplazar el circuito)`);
+  // «Extender» desmarcado: dibujar una pista nueva pide confirmación aunque la pista no tenga trabajo encima
+  dialogs = [];
+  await ev(async () => { const t = window.__tsg; document.getElementById('drawExtend').checked = false; t.app.commitStroke('draw', [[0, 0], [50, 0], [50, 50], [0, 50]], 1); await t.idle(); document.getElementById('drawExtend').checked = true; });
+  expect(dialogs.some((m) => /reemplaza la ruta principal/.test(m)), `sin confirmación: ${dialogs}`);
+});
+
+test('río bajo un puente: el agua sigue por debajo del tablero (junto a la pista a nivel se corta)', async () => {
+  await reset();
+  await ev(() => document.querySelector('#elevMode button[data-mode=direct]').click());
+  await idle();
+  await makeTramo('bridge', [6, 7, 8, 9, 10]);
+  await ev(() => { const t = window.__tsg, zs = t.state.project.main.ctrlZ; for (let i = 6; i <= 10; i++) zs[i] = 9; t.scheduleBuild(); });
+  await page.click('#btnGenTerrain');
+  await idle();
+  const w = await ev(async () => {
+    const t = window.__tsg, L = t.state.layout, r = L.routes[0], b = r.bridges[0];
+    const across = (i, id) => { const i2 = (i + 1) % r.n, tx = r.x[i2] - r.x[i], ty = r.y[i2] - r.y[i], tl = Math.hypot(tx, ty), nx = -ty / tl, ny = tx / tl;
+      return { id, kind: 'river', mode: 'surface', depth: 2, walls: 'smooth', wallSubdiv: 2, strokes: [-30, -20, -10, 0, 10, 20, 30].map((o) => { const [x, y] = L.toLayout(r.x[i] + nx * o, r.y[i] + ny * o); return { x, y, r: 6 / L.scale, e: false }; }) }; };
+    const iB = Math.round(((b.s0 + b.s1) / 2) / r.ds) % r.n, iG = Math.round((b.s1 + 120) / r.ds) % r.n;
+    t.state.rivers = [across(iB, 1), across(iG, 2)];
+    t.preview.update(false); await t.idle();
+    const near = (k, i) => { const W = t.preview.riverMeshes[k]; if (!W) return -1; const P = W.geometry.getAttribute('position'), used = new Set(W.geometry.getIndex().array); let n = 0; for (const v of used) if (Math.hypot(P.getX(v) - r.x[i], P.getY(v) - r.y[i]) < 3) n++; return n; };
+    return [near(0, iB), near(1, iG), t.preview.riverMeshes.length];
+  });
+  expect(w[2] === 2 && w[0] > 2 && w[1] === 0, `agua bajo el puente ${w[0]} vértices; junto a la pista a nivel ${w[1]}`);
+});
+
+test('túneles: texturas de paredes y techo, decoración de pared (antorchas) y densidad mínima', async () => {
+  await reset();
+  await page.click('#btnGenTerrain');
+  await idle();
+  await addHill(0.3);
+  await idle();
+  await ev(() => window.__tsg.app.selectTunnel(0));
+  await page.waitForSelector('#tunnelList .tun-card.sel .tsDeco');
+  // decoración de pared: 3 por lado, a ambos lados
+  await page.check('#tunnelList .tun-card.sel .tsDeco');
+  await idle();
+  await ev(() => { const el = document.querySelector('#tunnelList .tun-card.sel .tsDecoNN'); el.value = '3'; el.dispatchEvent(new Event('change', { bubbles: true })); });
+  await idle();
+  const d = await ev(() => { const t = window.__tsg; const groups = new Set(t.preview.tunnelDecoMeshes.map((m) => m.parent)); return [groups.size, t.state.tunnelInfo[0].decoPlaced]; });
+  expect(d[0] === 6 && d[1] === 6, `antorchas en la vista: ${d}`);
+  // textura propia de las paredes (PNG) y general del techo
+  const png = Buffer.from(await ev(() => { const c = document.createElement('canvas'); c.width = c.height = 16; const g = c.getContext('2d'); g.fillStyle = '#a0522d'; g.fillRect(0, 0, 16, 16); return c.toDataURL('image/png').split(',')[1]; }), 'base64');
+  await ev(() => document.querySelector('#tunnelList .tun-card.sel .tsTexRow[data-kind="wall"] .tsTexLoad').click());
+  await page.setInputFiles('#tunnelList .tun-card.sel .tsTexFile', { name: 'ladrillo.png', mimeType: 'image/png', buffer: png });
+  await page.waitForFunction(() => { const i = window.__tsg.state.tunnelInfo[0]; return i && i.texUid && window.__tsg.state.tunnelTexOwn[i.texUid] && window.__tsg.state.tunnelTexOwn[i.texUid].wall; });
+  await page.setInputFiles('#tunCeilTexFile', { name: 'techo.png', mimeType: 'image/png', buffer: png });
+  await page.waitForFunction(() => !!window.__tsg.state.tunCeilTex);
+  await idle();
+  const m = await ev(() => { const T = window.__tsg.preview.tunnelMeshes; return [!!T[0].material.map, !!T[1].material.map]; });
+  expect(m[0] && m[1], `texturas en paredes y techo: ${m}`);
+  const names = Object.values(await exportNames()).flat();
+  expect(names.includes('tunel_01_paredes') && names.some((n) => /^tunel_01_decoracion/.test(n)), `exportación: ${names.filter((n) => /tunel_01/.test(n))}`);
+  // el proyecto guarda la textura propia y la decoración
+  const back = await ev(async () => { const t = window.__tsg, dd = JSON.parse(JSON.stringify(await t.projectData())); await t.openProject(dd); await t.idle(); const i = t.state.tunnelInfo[0]; return [!!(i.texUid && t.state.tunnelTexOwn[i.texUid] && t.state.tunnelTexOwn[i.texUid].wall), i.decoPlaced]; });
+  expect(back[0] && back[1] === 6, `guardar y abrir: ${back}`);
+  // densidad mínima (1 %): muchos menos triángulos que al 50 %
+  await ev(() => window.__tsg.app.selectTunnel(0));
+  await page.waitForSelector('#tunnelList .tun-card.sel .tsDenN');
+  const tri = async (v) => { await ev((v) => { const el = document.querySelector('#tunnelList .tun-card.sel .tsDenN'); el.value = String(v); el.dispatchEvent(new Event('change', { bubbles: true })); }, v); await idle(); return ev(() => window.__tsg.state.tunnelInfo[0].sections); };
+  const s50 = await tri(50), s1 = await tri(1);
+  expect(s1 < s50 / 4, `densidad mínima: ${s1} secciones (al 50 %: ${s50})`);
+});
+
+test('cerros: puntos de control (clic en el cerro, subir con la barra, mover en el mapa, Supr)', async () => {
+  await reset();
+  await page.click('#btnGenTerrain');
+  await idle();
+  await addHill(0.6, { hard: false, flat: 0.6, height: 20 });
+  await idle();
+  await ev(() => window.__tsg.app.selectHill(1));
+  await page.click('#btnHillCtrl');
+  // clic sobre el cerro en el mapa (su centro)
+  const c = await ev(() => { const h = window.__tsg.state.hills[0].strokes[0]; return [h.x, h.y]; });
+  const [sx, sy] = await ev(([x, y]) => { const t = window.__tsg, [a, b] = t.editor.toScreen(x, y), r = document.getElementById('canvas2d').getBoundingClientRect(); return [a + r.left, b + r.top]; }, c);
+  const hBefore = await ev(([x, y]) => { const t = window.__tsg, L = t.state.layout, [wx, wy] = L.toWorld(x, y); return t.preview.hillData.hillSample(1, wx, wy); }, c);
+  await page.mouse.click(sx, sy);
+  const n1 = await ev(() => (window.__tsg.state.hills[0].ctrl || []).length);
+  expect(n1 === 1 && await ev(() => window.__tsg.state.selHillCtrl === 0 && !document.getElementById('hillCtrlSel').hidden), `punto agregado: ${n1}`);
+  // subir 10 m con la barra
+  await ev(() => { const el = document.getElementById('hillCtrlDz'); el.value = '10'; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); });
+  await idle();
+  const hAfter = await ev(([x, y]) => { const t = window.__tsg, L = t.state.layout, [wx, wy] = L.toWorld(x, y); return t.preview.hillData.hillSample(1, wx, wy); }, c);
+  expect(hAfter - hBefore > 8, `sube el cerro: ${hBefore.toFixed(1)} → ${hAfter.toFixed(1)} m`);
+  expect(await ev(() => window.__tsg.preview.hillCtrlGroup.children.length === 1 && window.__tsg.preview.hctrlTc.enabled), 'esfera y gizmo del punto en 3D');
+  // arrastrarlo en el mapa lo mueve en planta
+  await setModeOff();
+  await drag(sx, sy, sx + 25, sy, 5);
+  await idle();
+  const moved = await ev(([x]) => window.__tsg.state.hills[0].ctrl[0].x - x, c);
+  expect(Math.abs(moved) > 0.5, `mover en planta: ${moved}`);
+  // Supr quita el punto (el cerro queda)
+  await ev(() => document.activeElement && document.activeElement.blur());
+  await page.keyboard.press('Delete');
+  await idle();
+  const after = await ev(() => [window.__tsg.state.hills.length, (window.__tsg.state.hills[0].ctrl || []).length]);
+  expect(after[0] === 1 && after[1] === 0, `Supr: ${after}`);
+});
+async function setModeOff() { await ev(() => { if (document.getElementById('btnHillCtrl').classList.contains('active')) document.getElementById('btnHillCtrl').click(); }); }
+
 // ---------------------------------------------------------------------------------------------------------------
 /** Corre las pruebas elegidas en un navegador propio (un proceso). Devuelve {pass, fails, total}. */
 async function runTests(run, port) {
@@ -732,7 +867,7 @@ async function runTests(run, port) {
   page = await ctx.newPage();
   page.on('pageerror', (e) => errs.push(String(e)));
   page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
-  page.on('dialog', (d) => d.accept());
+  page.on('dialog', (d) => { dialogs.push(d.message()); d.accept(); });
   URL = `http://localhost:${port}/`;
   await freshPage();
   let pass = 0;

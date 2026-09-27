@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Track Spline Generator v0.63</title>
+  <title>Track Spline Generator v0.64</title>
   <link rel="stylesheet" href="styles.css">
   <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.63</span></div>
+    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.64</span></div>
     <label class="proj-name-wrap" title="Nombre del proyecto: se usa al guardar (<nombre>.tsg.json) y en los autoguardados (<nombre>_auto_…)"><input id="projectName" class="proj-name" value="pista" spellcheck="false" maxlength="80"><span class="small muted" id="autosaveState"></span></label>
     <div class="top-actions">
       <button id="btnNew" title="Empezar de cero">Nuevo</button>
@@ -451,6 +451,16 @@
           <div class="field"><label>Densidad de geometría <span class="val" id="hillDensityVal"></span></label><input type="range" id="hillDensity" min="1" max="100" step="1"></div>
           <div class="field"><label>Máximo de triángulos</label><input type="number" id="hillMaxTris" min="50" step="500"></div>
           <p class="hint" id="hillInfo"></p>
+          <div id="hillCtrlBox" hidden>
+            <h4 class="mini">Puntos de control</h4>
+            <div class="row gap"><button id="btnHillCtrl" class="small" title="Activado: un clic sobre el cerro (mapa o vista 3D) agrega un punto. Arrastra el punto en Z (gizmo en 3D) para subir o hundir esa zona, o en planta para moverlo">Agregar puntos (clic en el cerro)</button><button id="btnHillCtrlClear" class="small" title="Quita todos los puntos de control de este cerro">Quitar todos</button></div>
+            <p class="meta" id="hillCtrlInfo"></p>
+            <div id="hillCtrlSel" hidden>
+              <div class="field"><label>Subir / hundir <span class="val" id="hillCtrlDzVal"></span></label><input type="range" id="hillCtrlDz" min="-40" max="40" step="0.1" title="Cuánto sube (+) o se hunde (−) el cerro en el centro del punto; hacia el borde del radio se desvanece suave"></div>
+              <div class="field"><label>Radio <span class="val" id="hillCtrlRVal"></span></label><input type="range" id="hillCtrlR" min="1" max="200" step="0.5" title="Radio de la zona que mueve el punto"></div>
+              <div class="row gap"><button id="btnHillCtrlDel" class="small" title="Quita este punto (también con Supr)">Quitar punto</button></div>
+            </div>
+          </div>
         </div>
         <h3 class="subhead">Túneles</h3>
         <p class="hint">Si un cerro cubre la pista lo suficiente, se crea un túnel (donde no alcanza, la pista pasa en trinchera). Cada túnel tiene sus propios parámetros: forma, tipo, medidas, caverna, costado abierto y pilares, bocas y geometría. Haz clic en el nombre de un túnel (aquí o en la vista 3D) para seleccionarlo y ver sus parámetros. Cada túnel exporta paredes, techo, veredas y dos bocas por separado.</p>
@@ -463,6 +473,13 @@
         </div>
         <input id="fileCoveredTex" type="file" accept="image/*" hidden>
         <p class="hint">Por defecto, la textura de la pista un 20 % más oscura. Se exportan como <code>&lt;ruta&gt;_cubierto</code> con el material <code>pista_cubierta</code>; cada atajo usa <code>pista_atajo</code> o, con textura propia, <code>pista_&lt;atajo&gt;</code>.</p>
+        <h3 class="subhead" id="tunTexHead">Texturas de los túneles</h3>
+        <div class="row gap"><span class="small" style="min-width:62px">Paredes</span><button id="tunWallTexBtn">Cargar textura…</button><button id="tunWallTexRemove" disabled>Por defecto</button><img id="tunWallTexThumb" class="thumb" hidden alt=""></div>
+        <input id="tunWallTexFile" type="file" accept="image/*" hidden>
+        <div class="row gap" style="margin-top:6px"><span class="small" style="min-width:62px">Techo</span><button id="tunCeilTexBtn">Cargar textura…</button><button id="tunCeilTexRemove" disabled>Por defecto</button><img id="tunCeilTexThumb" class="thumb" hidden alt=""></div>
+        <input id="tunCeilTexFile" type="file" accept="image/*" hidden>
+        <div class="field" style="margin-top:6px"><label>Repetición de la textura <span class="val" id="tunnelTexTileVal"></span></label><input type="range" id="tunnelTexTile" min="0.5" max="30" step="0.5" title="Metros por repetición de las texturas de los túneles (a lo largo y alrededor de la sección)"></div>
+        <p class="hint">Valen para todos los túneles; cada túnel puede tener las suyas (en su tarjeta). Las veredas usan la textura de las paredes. Sin textura, el color por defecto (hormigón o roca).</p>
       </section>
 
       <section class="panel" data-panel="rivers">
@@ -762,7 +779,7 @@
           <button id="btnGameRestart" title="Volver a la meta">Reiniciar</button>
           <button id="btnGameFull" title="Pantalla completa">Pantalla completa</button>
           <button id="btnGameExit" title="Salir de la cámara de juego (Esc)">Salir</button>
-          <button id="btnGameCam" title="Distancia, altura, inclinación y campo de visión de la cámara">Ajustar cámara</button>
+          <button id="btnGameCam" title="Distancia (también con la rueda del mouse), altura, inclinación, campo de visión y derrape">Ajustar cámara</button>
           <label class="check small" title="Muestra la esfera blanca que marca sobre la pista el punto bajo el cursor del mapa o del perfil"><input type="checkbox" id="gameGuide"> Mostrar guía</label>
           <label class="check small" title="Oculta del todo los triggers (bocas de túneles y propios) mientras manejas: ni las cajas semitransparentes ni sus aristas. Se siguen exportando igual"><input type="checkbox" id="gameHideTrig"> Ocultar triggers</label>
           <button id="btnCarLoad" title="Carga un auto 3D (FBX o GLB): se escala solo para caber en el tamaño del auto por defecto, se centra y se apoya en la pista">Auto 3D…</button>
@@ -780,10 +797,11 @@
             <button id="btnCarRemove" class="small" title="Vuelve al auto por defecto">Quitar auto 3D</button>
           </span>
           <span id="gameCamBox" class="row" hidden style="flex-basis:100%;gap:6px 10px;flex-wrap:wrap">
-            <label class="small" title="Distancia detrás del auto (tercera persona)">Distancia <input type="range" id="gameCamDist" min="1" max="40" step="0.5" style="width:90px"> <span class="val" id="gameCamDistVal"></span></label>
+            <label class="small" title="Distancia detrás del auto (tercera persona). También con la rueda del mouse en la vista">Distancia <input type="range" id="gameCamDist" min="1" max="40" step="0.5" style="width:90px"> <span class="val" id="gameCamDistVal"></span></label>
             <label class="small" title="Altura sobre el auto (tercera persona)">Altura <input type="range" id="gameCamHeight" min="0" max="20" step="0.1" style="width:90px"> <span class="val" id="gameCamHeightVal"></span></label>
             <label class="small" title="Inclinación de la mirada: positivo mira más hacia abajo">Inclinación <input type="range" id="gameCamTilt" min="-30" max="45" step="1" style="width:90px"> <span class="val" id="gameCamTiltVal"></span></label>
             <label class="small" title="Campo de visión vertical">FOV <input type="range" id="gameCamFov" min="20" max="120" step="1" style="width:90px"> <span class="val" id="gameCamFovVal"></span></label>
+            <label class="small" title="Cuánto derrapa el auto en las curvas: la cola se abre hacia afuera, más en curvas cerradas y a más velocidad. 0 = sin derrape (solo se ve; el auto sigue la pista)">Derrape <input type="range" id="gameCamDrift" min="0" max="100" step="1" style="width:90px"> <span class="val" id="gameCamDriftVal"></span></label>
             <button id="btnGameCamReset" class="small" title="Valores por defecto">Por defecto</button>
           </span>
         </div>

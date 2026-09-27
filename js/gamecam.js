@@ -84,9 +84,22 @@ export class GameCam {
       window.addEventListener('pointerup', up, true);
     }, true);
     el.addEventListener('contextmenu', (e) => { if (this.active) e.preventDefault(); }, true);
+    // rueda: acerca o aleja la cámara (cambia «Distancia» del ajuste de cámara); en primera persona no hace nada
+    el.addEventListener('wheel', (e) => {
+      if (!this.active) return;
+      e.preventDefault(); e.stopPropagation();
+      if (this.mode === 'first') return;
+      const G = this.app.state.game;
+      const d = Math.max(1, Math.min(40, (G.camDist ?? 8.5) * Math.exp(e.deltaY * 0.0012)));
+      G.camDist = Math.round(d * 2) / 2;
+      if (this.app.syncGameCam) this.app.syncGameCam();
+    }, { passive: false, capture: true });
   }
 
   /** Vuelve a la cámara normal (detrás del auto o desde el asiento), con transición suave. */
+  /** Ángulo de derrape actual (radianes; + = la nariz apunta a la izquierda). Para pruebas. */
+  driftAngle() { return this.driftYaw || 0; }
+
   resetOrbit() { this.orbit.yaw = 0; this.orbit.pitch = 0; this.orbit.on = false; }
 
   /** Brillo del auto (×, 1 = normal): multiplica el color de sus materiales (propios, no los del modelo cargado). */
@@ -289,6 +302,22 @@ export class GameCam {
     const m = new THREE.Matrix4().makeBasis(P.fwd, P.left, P.up);
     this.car.quaternion.setFromRotationMatrix(m);
     this.car.position.copy(P.pos);
+    // derrape (solo visual): la cola se abre hacia afuera de la curva según la aceleración lateral v²·curvatura
+    {
+      const G = this.app.state.game || {};
+      const amt = Math.max(0, Math.min(100, G.drift ?? 50)) / 100;
+      const a0 = this.pose(this.s - 3).fwd, a1 = this.pose(this.s + 3).fwd;
+      const turn = Math.atan2(a0.x * a1.y - a0.y * a1.x, a0.x * a1.x + a0.y * a1.y); // + = a la izquierda
+      const k = turn / 6; // curvatura (1/m)
+      const lat = v * v * k; // aceleración lateral (m/s²)
+      const target = amt ? Math.max(-0.65, Math.min(0.65, Math.sign(lat) * Math.pow(Math.abs(lat) / 9.81, 0.8) * 0.25 * amt * 2)) : 0;
+      const kk = 1 - Math.exp(-dt * (Math.abs(target) > Math.abs(this.driftYaw || 0) ? 3 : 2));
+      this.driftYaw = (this.driftYaw || 0) + (target - (this.driftYaw || 0)) * (this.paused ? 0 : kk);
+      if (Math.abs(this.driftYaw) > 1e-4) {
+        this.car.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(P.up, this.driftYaw));
+        this.car.position.addScaledVector(P.left, -Math.sign(this.driftYaw) * Math.min(0.8, Math.abs(this.driftYaw) * 1.2)); // se abre un poco hacia afuera
+      }
+    }
     for (const w of this.car.userData.wheels) w.rotation.y = this.wheelSpin;
     // cámara
     let desiredPos, desiredLook, desiredUp;

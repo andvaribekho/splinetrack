@@ -30,6 +30,7 @@ export const DEFAULT_SCENE = {
   tsmoothBrush: 25, // pincel «Suavizar pista»: radio (m), fuerza por toque (0..1) y si suaviza también las alturas
   tsmoothStrength: 0.5,
   tsmoothZ: false,
+  tunnelTexTile: 6, // metros por repetición de las texturas de los túneles
   skirtHeight: 1.1, // m que bajan los faldones desde el borde (pista y camino de tierra); como mínimo la separación del terreno + 0.1
   // terreno
   terrain: false,

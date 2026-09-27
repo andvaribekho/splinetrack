@@ -88,7 +88,7 @@ export function riverField(rv) {
 
 /**
  * Malla de agua de un río o cascada. surfZ(x,y) = altura de la superficie (ya socavada); origZ(x,y) = la superficie
- * antes de socavar; skip(x,y) = true donde no va agua (la pista). Devuelve {positions, uvs, indices, tris} o null.
+ * antes de socavar; skip(x,y,z) = true donde no va agua (la pista a menos de ~1 m sobre el agua). Devuelve {positions, uvs, indices, tris} o null.
  */
 export function buildRiverWater(F, surfZ, origZ, skip = null) {
   const rv = F.river, carved = rv.mode === 'carved';
@@ -116,7 +116,7 @@ export function buildRiverWater(F, surfZ, origZ, skip = null) {
     const z = carved ? origZ(x, y) - 0.3 * F.depth : surfZ(x, y) + 0.12;
     if (!Number.isFinite(z)) continue;
     zv[v] = z;
-    ok[v] = skip && skip(x, y) ? 0 : 1;
+    ok[v] = skip && skip(x, y, z) ? 0 : 1;
   }
   const idx = [];
   for (let t = 0; t < tri.length; t += 3) {
@@ -152,7 +152,8 @@ export function buildRivers(T, HS, rivers) {
   if (!T || !rivers || !rivers.length) return out;
   const names = riverNames(rivers);
   const zoneAt = T.ctx && T.ctx.zoneAt;
-  const skip = zoneAt ? (x, y) => zoneAt(x, y, 0.6) < Infinity : null;
+  // sin agua donde la pista la tapa; bajo un puente (tablero con holgura sobre el agua) el agua sigue
+  const skip = zoneAt ? (x, y, z) => zoneAt(x, y, 0.6) < z + 1.2 : null;
   for (const rv of rivers) {
     const F = riverField(rv);
     if (!F) continue;

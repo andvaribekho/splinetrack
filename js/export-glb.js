@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { GLTFExporter } from '../vendor/exporters/GLTFExporter.js';
 import { buildRivers } from './rivers.js';
 import { buildTrackMesh, coveredRanges, terrainTint, buildTerrain, buildTrees, buildHills, buildStartGate, buildGrass, makeGround, bridgePillars, suspPillars, buildTriggers } from './scene.js';
-import { pillarGeometry } from './tunnels.js';
+import { pillarGeometry, torchGeometry } from './tunnels.js';
 import { buildEdgeMeshes } from './edges.js';
 import { assetObject, builtinAsset, mergedAssetMeshes } from './assets.js';
 import { decoSetItems, treeModelItems, grassModelItems } from './deco.js';
@@ -125,6 +125,29 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
       const walkMat = M('tunel_veredas', 0x8a8a84);
       const rockMat = M('roca', 0x5c5049, { flatShading: true });
       const pillarMat = new THREE.MeshStandardMaterial({ name: 'pilar', color: 0x8d9097, roughness: 0.85 });
+      // texturas de paredes y techo (propias del túnel o generales; las veredas usan la de las paredes)
+      const tile = Math.max(0.5, sp.tunnelTexTile ?? 6);
+      const texMats = new Map();
+      const texMat = (cv, name, natural) => {
+        if (!cv) return null;
+        const key = cv;
+        if (!texMats.has(key)) {
+          const tx = tex(cv);
+          tx.wrapS = tx.wrapT = THREE.RepeatWrapping;
+          tx.repeat.set(6 / tile, 6 / tile);
+          texMats.set(key, M(name, 0xffffff, { map: tx, flatShading: natural }));
+        }
+        return texMats.get(key);
+      };
+      const tTex = (uid, kind) => (textures.tunnelTex ? textures.tunnelTex(uid, kind) : null);
+      // antorcha por defecto como un «asset» más (soporte + llama), para usar el mismo camino que los modelos
+      const TG = torchGeometry();
+      const geoOf = (g) => { const bg = new THREE.BufferGeometry(); bg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(g.positions), 3)); bg.setIndex(g.indices); bg.computeVertexNormals(); return bg; };
+      const TORCH = { id: '__antorcha', name: 'antorcha', parts: [
+        { name: 'soporte', geometry: geoOf(TG.wood), material: new THREE.MeshStandardMaterial({ name: 'antorcha', color: 0x4a3526, roughness: 0.9, metalness: 0 }), matrix: new THREE.Matrix4() },
+        { name: 'llama', geometry: geoOf(TG.flame), material: new THREE.MeshBasicMaterial({ name: 'antorcha_llama', color: 0xffa22e, side: THREE.DoubleSide }), matrix: new THREE.Matrix4() },
+      ] };
+      const decoAsset = (id) => (id === '__antorcha' ? TORCH : textures.assetById ? textures.assetById(id) : null);
       const tg = new THREE.Group();
       tg.name = 'tuneles';
       root.add(tg);
@@ -134,9 +157,12 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
         tg.add(grp);
         const put = (suffix, geo, mat) => { if (geo.indices.length) grp.add(mesh(`${t.name}_${suffix}`, geo.positions, geo.indices, geo.uvs || null, mat)); };
         const tm = matsFor(!!t.natural);
-        put('paredes', t.walls, tm.wall);
-        put('techo', t.ceiling, tm.ceil);
-        put('veredas', t.walkways, walkMat);
+        const own = t.texUid && textures.tunnelTex && (textures.tunnelTex(t.texUid, 'wall') !== textures.tunnelTex(null, 'wall') || textures.tunnelTex(t.texUid, 'ceil') !== textures.tunnelTex(null, 'ceil'));
+        const wT = texMat(tTex(t.texUid, 'wall'), own ? `${t.name}_paredes` : 'tunel_paredes_textura', !!t.natural);
+        const cT = texMat(tTex(t.texUid, 'ceil'), own ? `${t.name}_techo` : 'tunel_techo_textura', !!t.natural);
+        put('paredes', t.walls, wT || tm.wall);
+        put('techo', t.ceiling, cT || tm.ceil);
+        put('veredas', t.walkways, wT || walkMat);
         for (const pt of t.portals) put(pt.suffix, pt.geo, tm.portal);
         if (t.shell) put('cascara', t.shell, tm.portal); // «Quitar cerro»: exterior del túnel
         // rocas y estalactitas: una malla por tipo (single mesh) o cada una como objeto propio con su pivote
@@ -148,6 +174,15 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
         });
         if (t.singleMesh === false) { items(t.stalItems || [], 'estalactita'); items(t.rockItems || [], 'roca'); }
         else { put('estalactitas', t.stalactites, rockMat); put('rocas', t.rocks, rockMat); }
+        // decoración de pared: una malla por material («single mesh») o cada elemento con su pivote en la pared
+        if (t.wallDeco && t.wallDeco.length) {
+          const D = t.deco || {};
+          const aid = D.model != null && decoAsset(D.model) ? D.model : '__antorcha';
+          const rot = ((D.rot || 0) * Math.PI) / 180;
+          const items = t.wallDeco.map((w) => ({ x: w.x, y: w.y, z: w.z, yaw: w.yaw + rot, scale: D.scale || 1, asset: aid }));
+          if (D.single !== false) for (const m of mergedAssetMeshes(decoAsset, items, `${t.name}_decoracion`)) grp.add(m);
+          else items.forEach((it, i) => grp.add(assetObject(decoAsset(aid), it, `${t.name}_decoracion_${String(i + 1).padStart(2, '0')}`)));
+        }
         t.pillars.forEach((pl, i) => {
           const pg = pillarGeometry(pl);
           const m = mesh(`${t.name}_pilar_${String(i + 1).padStart(2, '0')}`, pg.positions, pg.indices, null, pillarMat);

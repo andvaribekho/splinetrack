@@ -9,7 +9,7 @@ import { decoSetItems, treeModelItems, treeModelItem, grassModelItems } from './
 import { buildShadows, shadowCasters, sunVector } from './shadows.js';
 import { buildTrackMesh, trackRows, trackCols, coveredRanges, terrainTint, buildTerrain, buildTrees, buildHills, buildStartGate, buildGrass, makeGround, bridgePillars, suspPillars, pillarBlocked, moveTree, treeConeVerts, vegPlace, buildTriggers } from './scene.js';
 import { buildRivers } from './rivers.js';
-import { pillarGeometry } from './tunnels.js';
+import { pillarGeometry, torchGeometry } from './tunnels.js';
 import { applyRefLook } from './refmodel.js';
 import { makeBannerCanvas, makeCheckerCanvas, makeGrassCanvas, makePadCanvas, makeGlowCanvas, makeAsphaltCanvas, makeBridgeCanvas } from './gatetex.js';
 
@@ -101,6 +101,34 @@ export class Preview3D {
       if (this.app.onHillHeightPreview) this.app.onHillHeightPreview(hd.id, hd.newH);
       this.needsFrame = true;
     });
+    // puntos de control del cerro seleccionado: esferas y un gizmo (XY mueve el punto, Z sube o hunde esa zona)
+    this.hillCtrlGroup = new THREE.Group();
+    this.scene.add(this.hillCtrlGroup);
+    this.hctrlProxy = new THREE.Object3D();
+    this.scene.add(this.hctrlProxy);
+    this.hctrlTc = new TransformControls(this.camera, this.renderer.domElement);
+    this.hctrlTc.setSpace('world');
+    this.hctrlTc.setSize(0.9);
+    this.scene.add(this.hctrlTc.getHelper());
+    this.hctrlTc.enabled = false;
+    this.hctrlTc.addEventListener('change', () => (this.needsFrame = true));
+    this.hctrlTc.addEventListener('dragging-changed', (e) => {
+      this.controls.enabled = !e.value;
+      const d = this.hctrlDrag;
+      if (!d) return;
+      if (e.value) { d.p0 = this.hctrlProxy.position.clone(); d.active = true; this.app.beginHillCtrlDrag(); }
+      else if (d.active) { d.active = false; this.app.moveHillCtrl(d.i, {}, true); }
+    });
+    this.hctrlTc.addEventListener('objectChange', () => {
+      const d = this.hctrlDrag, L = this.app.state.layout;
+      if (!d || !d.active || !L) return;
+      const P = this.hctrlProxy.position;
+      const [lx, ly] = L.toLayout(P.x, P.y);
+      const dz = d.dz0 + (P.z - d.p0.z) / Math.max(0.01, this.zExag);
+      if (d.sphere) d.sphere.position.copy(P);
+      this.app.moveHillCtrl(d.i, { x: +lx.toFixed(3), y: +ly.toFixed(3), dz: +dz.toFixed(2) }, false);
+      this.needsFrame = true;
+    });
     // bordes de la pista (camino de tierra y barrera), extruidos de la malla de la pista
     this.edgeGroup = new THREE.Group();
     this.scene.add(this.edgeGroup);
@@ -118,7 +146,7 @@ export class Preview3D {
     this.refTc.addEventListener('objectChange', () => { if (this.refOuter && this.app.onRef3dMove) { const p = this.refOuter.position; this.app.onRef3dMove([p.x, p.y, p.z], THREE.MathUtils.radToDeg(this.refOuter.rotation.z)); } });
     const dom = this.renderer.domElement;
     let down = null;
-    dom.addEventListener('pointerdown', (e) => { down = [e.clientX, e.clientY, e.button]; this.tcUsed = !!this.tc.axis || !!(this.refTc && this.refTc.axis && this.refTc.enabled) || !!(this.hillTc && this.hillTc.axis && this.hillTc.enabled); });
+    dom.addEventListener('pointerdown', (e) => { down = [e.clientX, e.clientY, e.button]; this.tcUsed = !!this.tc.axis || !!(this.refTc && this.refTc.axis && this.refTc.enabled) || !!(this.hillTc && this.hillTc.axis && this.hillTc.enabled) || !!(this.hctrlTc && this.hctrlTc.axis && this.hctrlTc.enabled); });
     // pintar subdivisión, cerros o ríos directamente sobre el terreno en 3D
     this.paintMode = null;
     // aro del pincel: una cinta que se amolda a la superficie (se rehace en cada movimiento)
@@ -694,6 +722,7 @@ export class Preview3D {
     this.waterMesh = null;
     this.hillMeshes = [];
     this.tunnelMeshes = [];
+    this.tunnelDecoMeshes = []; // decoración de pared (materiales compartidos: no se resaltan, pero se eligen con clic)
     this.caveMeshes = []; // rocas y estalactitas sueltas (túneles sin «single mesh»)
     this.treeMesh = null; this.treeData = null; // árboles (buildTreeMesh)
     this.tunnelGeoById = new Map();
@@ -841,11 +870,26 @@ export class Preview3D {
         const rockMat = new THREE.MeshStandardMaterial({ color: 0x5c5049, roughness: 1, flatShading: true, side: THREE.DoubleSide });
         const pillarMat = new THREE.MeshStandardMaterial({ color: 0x8d9097, roughness: 0.85 });
         const roadZ = this.roadBaseFn(L, E);
+        const tile = Math.max(0.5, sp.tunnelTexTile ?? 6);
+        const texFor = (uid, kind) => {
+          const cv = this.app.tunnelTexCanvas ? this.app.tunnelTexCanvas(uid, kind) : null;
+          const tx = this.texture(cv);
+          if (tx) { tx.repeat.set(6 / tile, 6 / tile); tx.needsUpdate = true; } // UV del túnel en unidades de 6 m
+          return tx;
+        };
+        const torch = torchGeometry();
+        const torchGeo = { wood: mkGeo({ positions: new Float32Array(torch.wood.positions), indices: torch.wood.indices }), flame: mkGeo({ positions: new Float32Array(torch.flame.positions), indices: torch.flame.indices }) };
+        const torchWood = new THREE.MeshStandardMaterial({ color: 0x4a3526, roughness: 0.9 });
+        const torchFlame = new THREE.MeshBasicMaterial({ color: 0xffa22e, side: THREE.DoubleSide });
         for (const t of HS.tunnelGeo) {
           // materiales propios por túnel (para resaltarlo al seleccionarlo)
           const [wallMat, ceilMat, portalMat] = matsFor(!!t.natural);
           const mats = [wallMat, ceilMat, walkMat, portalMat, rockMat, pillarMat].map((m) => m.clone());
           const [wm, cm, km, pm0, rm, plm] = mats;
+          // texturas de paredes y techo (propias del túnel o generales); las veredas usan la de las paredes
+          const twx = texFor(t.texUid, 'wall'), tcx = texFor(t.texUid, 'ceil');
+          if (twx) { wm.map = twx; wm.color.set(0xffffff); km.map = twx; km.color.set(0xffffff); }
+          if (tcx) { cm.map = tcx; cm.color.set(0xffffff); }
           const addT = (geo, mat) => {
             const n = add(geo, mat);
             if (n) { const m = this.extras.children[this.extras.children.length - 1]; m.userData.tunnelId = t.id; this.tunnelMeshes.push(m); this.markExag(m, (x, y) => roadZ(x, y)); }
@@ -868,6 +912,23 @@ export class Preview3D {
             }
           } else tris += addT(t.stalactites, rm) + addT(t.rocks, rm);
           for (const pt of t.portals) tris += addT(pt.geo, pm0);
+          // decoración de pared: antorcha por defecto o un modelo de la biblioteca, con el pivote en la pared
+          if (t.wallDeco && t.wallDeco.length) {
+            const D = t.deco || {};
+            const A = D.model != null ? (this.app.state.assets || []).find((a) => a.id == D.model) : null; // eslint-disable-line eqeqeq
+            const rot = ((D.rot || 0) * Math.PI) / 180, sc0 = D.scale || 1;
+            for (const w of t.wallDeco) {
+              const g = new THREE.Group();
+              if (A) for (const part of A.parts) { const m = new THREE.Mesh(part.geometry, part.material); part.matrix.decompose(m.position, m.quaternion, m.scale); g.add(m); tris += (part.geometry.index ? part.geometry.index.count : part.geometry.getAttribute('position').count) / 3; }
+              else { g.add(new THREE.Mesh(torchGeo.wood, torchWood), new THREE.Mesh(torchGeo.flame, torchFlame)); tris += (torch.wood.indices.length + torch.flame.indices.length) / 3; }
+              g.position.set(w.x, w.y, w.z);
+              g.rotation.z = w.yaw + rot;
+              g.scale.setScalar(sc0);
+              g.userData = { tunnelId: t.id, wallDeco: true, exagObj: { z: w.z, shift: roadZ(w.x, w.y) } };
+              g.traverse((o) => { if (o.isMesh) { o.userData.tunnelId = t.id; this.tunnelDecoMeshes.push(o); } });
+              this.extras.add(g);
+            }
+          }
           if (t.shell) tris += addT(t.shell, pm0); // sin cerro: cáscara exterior (material de la boca)
           for (const pl of t.pillars) {
             const pm = new THREE.Mesh(mkGeo(pillarGeometry(pl)), plm);
@@ -879,7 +940,7 @@ export class Preview3D {
             tris += 12;
           }
           info.tunnelTris += tris;
-          info.tunnels.push({ id: t.id, name: t.name, len: t.len, s0: t.sMid - t.len / 2, s1: t.sMid + t.len / 2, stal: t.stalOn, pillars: t.pillars.length, tris, k: t.k, sMid: t.sMid, openMode: t.openMode, pillarCount: t.pillarCount, custom: t.custom, key: t.key, shape: t.shape, type: t.type, density: t.density, meshMode: t.meshMode, maxTris: t.maxTris, adapt: t.adapt, rocks: t.rocksOn, rockDensity: t.rockDensity, stalDensity: t.stalDensity, singleMesh: t.singleMesh, sections: t.sections, profilePts: t.profilePts, width: t.width, height: t.height, caveSize: t.caveSize, portalFrame: t.portalFrame, portalDepth: t.portalDepth, noHill: t.noHill, hillIds: t.hillIds || [] });
+          info.tunnels.push({ id: t.id, name: t.name, len: t.len, s0: t.sMid - t.len / 2, s1: t.sMid + t.len / 2, stal: t.stalOn, pillars: t.pillars.length, tris, k: t.k, sMid: t.sMid, openMode: t.openMode, pillarCount: t.pillarCount, custom: t.custom, key: t.key, shape: t.shape, type: t.type, density: t.density, meshMode: t.meshMode, maxTris: t.maxTris, adapt: t.adapt, rocks: t.rocksOn, rockDensity: t.rockDensity, stalDensity: t.stalDensity, singleMesh: t.singleMesh, sections: t.sections, profilePts: t.profilePts, width: t.width, height: t.height, caveSize: t.caveSize, portalFrame: t.portalFrame, portalDepth: t.portalDepth, noHill: t.noHill, hillIds: t.hillIds || [], texUid: t.texUid, deco: t.deco, decoPlaced: (t.wallDeco || []).length });
           this.objTris.tunnels.set(t.id, { name: t.name, tris });
         }
         if (this.app.state.selCave) this.setCaveSelection(true); // la roca o estalactita seleccionada sigue resaltada y con su gizmo
@@ -1187,14 +1248,45 @@ export class Preview3D {
   /** Resalta el cerro seleccionado (sin reconstruir). */
   setHillSelection(id, frame = true) {
     const st = this.app.state;
-    const glow = (m, sel) => { m.material.emissive.set(sel ? 0x6b5210 : 0x000000); m.material.emissiveIntensity = sel ? 0.45 : 0; };
+    const glow = (m, sel) => { if (!m.material || !m.material.emissive) return; m.material.emissive.set(sel ? 0x6b5210 : 0x000000); m.material.emissiveIntensity = sel ? 0.45 : 0; };
     for (const m of this.hillMeshes || []) glow(m, st.selHill != null && m.userData.hillId === st.selHill);
     for (const m of this.tunnelMeshes || []) glow(m, st.selTunnel != null && m.userData.tunnelId === st.selTunnel);
     this.setCaveSelection(false);
     if (st.selCave || this.tc.object === this.proxy) this.updateHandles();
     if (this.statsDiv) this.updateStats();
     this.updateHillGizmo();
+    this.updateHillCtrl();
     if (frame) this.needsFrame = true;
+  }
+
+  /** Esferas de los puntos de control del cerro seleccionado y gizmo del elegido. */
+  updateHillCtrl() {
+    if (!this.hillCtrlGroup) return;
+    this.disposeGroup(this.hillCtrlGroup);
+    const st = this.app.state, L = st.layout;
+    const h = st.selHill != null ? (st.hills || []).find((q) => q.id === st.selHill) : null;
+    const off = () => { this.hctrlTc.detach(); this.hctrlTc.enabled = false; this.hctrlDrag = null; };
+    if (!h || !L || (this.game && this.game.active) || !(h.ctrl && h.ctrl.length)) { off(); return; }
+    h.ctrl.forEach((c, i) => {
+      const [x, y] = L.toWorld(c.x, c.y), z = (this.surfaceZ(x, y) ?? 0) + 0.6;
+      const sel = i === st.selHillCtrl;
+      const m = new THREE.Mesh(new THREE.SphereGeometry(sel ? 1.3 : 1, 14, 10), new THREE.MeshBasicMaterial({ color: sel ? 0xffb74d : c.dz >= 0 ? 0xe0a050 : 0x6a8cff, depthTest: false }));
+      m.renderOrder = 10;
+      m.position.set(x, y, z);
+      m.userData = { hillCtrl: i };
+      this.hillCtrlGroup.add(m);
+      if (sel) {
+        this.hctrlProxy.position.set(x, y, z);
+        this.hctrlProxy.updateMatrixWorld();
+        if (!this.hctrlDrag || !this.hctrlDrag.active) {
+          this.hctrlTc.attach(this.hctrlProxy);
+          this.hctrlTc.enabled = true;
+          this.hctrlDrag = { i, dz0: c.dz, sphere: m, active: false };
+        }
+      }
+    });
+    if (st.selHillCtrl == null || !h.ctrl[st.selHillCtrl]) off();
+    this.needsFrame = true;
   }
 
   /** Flecha Z sobre la cima del cerro seleccionado: arrastrarla cambia su altura. */
@@ -1203,7 +1295,7 @@ export class Preview3D {
     const st = this.app.state;
     const meshes = (this.hillMeshes || []).filter((m) => st.selHill != null && m.userData.hillId === st.selHill);
     const hill = st.selHill != null ? (st.hills || []).find((h) => h.id === st.selHill) : null;
-    if (!meshes.length || !hill || (this.game && this.game.active) || st.tool === 'edit') { this.hillTc.detach(); this.hillTc.enabled = false; this.hillDrag = null; return; }
+    if (!meshes.length || !hill || (this.game && this.game.active) || st.tool === 'edit' || st.hillCtrlMode || st.selHillCtrl != null) { this.hillTc.detach(); this.hillTc.enabled = false; this.hillDrag = null; return; }
     let best = null, zb = Infinity;
     for (const m of meshes) {
       const P = m.geometry.getAttribute('position');
@@ -1298,9 +1390,16 @@ export class Preview3D {
     const decoMeshes = [];
     if (this.decoGroup) this.decoGroup.traverse((o) => { if (o.isInstancedMesh) decoMeshes.push(o); });
     const water = this.waterMesh && this.extras.children.includes(this.waterMesh) ? [this.waterMesh] : [];
-    const objs = [...refMeshes, ...edgeMeshes, ...(this.riverMeshes || []), ...(this.wallMeshes || []), ...water, ...decoMeshes, ...this.itemsGroup.children, ...this.hillMeshes, ...(this.tunnelMeshes || []), ...(this.terrainMesh ? [this.terrainMesh] : []), ...this.trackGroup.children, ...veg];
-    // rocas y estalactitas sueltas del túnel seleccionado: se eligen aunque las tape el cerro
+    const objs = [...refMeshes, ...edgeMeshes, ...(this.riverMeshes || []), ...(this.wallMeshes || []), ...water, ...decoMeshes, ...this.itemsGroup.children, ...this.hillMeshes, ...(this.tunnelMeshes || []), ...(this.tunnelDecoMeshes || []), ...(this.terrainMesh ? [this.terrainMesh] : []), ...this.trackGroup.children, ...veg];
     const st0 = this.app.state;
+    // puntos de control del cerro seleccionado (se ven y se eligen a través del cerro)
+    const hcs = this.hillCtrlGroup ? ray.intersectObjects(this.hillCtrlGroup.children, false) : [];
+    if (hcs.length) { this.app.selectHillCtrl(hcs[0].object.userData.hillCtrl); return; }
+    if (st0.selHill != null && this.app.hillCtrlMode && this.app.hillCtrlMode()) {
+      const hh = ray.intersectObjects((this.hillMeshes || []).filter((m) => m.userData.hillId === st0.selHill), false);
+      if (hh.length) { const P = hh[0].point; this.app.addHillCtrlWorld(P.x, P.y); return; }
+    }
+    // rocas y estalactitas sueltas del túnel seleccionado: se eligen aunque las tape el cerro
     const caves = st0.selTunnel != null ? (this.caveMeshes || []).filter((m) => m.userData.cave.tid === st0.selTunnel) : [];
     const hc = caves.length ? ray.intersectObjects(caves, false) : [];
     if (hc.length) { this.app.selectCave({ ...hc[0].object.userData.cave }); return; }

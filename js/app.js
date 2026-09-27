@@ -86,7 +86,7 @@ const state = {
   selItem: null, // {type, gid, idx}
   itemPaintTarget: null, // {type, gid} al pintar zonas de un grupo
   paintErase: false,
-  game: { showGuide: false, hideTriggers: true, speed: 120, mode: 'third', camDist: 8.5, camHeight: 2.9, camTilt: 0, fov: 62 }, // cámara: distancia y altura (tercera persona), inclinación (°) y FOV
+  game: { showGuide: false, hideTriggers: true, drift: 50, speed: 120, mode: 'third', camDist: 8.5, camHeight: 2.9, camTilt: 0, fov: 62 }, // cámara: distancia y altura (tercera persona), inclinación (°) y FOV
   skyTex: null, skyCustom: false,
   trackTex: null, // canvas de la textura de la pista
   barrierTex: null, // canvas de la textura de la barrera (null = rojo y blanco por defecto)
@@ -94,6 +94,7 @@ const state = {
   bridgeTexs: {}, // materiales únicos de cada puente, por su uid: {deck, dirt, barrier} (null = por defecto)
   coveredTex: null, // textura de los tramos cubiertos: túneles y bajo cruces (null = la de la pista un 20 % más oscura)
   dirtTex: null, // canvas de la textura del camino de tierra (null = arena por defecto)
+  tunWallTex: null, tunCeilTex: null, tunnelTexOwn: {}, // texturas de los túneles: generales (paredes / techo) y propias de cada túnel {uid: {wall, ceil}}
   riverWallTex: null, fallWallTex: null, // texturas de las paredes socavadas de ríos y cascadas (null = roca por defecto)
   edgeMeshes: null, // última malla de bordes (para el mapa 2D y los clics)
   grassTex: null, // canvas de la textura de hierba (null = por defecto)
@@ -304,6 +305,21 @@ function tunnelCard(t, open) {
       <input type="range" class="tsPil" min="0" max="40" step="1" value="${Math.min(40, t.pillarCount)}" title="Cantidad de pilares en el lado abierto."></div>
     <div class="field"><label>Grosor del marco de la boca <span class="val tsFrV">${(+fr).toFixed(1)} m</span></label><input type="range" class="tsFr" min="0.2" max="5" step="0.1" value="${fr}" title="Grosor del marco de cada boca, alrededor de la sección del túnel."></div>
     <div class="field"><label>Cuánto sobresale la boca <span class="val tsDpV">${(+dp).toFixed(1)} m</span></label><input type="range" class="tsDp" min="0" max="5" step="0.1" value="${dp}" title="Cuánto sobresale la boca por fuera del cerro."></div>
+    <h4 class="mini">Texturas</h4>
+    ${['wall', 'ceil'].map((kd) => { const own = t.texUid && state.tunnelTexOwn[t.texUid] && state.tunnelTexOwn[t.texUid][kd]; return `<div class="row gap tsTexRow" data-kind="${kd}"><span class="small" style="min-width:58px">${kd === 'wall' ? 'Paredes' : 'Techo'}</span><button class="small tsTexLoad" title="Textura propia de este túnel (si no, usa la general de «Texturas de los túneles»)">Propia…</button><button class="small tsTexClear"${own ? '' : ' disabled'} title="Vuelve a la textura general">Como los demás</button>${own ? `<img class="thumb" src="${thumbURL(own)}" alt="">` : `<span class="meta">${app.tunnelTexCanvas(null, kd) ? 'general' : 'color por defecto'}</span>`}</div>`; }).join('')}
+    <input type="file" class="tsTexFile" accept="image/*" hidden>
+    <h4 class="mini">Decoración de pared</h4>
+    <label class="check small tsChk" title="Pone elementos pegados a la pared a lo largo del túnel, a distancia pareja (por defecto antorchas). Cada uno tiene el pivote en su base, pegada a la pared, y mira hacia la pista"><input type="checkbox" class="tsDeco"${t.deco && t.deco.on ? ' checked' : ''}> Decoración de pared</label>
+    <div class="tsDecoBox"${t.deco && t.deco.on ? '' : ' hidden'}>
+      <div class="field"><label>Cantidad por lado <span class="val"><input type="number" class="tsDecoNN" min="1" max="500" step="1" style="width:56px" value="${t.deco ? t.deco.count : 6}"></span></label><input type="range" class="tsDecoN" min="1" max="60" step="1" value="${Math.min(60, t.deco ? t.deco.count : 6)}" title="Cuántos elementos por lado, repartidos a distancia pareja entre las bocas"></div>
+      <div class="field"><label>Altura <span class="val tsDecoHV">${(t.deco ? t.deco.height : 2.2).toFixed(1)} m</span></label><input type="range" class="tsDecoH" min="0.2" max="12" step="0.1" value="${t.deco ? t.deco.height : 2.2}" title="Altura de la base (pivote) sobre la calzada"></div>
+      <div class="field"><label>Lado</label><select class="tsDecoSide" title="A qué lado del túnel, según el sentido de marcha (en un costado abierto no se ponen)">${opt({ both: 'Ambos lados', left: 'Izquierda', right: 'Derecha' }, (t.deco && t.deco.side) || 'both')}</select></div>
+      <div class="field"><label>Modelo</label><select class="tsDecoModel" title="Antorcha por defecto o un modelo de la biblioteca de Decoración (pivote en la base; +X hacia afuera de la pared)"><option value="">Antorcha (por defecto)</option>${state.assets.map((a) => `<option value="${a.id}"${t.deco && String(t.deco.model) === String(a.id) ? ' selected' : ''}>${a.name}</option>`).join('')}</select></div>
+      <div class="row gap"><button class="small tsDecoLoad" title="Carga un modelo (FBX o GLB) a la biblioteca y lo usa aquí">Cargar modelo…</button><input type="file" class="tsDecoFile" accept=".fbx,.glb,.gltf" hidden></div>
+      <div class="field"><label>Escala <span class="val tsDecoSV">×${(t.deco ? t.deco.scale : 1).toFixed(2)}</span></label><input type="range" class="tsDecoS" min="0.1" max="5" step="0.05" value="${t.deco ? t.deco.scale : 1}"></div>
+      <div class="field"><label>Giro</label><select class="tsDecoRot" title="Giro del modelo sobre su eje vertical (si queda mirando a la pared o de lado)">${opt({ 0: '0°', 90: '90°', 180: '180°', 270: '270°' }, String((t.deco && t.deco.rot) || 0))}</select></div>
+      <label class="check small tsChk" title="Activado: toda la decoración del túnel en una malla. Desactivado: cada elemento como objeto propio, con el pivote en su base pegada a la pared"><input type="checkbox" class="tsDecoSingle"${!t.deco || t.deco.single !== false ? ' checked' : ''}> Single mesh</label>
+    </div>
     <h4 class="mini">Geometría</h4>
     <div class="seg tsMode"><button data-mode="uniform" class="${mode === 'uniform' ? 'on' : ''}" title="Secciones a distancia pareja">Uniforme</button><button data-mode="optimized" class="${mode === 'optimized' ? 'on' : ''}" title="Más secciones en curvas, cambios de pendiente y peralte; menos en las rectas">Optimizado</button></div>
     <div class="field"><label>Densidad de polígonos <span class="val"><input type="number" class="tsDenN" min="1" max="100" step="1" style="width:52px" value="${t.density}"> %</span></label><input type="range" class="tsDen" min="1" max="100" step="1" value="${t.density}" title="Lados de la sección y distancia entre secciones a lo largo."><div class="range-ends"><span class="tsDenV">${res(t.density)}</span></div></div>
@@ -354,6 +370,46 @@ function tunnelCard(t, open) {
   q('.tsMax').addEventListener('input', (e) => mx(e.target.value));
   q('.tsMaxN').addEventListener('change', (e) => mx(e.target.value));
   q('.tsAdapt').addEventListener('input', (e) => { const v = numIn(e.target.value, 0, 1); q('.tsAdV').textContent = `${Math.round(v * 100)} %`; setOv({ adapt: v }); });
+  // texturas propias (paredes / techo)
+  let texKind = 'wall';
+  div.querySelectorAll('.tsTexRow').forEach((row) => {
+    row.querySelector('.tsTexLoad').addEventListener('click', () => { texKind = row.dataset.kind; q('.tsTexFile').click(); });
+    row.querySelector('.tsTexClear').addEventListener('click', () => {
+      const uid = t.texUid; if (!uid || !state.tunnelTexOwn[uid]) return;
+      pushUndo(); state.tunnelTexOwn[uid][row.dataset.kind] = null; sceneChanged();
+    });
+  });
+  q('.tsTexFile').addEventListener('change', async (e) => {
+    const f = e.target.files[0]; e.target.value = '';
+    if (!f) return;
+    try {
+      const bmp = await createImageBitmap(f), k = Math.min(1, 2048 / Math.max(bmp.width, bmp.height));
+      const cv = document.createElement('canvas'); cv.width = Math.max(1, Math.round(bmp.width * k)); cv.height = Math.max(1, Math.round(bmp.height * k));
+      cv.getContext('2d').drawImage(bmp, 0, 0, cv.width, cv.height);
+      const uid = t.texUid || `tx${Date.now().toString(36)}${Math.floor(Math.random() * 1e5).toString(36)}`;
+      state.tunnelTexOwn[uid] = { ...(state.tunnelTexOwn[uid] || {}), [texKind]: cv };
+      t.texUid = uid;
+      setOv({ texUid: uid });
+    } catch (err) { toastErr('No se pudo leer la textura: ' + err.message); }
+  });
+  // decoración de pared
+  const decoPatch = (patch) => setOv({ deco: q('.tsDeco').checked, ...patch });
+  q('.tsDeco').addEventListener('change', (e) => { q('.tsDecoBox').hidden = !e.target.checked; decoPatch({}); });
+  const decoN = (v) => { v = numIn(v, 1, 500, true); if (v == null) return; q('.tsDecoNN').value = v; q('.tsDecoN').value = Math.min(60, v); decoPatch({ decoCount: v }); };
+  q('.tsDecoN').addEventListener('input', (e) => decoN(e.target.value));
+  q('.tsDecoNN').addEventListener('change', (e) => decoN(e.target.value));
+  q('.tsDecoH').addEventListener('input', (e) => { const v = numIn(e.target.value, 0.1, 40); q('.tsDecoHV').textContent = `${v.toFixed(1)} m`; decoPatch({ decoHeight: v }); });
+  q('.tsDecoSide').addEventListener('change', (e) => decoPatch({ decoSide: e.target.value }));
+  q('.tsDecoModel').addEventListener('change', (e) => { const a = state.assets.find((x) => String(x.id) === e.target.value); decoPatch({ decoModel: a ? a.id : undefined }); });
+  q('.tsDecoLoad').addEventListener('click', () => q('.tsDecoFile').click());
+  q('.tsDecoFile').addEventListener('change', async (e) => {
+    const f = e.target.files[0]; e.target.value = '';
+    if (!f) return;
+    try { const A = await loadAsset(await f.arrayBuffer(), f.name); state.assets.push(A); renderAssetList(); renderVegAssetLists(); renderDecoPanel(); decoPatch({ decoModel: A.id }); toast(`Modelo cargado en la biblioteca: ${f.name}.`); } catch (err) { toastErr(`No se pudo leer ${f.name}: ${err.message}`); }
+  });
+  q('.tsDecoS').addEventListener('input', (e) => { const v = numIn(e.target.value, 0.05, 20); q('.tsDecoSV').textContent = `×${v.toFixed(2)}`; decoPatch({ decoScale: v }); });
+  q('.tsDecoRot').addEventListener('change', (e) => decoPatch({ decoRot: parseInt(e.target.value, 10) || 0 }));
+  q('.tsDecoSingle').addEventListener('change', (e) => decoPatch({ decoSingle: e.target.checked }));
   q('.tsReset').addEventListener('click', () => { const list = (sc.tunnelOverrides || []).slice(); if (t.key >= 0) list.splice(t.key, 1); sc.tunnelOverrides = list; sceneChanged(); });
   return div;
 }
@@ -686,6 +742,7 @@ function altAt(p, tolLayout) {
   return best;
 }
 function selectHill(id, redraw = true) {
+  if (id !== state.selHill) { state.selHillCtrl = null; state.hillCtrlMode = false; }
   state.selHill = id;
   state.selTunnel = null;
   state.selCave = null;
@@ -697,6 +754,83 @@ function selectHill(id, redraw = true) {
   if (typeof refreshHillPanel === 'function') refreshHillPanel();
   if (redraw && typeof editor !== 'undefined') { editor.draw(); preview.setHillSelection(id); }
 }
+// ---------- puntos de control de los cerros ----------
+// Con un cerro seleccionado, «Agregar puntos» y un clic sobre el cerro (mapa o 3D) crea un punto: arrastrarlo en Z
+// sube o hunde esa zona (con borde suave) y en planta la mueve; cada punto tiene su radio. Se guardan en h.ctrl
+// ({x, y, r} en unidades del lienzo, dz en metros).
+const selHillObj = () => (state.selHill != null ? state.hills.find((h) => h.id === state.selHill) : null);
+function hillSizeL(h) {
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (const q of h.strokes) if (!q.e) { x0 = Math.min(x0, q.x - q.r); x1 = Math.max(x1, q.x + q.r); y0 = Math.min(y0, q.y - q.r); y1 = Math.max(y1, q.y + q.r); }
+  return Number.isFinite(x0) ? Math.max(x1 - x0, y1 - y0) : 10;
+}
+function setHillCtrlMode(on) {
+  state.hillCtrlMode = !!on && state.selHill != null;
+  refreshHillCtrlUI();
+  if (typeof preview !== 'undefined') preview.setHillSelection(state.selHill, true);
+  if (state.hillCtrlMode) toast('Clic sobre el cerro (mapa o vista 3D) para agregar un punto de control; arrástralo en Z para subir o hundir esa zona.');
+}
+function selectHillCtrl(i) {
+  state.selHillCtrl = i;
+  refreshHillCtrlUI();
+  if (typeof editor !== 'undefined') { editor.draw(); preview.setHillSelection(state.selHill, true); }
+}
+function addHillCtrl(p) {
+  const h = selHillObj();
+  if (!h) return false;
+  pushUndo();
+  h.ctrl = h.ctrl || [];
+  h.ctrl.push({ x: +p[0].toFixed(3), y: +p[1].toFixed(3), r: +(hillSizeL(h) * 0.22).toFixed(3), dz: 0 });
+  selectHillCtrl(h.ctrl.length - 1);
+  return true;
+}
+/** Mueve un punto en vivo (sin rehacer el cerro); commit = true lo guarda y rehace la escena. */
+function moveHillCtrl(i, patch, commit) {
+  const h = selHillObj();
+  if (!h || !h.ctrl || !h.ctrl[i]) return;
+  Object.assign(h.ctrl[i], patch);
+  refreshHillCtrlUI();
+  if (commit) sceneChanged();
+  else if (typeof editor !== 'undefined') editor.draw();
+}
+function deleteHillCtrl(i) {
+  const h = selHillObj();
+  if (!h || !h.ctrl || !h.ctrl[i]) return;
+  pushUndo();
+  h.ctrl.splice(i, 1);
+  state.selHillCtrl = null;
+  refreshHillCtrlUI();
+  sceneChanged();
+}
+function refreshHillCtrlUI() {
+  const box = document.getElementById('hillCtrlBox');
+  if (!box) return;
+  const h = selHillObj();
+  box.hidden = !h;
+  if (!h) return;
+  const n = (h.ctrl || []).length, i = state.selHillCtrl, c = i != null && h.ctrl ? h.ctrl[i] : null;
+  $('btnHillCtrl').classList.toggle('active', !!state.hillCtrlMode);
+  $('hillCtrlInfo').textContent = n ? (c ? `Punto ${i + 1} de ${n}` : `${n} punto(s). Clic en uno para ajustarlo.`) : 'Sin puntos.';
+  $('hillCtrlSel').hidden = !c;
+  $('btnHillCtrlClear').disabled = !n;
+  if (c) {
+    const L = state.layout, H = h.height;
+    $('hillCtrlDz').min = String(-Math.round(H)); $('hillCtrlDz').max = String(Math.round(H));
+    $('hillCtrlDz').value = c.dz; $('hillCtrlDzVal').textContent = `${c.dz >= 0 ? '+' : ''}${(+c.dz).toFixed(1)} m`;
+    const rm = L ? c.r * L.scale : c.r;
+    $('hillCtrlR').value = rm; $('hillCtrlRVal').textContent = `${rm.toFixed(1)} m`;
+  }
+}
+function bindHillCtrl() {
+  $('btnHillCtrl').addEventListener('click', () => setHillCtrlMode(!state.hillCtrlMode));
+  let gesture = false;
+  $('hillCtrlDz').addEventListener('input', (e) => { if (!gesture) { pushUndo(); gesture = true; } moveHillCtrl(state.selHillCtrl, { dz: +parseFloat(e.target.value).toFixed(2) }, true); });
+  $('hillCtrlR').addEventListener('input', (e) => { if (!gesture) { pushUndo(); gesture = true; } const L = state.layout; moveHillCtrl(state.selHillCtrl, { r: +(parseFloat(e.target.value) / (L ? L.scale : 1)).toFixed(3) }, true); });
+  for (const id of ['hillCtrlDz', 'hillCtrlR']) $(id).addEventListener('change', () => { gesture = false; });
+  $('btnHillCtrlDel').addEventListener('click', () => deleteHillCtrl(state.selHillCtrl));
+  $('btnHillCtrlClear').addEventListener('click', () => { const h = selHillObj(); if (!h || !h.ctrl || !h.ctrl.length) return; pushUndo(); h.ctrl = []; state.selHillCtrl = null; refreshHillCtrlUI(); sceneChanged(); });
+}
+
 /** Convierte los toques sueltos del formato anterior (hillPaint) en cerros: un cerro por grupo de toques que se tocan. */
 function migrateHillPaint(list) {
   const adds = list.filter((q) => !q.e);
@@ -809,6 +943,8 @@ const app = {
     }
     // pista nueva sobre una pista con trabajo encima: se pide confirmación (Ctrl+Z también la recupera)
     if (kind === 'draw' && !confirmReplaceTrack('Dibujar una pista nueva reemplaza la ruta principal actual')) return;
+    // sin trabajo encima también se pregunta: reemplazar la pista nunca pasa en silencio
+    if (kind === 'draw' && state.project.main && !trackHasWork() && !window.confirm(_t('Dibujar una pista nueva reemplaza la ruta principal actual. (Ctrl+Z la recupera.) ¿Continuar?'))) return;
     pushUndo();
     if (kind === 'draw') {
       state.project.main = { pts, closed: state.closed };
@@ -1670,10 +1806,17 @@ const app = {
       id: h.id, name: h.name, height: h.height, hard: !!h.hard, onTop: !!h.onTop, flat: h.flat, density: h.density, maxTris: h.maxTris,
       strokes: h.strokes.map((q) => { const [x, y] = L.toWorld(q.x, q.y); return { x, y, r: q.r * L.scale, e: q.e }; }),
       subdiv: (h.subdiv || []).map((q) => { const [x, y] = L.toWorld(q.x, q.y); return { x, y, r: q.r * L.scale, e: q.e, f: q.f }; }),
+      ctrl: (h.ctrl || []).map((c) => { const [x, y] = L.toWorld(c.x, c.y); return { x, y, r: c.r * L.scale, dz: c.dz }; }),
       falls: (rw || []).filter((rv) => rv.kind === 'fall' && rv.hill === h.id),
     }));
   },
   hillAt(p) { return hillAt(p); },
+  hillCtrlMode() { return !!state.hillCtrlMode && state.selHill != null; },
+  selectHillCtrl(i) { selectHillCtrl(i); },
+  addHillCtrl(p) { return addHillCtrl(p); },
+  addHillCtrlWorld(x, y) { const L = state.layout; if (!L) return false; return addHillCtrl(L.toLayout(x, y)); },
+  beginHillCtrlDrag() { pushUndo(); },
+  moveHillCtrl(i, patch, commit) { moveHillCtrl(i, patch, commit); },
   // ---- elementos de pista ----
   itemInstances() { return itemInstances(); },
   itemAtLayout(p, tolPx) { const L = state.layout; if (!L) return null; const [x, y] = L.toWorld(p[0], p[1]); return itemAt(itemInstances(), x, y, tolPx * L.scale); },
@@ -1846,6 +1989,8 @@ const app = {
     selectAlt(i);
     setTimeout(() => { try { const card = document.querySelector(`#altList .item[data-alt="${i}"]`); focusPanel('alts', card && card.querySelector(kind === 'barrier' ? '.abarH' : kind === 'dirt' ? '.adirtH' : '.atexH')); } catch { /* iniciando */ } }, 20);
   },
+  /** Textura de las paredes ('wall') o del techo ('ceil') de un túnel: la propia (uid) o la general; null = color. */
+  tunnelTexCanvas(uid, kind) { const own = uid && state.tunnelTexOwn[uid]; return (own && own[kind]) || (kind === 'wall' ? state.tunWallTex : state.tunCeilTex) || null; },
   wallTexCanvas(kind) { return (kind === 'fall' ? state.fallWallTex : state.riverWallTex) || null; },
   coveredTexCanvas() { return state.coveredTex || darkenedCanvas(state.trackTex || defaultTrackCanvas(), 0.2); },
   onEdgesInfo(B) {
@@ -3328,6 +3473,14 @@ function extendMain(strokeIn, tol) {
     const sd = [S[Math.min(3, S.length - 1)][0] - S[0][0], S[Math.min(3, S.length - 1)][1] - S[0][1]];
     let forward = t[0] * sd[0] + t[1] * sd[1] >= 0;
     if (!closed) forward = ia < ib;
+    else {
+      // circuito cerrado: se reemplaza el arco más corto entre los dos puntos (antes se adivinaba por la dirección del
+      // primer tramo del trazo y, si salía un poco hacia atrás, se reemplazaba casi todo el circuito)
+      let Lf = 0, Lt = 0;
+      for (let i = 0; i < n; i++) Lt += d(items[i].p, items[nxt(i)].p);
+      for (let i = ia; i !== ib; i = nxt(i)) Lf += d(items[i].p, items[nxt(i)].p);
+      forward = Lf <= Lt - Lf;
+    }
     if (!forward) { S = S.slice().reverse(); [ia, ib] = [ib, ia]; }
     if (closed) {
       // se conserva el arco ib -> ia (hacia adelante) y se reemplaza ia -> ib por el trazo
@@ -4420,7 +4573,7 @@ function bindControls() {
     createBridge(parseFloat($('bridgeWidthNum').value) || state.geom.width); // extremos abiertos o tramo seleccionado
   });
   // sección socavada: botón de la barra con sus opciones; «Socavar selección» la crea sobre los puntos seleccionados
-  for (const [id, key] of [['cutArtTex', 'cutArtTex'], ['cutNatTex', 'cutNatTex']]) {
+  for (const [id, key] of [['cutArtTex', 'cutArtTex'], ['cutNatTex', 'cutNatTex'], ['tunWallTex', 'tunWallTex'], ['tunCeilTex', 'tunCeilTex']]) {
     $(id + 'Btn').addEventListener('click', () => $(id + 'File').click());
     $(id + 'File').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) loadTexture(f, key); });
     $(id + 'Remove').addEventListener('click', () => { state[key] = null; syncSceneControls(); sceneChanged(); });
@@ -4675,6 +4828,9 @@ function bindControls() {
       state.selItem = null;
       renderItemsPanel(); itemsChanged(); preview.updateHandles();
       toast(`${nm} borrado («Restablecer» en su grupo lo recupera).`);
+    } else if (state.selHill != null && state.selHillCtrl != null) {
+      e.preventDefault();
+      deleteHillCtrl(state.selHillCtrl); // punto de control del cerro (el cerro queda)
     } else if (state.selHill != null) {
       e.preventDefault();
       deleteSelectedHill();
@@ -4897,6 +5053,9 @@ function projectData() {
     coveredTex: state.coveredTex ? state.coveredTex.toDataURL('image/png') : null,
     dirtTex: state.dirtTex ? state.dirtTex.toDataURL('image/png') : null,
     riverWallTex: state.riverWallTex ? state.riverWallTex.toDataURL('image/png') : null,
+    tunWallTex: state.tunWallTex ? state.tunWallTex.toDataURL('image/png') : null,
+    tunCeilTex: state.tunCeilTex ? state.tunCeilTex.toDataURL('image/png') : null,
+    tunnelTexOwn: Object.fromEntries(Object.entries(state.tunnelTexOwn).filter(([uid]) => (state.scene.tunnelOverrides || []).some((o) => o && o.texUid === uid)).map(([uid, t]) => [uid, { wall: t.wall ? t.wall.toDataURL('image/png') : null, ceil: t.ceil ? t.ceil.toDataURL('image/png') : null }])),
     cutArtTex: state.cutArtTex ? state.cutArtTex.toDataURL('image/png') : null,
     cutNatTex: state.cutNatTex ? state.cutNatTex.toDataURL('image/png') : null,
     fallWallTex: state.fallWallTex ? state.fallWallTex.toDataURL('image/png') : null,
@@ -5111,6 +5270,10 @@ async function openProject(text, fileName = null) {
   }
   state.dirtTex = await toCanvas(d.dirtTex);
   state.riverWallTex = await toCanvas(d.riverWallTex);
+  state.tunWallTex = await toCanvas(d.tunWallTex);
+  state.tunCeilTex = await toCanvas(d.tunCeilTex);
+  state.tunnelTexOwn = {};
+  for (const [uid, t] of Object.entries(d.tunnelTexOwn || {})) state.tunnelTexOwn[uid] = { wall: await toCanvas(t.wall), ceil: await toCanvas(t.ceil) };
   state.cutArtTex = await toCanvas(d.cutArtTex);
   state.cutNatTex = await toCanvas(d.cutNatTex);
   if (legacyCut.length) migrateCutToTramos(legacyCut);
@@ -5297,6 +5460,7 @@ function hillTarget() {
 function hillCellLabel(d) { return `celda ${(20 * Math.pow(1 / 20, d / 100)).toFixed(1)} m`; }
 function refreshHillPanel() {
   if (!$('hillSelBox')) return;
+  refreshHillCtrlUI();
   const t = hillTarget();
   const set = (id, v) => { const el = $(id); if (el && document.activeElement !== el) el.value = v; };
   set('hillH', Math.min(150, t.get('height'))); set('hillHNum', t.get('height'));
@@ -5404,7 +5568,8 @@ function syncSceneControls() {
   };
   thumb('trackTexThumb', state.trackTex || defaultTrackCanvas(), 'btnTrackTexRemove');
   $('btnTrackTexRemove').disabled = !state.trackTex;
-  for (const [k, id] of [['cutArtTex', 'cutArtTex'], ['cutNatTex', 'cutNatTex'], ['riverWallTex', 'riverWall'], ['fallWallTex', 'fallWall']]) { const img = $(id + 'Thumb'); img.hidden = !state[k]; if (state[k]) img.src = thumbURL(state[k]); $(id + 'Remove').disabled = !state[k]; }
+  for (const [k, id] of [['cutArtTex', 'cutArtTex'], ['cutNatTex', 'cutNatTex'], ['riverWallTex', 'riverWall'], ['fallWallTex', 'fallWall'], ['tunWallTex', 'tunWallTex'], ['tunCeilTex', 'tunCeilTex']]) { const img = $(id + 'Thumb'); img.hidden = !state[k]; if (state[k]) img.src = thumbURL(state[k]); $(id + 'Remove').disabled = !state[k]; }
+  if ($('tunnelTexTile')) { $('tunnelTexTile').value = sc.tunnelTexTile ?? 6; $('tunnelTexTileVal').textContent = `${sc.tunnelTexTile ?? 6} m`; }
   set('riverWallTile', sc.riverWallTile ?? 4); set('riverWallTileNum', sc.riverWallTile ?? 4);
   set('cutWallTile', sc.cutWallTile ?? 4); set('cutWallTileNum', sc.cutWallTile ?? 4);
   thumb('coveredTexThumb', app.coveredTexCanvas(), 'btnCoveredTexRemove'); $('btnCoveredTexRemove').disabled = !state.coveredTex;
@@ -6446,8 +6611,8 @@ function bindSceneControls() {
   });
   document.querySelectorAll('#gameBar [data-cam]').forEach((b) => b.addEventListener('click', () => setCam(b.dataset.cam)));
   // ajustes de la cámara de juego (se guardan con el proyecto)
-  const CAM_DEF = { camDist: 8.5, camHeight: 2.9, camTilt: 0, fov: 62 };
-  const camCtl = [['gameCamDist', 'camDist', (v) => `${v} m`], ['gameCamHeight', 'camHeight', (v) => `${v} m`], ['gameCamTilt', 'camTilt', (v) => `${v}°`], ['gameCamFov', 'fov', (v) => `${v}°`]];
+  const CAM_DEF = { camDist: 8.5, camHeight: 2.9, camTilt: 0, fov: 62, drift: 50 };
+  const camCtl = [['gameCamDist', 'camDist', (v) => `${v} m`], ['gameCamHeight', 'camHeight', (v) => `${v} m`], ['gameCamTilt', 'camTilt', (v) => `${v}°`], ['gameCamFov', 'fov', (v) => `${v}°`], ['gameCamDrift', 'drift', (v) => `${v} %`]];
   const syncCam = () => { for (const [id, k, fmt] of camCtl) { const v = state.game[k] ?? CAM_DEF[k]; $(id).value = v; $(id + 'Val').textContent = fmt(v); } };
   for (const [id, k] of camCtl) $(id).addEventListener('input', (e) => { state.game[k] = parseFloat(e.target.value); syncCam(); });
   $('btnGameCam').addEventListener('click', () => { $('gameCamBox').hidden = !$('gameCamBox').hidden; $('btnGameCam').classList.toggle('active', !$('gameCamBox').hidden); syncCam(); });
@@ -6598,6 +6763,7 @@ function bindSceneControls() {
   pair('terrainTexRepX', 'terrainTexRepXNum', 'terrainTexRepX', 0.1, false);
   pair('terrainTexRepY', 'terrainTexRepYNum', 'terrainTexRepY', 0.1, false);
   pair('riverWallTile', 'riverWallTileNum', 'riverWallTile', 0.5, false); // paredes socavadas de ríos y cascadas
+  $('tunnelTexTile').addEventListener('input', (e) => { state.scene.tunnelTexTile = parseFloat(e.target.value) || 6; $('tunnelTexTileVal').textContent = `${state.scene.tunnelTexTile} m`; sceneChanged(); });
   pair('cutWallTile', 'cutWallTileNum', 'cutWallTile', 0.5, false); // paredes de las secciones socavadas
   // texturas
   $('btnTrackTex').addEventListener('click', () => $('fileTrackTex').click());
@@ -6659,7 +6825,7 @@ function bindSceneControls() {
     const { exportGLB } = await import('./export-glb.js');
     toast('Generando escena .glb…');
     try {
-      const { buffer, info } = await exportGLB(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas(), triggers: app.triggersWorld() }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
+      const { buffer, info } = await exportGLB(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas(), triggers: app.triggersWorld(), tunnelTex: (uid, kind) => app.tunnelTexCanvas(uid, kind), assetById: (id) => state.assets.find((a) => a.id === id) || null }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
       download('track_scene.glb', buffer, 'model/gltf-binary');
       toast(`Escena exportada: pista ${info.trackTris.toLocaleString('es')} triángulos${info.terrainTris ? `, terreno ${info.terrainTris.toLocaleString('es')}` : ''}${info.hills ? `, ${info.hills} cerro(s)` : ''}${info.tunnels ? `, ${info.tunnels} túnel(es)` : ''}${info.gateTris ? ', pórtico de salida' : ''}${info.items ? `, ${info.items} elementos de pista` : ''}${info.trees ? `, ${info.trees} árboles` : ''}. Todo como objetos separados.`);
     } catch (err) { console.error(err); toastErr('No se pudo exportar la escena: ' + err.message); }
@@ -6673,7 +6839,7 @@ function bindSceneControls() {
     const { exportFBX } = await import('./export-fbx.js');
     toast('Generando escena .fbx…');
     try {
-      const { buffer, info } = await exportFBX(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas(), triggers: app.triggersWorld() }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
+      const { buffer, info } = await exportFBX(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas(), triggers: app.triggersWorld(), tunnelTex: (uid, kind) => app.tunnelTexCanvas(uid, kind), assetById: (id) => state.assets.find((a) => a.id === id) || null }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
       download('track_scene.fbx', buffer, 'application/octet-stream');
       toast(`FBX exportado (${(buffer.length / 1048576).toFixed(1)} MB): pista${info.terrainTris ? ', terreno' : ''}${info.hills ? `, ${info.hills} cerro(s)` : ''}${info.tunnels ? `, ${info.tunnels} túnel(es)` : ''}${info.gateTris ? ', pórtico' : ''}${info.items ? `, ${info.items} elementos de pista` : ''}${info.trees ? `, ${info.trees} árboles` : ''}${info.grass ? ', hierba' : ''}. Z arriba, en metros, con texturas incrustadas.`);
     } catch (err) { console.error(err); toastErr('No se pudo exportar el FBX: ' + err.message); }
@@ -7080,6 +7246,7 @@ bindItemsPanel();
 bindTriggerControls();
 bindTransDivs();
 bindAutosave();
+bindHillCtrl();
 bindPanelFocus();
 renderItemsPanel();
 refreshSkyThumb();

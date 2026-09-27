@@ -60,8 +60,8 @@ function trVal(v) {
   if (!core || !/\p{L}/u.test(core)) return v;
   const d = dict, hit = d.exact.get(core);
   if (hit !== undefined) return v.replace(core, () => hit);
-  if (inVal) return v;
-  inVal = true;
+  if (inVal >= 2) return v; // hasta dos niveles de partes variables anidadas
+  inVal++;
   try {
     const r = lookup(core);
     if (r != null) return v.replace(core, () => r);
@@ -78,9 +78,9 @@ function trVal(v) {
       if (any) return v.replace(core, () => out.join(''));
     }
     return v;
-  } finally { inVal = false; }
+  } finally { inVal--; }
 }
-let inVal = false;
+let inVal = 0;
 
 /** Traduce un texto ya recortado (sin espacios al borde). Devuelve null si no hay traducción. */
 function lookup(s) {
@@ -89,16 +89,25 @@ function lookup(s) {
   const hit = d.exact.get(s);
   if (hit !== undefined) return hit;
   if (d.cache.has(s)) return d.cache.get(s);
-  let out = null, best = null, bestM = null;
+  let out = null, best = null, bestVals = null;
   const words = new Set((s.toLowerCase().match(WORD) || []));
   words.add(''); // patrones sin palabra completa de ancla
+  const LET = /\p{L}/gu;
   for (const w of words) {
     const list = d.byWord.get(w);
     if (!list) continue;
     for (const p of list) {
       if (best && p.len <= best.len) break; // la lista va de más a menos específico
       const m = p.re.exec(s);
-      if (m) { best = p; bestM = m; break; }
+      if (!m) continue;
+      // un patrón muy general («{0} de {1}») no vale si sus partes variables son texto en español sin traducir más
+      // largo que su parte fija: «Punto 1 de 2» no es «{0} de {1}»
+      const vals = {};
+      let loose = 0;
+      p.order.forEach((n, i) => { const raw = m[i + 1], tv = trVal(raw); vals[n] = tv; if (tv === raw && /\s/.test(raw.trim())) loose += (raw.match(LET) || []).length; }); // solo cuentan frases (un nombre de archivo o de objeto es dato)
+      if (loose > p.len) continue;
+      best = p; bestVals = vals;
+      break;
     }
   }
   // «Mensaje fijo: detalle variable» (p. ej. «No se pudo leer la imagen: <error del navegador>»); gana si su parte fija
@@ -108,11 +117,7 @@ function lookup(s) {
     const pre = d.exact.get(s.slice(0, k + 1));
     if (pre !== undefined && (!best || k + 1 > best.len)) { best = null; out = pre + s.slice(k + 1); }
   }
-  if (best) {
-    const vals = {};
-    best.order.forEach((n, i) => { vals[n] = trVal(bestM[i + 1]); });
-    out = best.en.replace(/\{(\d+)\}/g, (_, n) => (vals[n] !== undefined ? vals[n] : ''));
-  }
+  if (best) out = best.en.replace(/\{(\d+)\}/g, (_, n) => (bestVals[n] !== undefined ? bestVals[n] : ''));
   if (d.cache.size > 4000) d.cache.clear();
   d.cache.set(s, out);
   return out;

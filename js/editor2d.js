@@ -207,6 +207,16 @@ export class Editor2D {
             this.caveDrag = { c: { tid, kind: cvI.kind, key: cvI.key }, off: [sx - px0, sy - py0], pos: null };
             return;
           }
+          // puntos de control del cerro seleccionado: clic en uno lo elige (y arrastrarlo lo mueve en planta);
+          // con «Agregar puntos», un clic sobre el cerro crea uno
+          if (tool === 'pan' && this.app.state.selHill != null) {
+            const hc = this.hitHillCtrl(sx, sy);
+            if (hc != null) { this.app.selectHillCtrl(hc); this.hctrlDrag = { i: hc, moved: false, sx, sy }; return; }
+            if (this.app.hillCtrlMode()) {
+              const pl0 = this.toLayout(sx, sy), h0 = this.app.hillAt(pl0);
+              if (h0 && h0.id === this.app.state.selHill) { this.app.addHillCtrl(pl0); return; }
+            }
+          }
           // «+ Nuevo trigger»: el clic lo ubica en la pista
           if (tool === 'pan' && this.app.placingTrigger && this.app.placingTrigger()) { this.app.placeTriggerAt(this.toLayout(sx, sy)); this.draw(); return; }
           // trigger propio: seleccionar y arrastrar a lo largo de la pista
@@ -264,6 +274,13 @@ export class Editor2D {
         return;
       }
       if (this.trigDrag) { this.app.moveTriggerLayout(p); return; }
+      if (this.hctrlDrag) {
+        const d = this.hctrlDrag;
+        if (!d.moved && Math.hypot(sx - d.sx, sy - d.sy) < 3) return;
+        if (!d.moved) { d.moved = true; this.app.beginHillCtrlDrag(); }
+        this.app.moveHillCtrl(d.i, { x: +p[0].toFixed(3), y: +p[1].toFixed(3) }, false);
+        return;
+      }
       if (this.vegDrag) {
         const L0 = this.app.state.layout, [lx, ly] = this.toLayout(sx - this.vegDrag.off[0], sy - this.vegDrag.off[1]);
         const [wx, wy] = L0.toWorld(lx, ly);
@@ -350,6 +367,7 @@ export class Editor2D {
       if (this.painting) { const ses = this.painting; this.painting = null; this.app.endPaint(ses.kind, ses); this.draw(); return; }
       if (this.caveDrag) { const d = this.caveDrag; this.caveDrag = null; if (d.pos) this.app.commitCaveMove(d.c, d.pos); else this.draw(); return; }
       if (this.trigDrag) { this.trigDrag = false; this.app.endTriggerDrag(); return; }
+      if (this.hctrlDrag) { const d = this.hctrlDrag; this.hctrlDrag = null; if (d.moved) this.app.moveHillCtrl(d.i, {}, true); return; }
       if (this.vegDrag) { const d = this.vegDrag; this.vegDrag = null; if (d.pos) this.app.commitVegMove(d.v, d.pos); else this.draw(); return; }
       if (this.itemDrag) { this.itemDrag = null; this.app.endItemDrag(); return; }
       if (this.bridgeDrag) { this.bridgeDrag = null; this.app.endBridgeDrag(); return; }
@@ -705,6 +723,15 @@ export class Editor2D {
     ctx.restore();
   }
 
+  /** Índice del punto de control del cerro seleccionado bajo el cursor (o null). */
+  hitHillCtrl(sx, sy) {
+    const st = this.app.state, h = st.selHill != null ? (st.hills || []).find((q) => q.id === st.selHill) : null;
+    if (!h || !h.ctrl) return null;
+    let best = null, bd = 10;
+    h.ctrl.forEach((c, i) => { const [x, y] = this.toScreen(c.x, c.y), d = Math.hypot(x - sx, y - sy); if (d < bd) { bd = d; best = i; } });
+    return best;
+  }
+
   drawPaint() {
     const st = this.app.state;
     const tool = st.tool;
@@ -733,6 +760,23 @@ export class Editor2D {
         ctx.fillStyle = sel ? '#ffe082' : 'rgba(255,235,200,0.75)';
         ctx.fillText(`${h.name} · ${h.height} m`, x, y);
       }
+      ctx.restore();
+    }
+    // puntos de control del cerro seleccionado: círculo de su radio y el punto (lleno si sube, hueco si hunde)
+    const hsel = st.selHill != null ? (st.hills || []).find((h) => h.id === st.selHill) : null;
+    if (hsel && hsel.ctrl && hsel.ctrl.length) {
+      const ctx = this.ctx;
+      ctx.save();
+      hsel.ctrl.forEach((c, i) => {
+        const [x, y] = this.toScreen(c.x, c.y), sel = i === st.selHillCtrl;
+        ctx.strokeStyle = sel ? '#ffb74d' : 'rgba(255,183,77,0.55)'; ctx.lineWidth = sel ? 1.6 : 1; ctx.setLineDash([4, 3]);
+        ctx.beginPath(); ctx.arc(x, y, c.r * this.view.zoom, 0, Math.PI * 2); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.beginPath(); ctx.arc(x, y, sel ? 6 : 4.5, 0, Math.PI * 2);
+        ctx.fillStyle = c.dz >= 0 ? (sel ? '#ffb74d' : '#e0a050') : '#1b1f27'; ctx.fill();
+        ctx.strokeStyle = '#ffe0b2'; ctx.lineWidth = 1.5; ctx.stroke();
+        if (sel || Math.abs(c.dz) > 0.05) { ctx.fillStyle = '#ffe0b2'; ctx.font = '10px system-ui, sans-serif'; ctx.textAlign = 'left'; ctx.fillText(`${c.dz >= 0 ? '+' : ''}${(+c.dz).toFixed(1)} m`, x + 8, y - 6); }
+      });
       ctx.restore();
     }
     this.drawStrokeLayer(st.densityPaint, '#e040fb', tool === 'paint' && st.selHill == null ? 0.35 : 0.16);

@@ -10,7 +10,7 @@ import { edgeSamples } from '../js/export.js';
 import { computeItems, defaultGroup, itemAt } from '../js/items.js';
 import { nearestOnSamples } from '../js/geometry.js';
 import { buildEdgeMeshes } from '../js/edges.js';
-import { edgeExtents, dirtWidthAt, edgeParams, convexHull2 } from '../js/tunnels.js';
+import { edgeExtents, dirtWidthAt, edgeParams, convexHull2, frameAt, hillFieldOne } from '../js/tunnels.js';
 import { buildRivers } from '../js/rivers.js';
 import { buildTriggers, sculptField, bakeTreeList, bakeDecoList, moveTree, treeConeVerts, vegPlace } from '../js/scene.js';
 import { treeModelItems, decoSetItems } from '../js/deco.js';
@@ -148,6 +148,32 @@ for (const [key, s] of Object.entries(SAMPLES)) {
         check(minD > rr.w[0] / 2, `${key}: cáscara por fuera de la calzada (${minD.toFixed(2)} m)`);
         const HS2 = H1;
         check(Number.isFinite(HS2.sample(rr.x[0], rr.y[0])) || HS2.sample(rr.x[0], rr.y[0]) === -Infinity, `${key}: suelo sin el cerro quitado`);
+      }
+    }
+    // 0.64: decoración de pared (antorchas), densidad mínima más baja y textura propia
+    {
+      const sp0 = { terrain: true, terrainDensity: 45, terrainMaxPolys: 80000, tunnelOpen: 'none' };
+      const T = buildTerrain(L, E, sp0);
+      const H0 = buildHills(L, E, sp0, T, hills);
+      if (H0.tunnels.length) {
+        const t0 = H0.tunnels[0], sm = (t0.s0 + t0.s1) / 2, rr = L.routes[t0.k];
+        const ov = (o) => buildHills(L, E, { ...sp0, tunnelOverrides: [{ k: t0.k, s: sm, ...o }] }, T, hills).tunnelGeo.find((g) => g.id === t0.id);
+        const gB = ov({ deco: true, decoCount: 5, decoHeight: 2.2, texUid: 'txA' });
+        const gL = ov({ deco: true, decoCount: 5, decoSide: 'left' });
+        const gO = ov({ deco: true, decoCount: 4, open: 'right' });
+        check(gB.wallDeco.length === 10 && gL.wallDeco.length === 5 && gL.wallDeco.every((w) => w.side === 1) && gO.wallDeco.length === 4 && gO.wallDeco.every((w) => w.side === 1), `${key}: decoración de pared (ambos ${gB.wallDeco.length}, izquierda ${gL.wallDeco.length}, con lado derecho abierto ${gO.wallDeco.length})`);
+        let okP = true;
+        for (const w of gB.wallDeco) {
+          const q = nearestOnSamples(rr, w.x, w.y), F = frameAt(rr, E.routes[t0.k], w.s);
+          const hz = (w.x - F.x) * F.U[0] + (w.y - F.y) * F.U[1] + (w.z - F.z) * F.U[2], lat = q.d; // altura sobre la calzada (con peralte)
+          const toAxis = Math.atan2(rr.y[q.i] - w.y, rr.x[q.i] - w.x);
+          const dYaw = Math.abs(((w.yaw - toAxis + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+          if (Math.abs(hz - 2.2) > 0.6 || lat < rr.w[0] / 2 || dYaw > 0.35) { okP = false; console.log('   antorcha:', hz.toFixed(2), lat.toFixed(2), dYaw.toFixed(2)); break; }
+        }
+        check(okP, `${key}: cada antorcha pegada a la pared, a la altura pedida y mirando a la pista`);
+        check(gB.texUid === 'txA' && !ov({}).texUid, `${key}: textura propia del túnel`);
+        const gMin = ov({ density: 1 }), gMid = ov({ density: 50 });
+        check(gMin.profilePts <= 7 && gMin.sections < gMid.sections / 3 && gMin.walls.indices.length < gMid.walls.indices.length / 8, `${key}: densidad mínima de túnel más baja (${gMin.profilePts} puntos × ${gMin.sections} secciones; al 50 %: ${gMid.profilePts} × ${gMid.sections})`);
       }
     }
     // costado abierto y pilares propios de cada túnel (el general queda cerrado)
@@ -579,6 +605,13 @@ for (const [key, s] of Object.entries(SAMPLES)) {
   for (let a = 0; a < 12; a++) for (const rr of [0, 3, 6]) { const z = H.hillSample(2, cx + 30 + Math.cos(a) * rr, cy + Math.sin(a) * rr); if (Number.isFinite(z)) zs.push(z); }
   const span = Math.max(...zs) - Math.min(...zs);
   check(zs.length > 20 && span < 0.25, `cima plana: meseta horizontal sobre otro cerro (desnivel ${span.toFixed(2)} m)`);
+  // 0.64: puntos de control del cerro: suben o hunden su zona con borde suave; fuera del radio no cambia nada
+  {
+    const base = { id: 91, height: 20, hard: false, flat: 0.5, strokes: [{ x: 0, y: 0, r: 80, e: false }] };
+    const F0 = hillFieldOne(base), Fu = hillFieldOne({ ...base, id: 92, ctrl: [{ x: 30, y: 0, r: 20, dz: 12 }] }), Fd = hillFieldOne({ ...base, id: 93, ctrl: [{ x: 30, y: 0, r: 20, dz: -30 }] });
+    const up = Fu.sample(30, 0) - F0.sample(30, 0), dn = Fd.sample(30, 0), mid = Fu.sample(40, 0) - F0.sample(40, 0), out = Math.abs(Fu.sample(-30, 0) - F0.sample(-30, 0));
+    check(Math.abs(up - 12) < 0.8 && dn >= 0 && dn < 0.5 && mid > 2 && mid < 11 && out < 1e-6, `puntos de control del cerro: +${up.toFixed(2)} m en el centro, borde suave ${mid.toFixed(2)}, hundir no baja del suelo (${dn.toFixed(2)}), afuera igual`);
+  }
   // subdivisión pintada sobre el cerro
   const A2 = { ...A, subdiv: [{ x: cx, y: cy, r: 25, e: false, f: 16 }] };
   const Hsub = buildHills(L, E, sp, T, [A2]), Hno = buildHills(L, E, sp, T, [A]);
@@ -655,6 +688,17 @@ for (const [key, s] of Object.entries(SAMPLES)) {
   check(gA < 1 && gS > 5, `tramo suspendido: el terreno no sube a la pista (bajo la pista ${gA.toFixed(2)} → ${gS.toFixed(2)} m)`);
   const PL = suspPillars(L, E, { suspRanges: susp }, makeGround(TS, null));
   check(PL.length >= 3 && PL.every((p) => p.zTop > p.zBot + 0.6), `tramo suspendido: pilares hasta el suelo (${PL.length})`);
+  // 0.64: un río que pasa bajo el puente sigue con agua (antes se cortaba); junto a la pista a nivel se corta
+  {
+    const across = (ii) => { const xx = r.x[ii], yy = r.y[ii], ii2 = (ii + 1) % r.n, tx = r.x[ii2] - xx, ty = r.y[ii2] - yy, tl = Math.hypot(tx, ty), nx = -ty / tl, ny = tx / tl; return { xx, yy, strokes: [-36, -24, -12, 0, 12, 24, 36].map((o) => ({ x: xx + nx * o, y: yy + ny * o, r: 6, e: false })) }; };
+    const A1 = across(i), A2 = across(Math.round(150 / r.ds));
+    const rv1 = { id: 1, kind: 'river', mode: 'surface', depth: 2, strokes: A1.strokes }, rv2 = { id: 2, kind: 'river', mode: 'surface', depth: 2, strokes: A2.strokes };
+    const TRv = buildTerrain(L, E, { ...sp, suspRanges: susp }, { rivers: [rv1, rv2] });
+    const RW = buildRivers(TRv, null, [rv1, rv2]);
+    const near = (W, A) => { if (!W) return 0; const P = W.positions, used = new Set(W.indices); let c = 0; for (const v of used) if (Math.hypot(P[v * 3] - A.xx, P[v * 3 + 1] - A.yy) < 3) c++; return c; };
+    const nB = near(RW.find((w) => w.id === 1), A1), nG = near(RW.find((w) => w.id === 2), A2);
+    check(nB > 3 && nG === 0, `río bajo el puente: el agua sigue (${nB} vértices bajo el tablero); junto a pista a nivel se corta (${nG})`);
+  }
   const TM = buildTrackMesh(L, E, { ...sp, suspRanges: susp });
   check(TM.suspParts.length === 1 && TM.suspParts[0].name === 'ruta_principal_suspendido' && TM.groups[4].count > 0, 'tramo suspendido: objeto y grupo de material propios');
   const B = buildEdgeMeshes(L, E, { ...sp, suspRanges: susp });

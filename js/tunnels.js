@@ -41,7 +41,7 @@ function edt(mask, nx, ny) {
 export function hillFieldOne(hill) {
   const adds = hill.strokes.filter((q) => !q.e);
   if (!adds.length) return null;
-  const key = JSON.stringify([hill.height, hill.hard, hill.flat, hill.strokes]);
+  const key = JSON.stringify([hill.height, hill.hard, hill.flat, hill.strokes, hill.ctrl || null]);
   const cached = fieldCache.get(hill.id);
   if (cached && cached.key === key) return cached.field;
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -96,6 +96,20 @@ export function hillFieldOne(hill) {
       let v = H * (a * clamp(D[k] / wc, 0, 1) + (1 - a) * dome(D[k] / Math.max(dTop, 1e-6)));
       v *= 1 - 0.07 * rough + 0.14 * rough * hash(i >> 1, j >> 1);
       f[k] = v;
+    }
+  }
+  // 0.64: puntos de control del cerro: cada uno sube o hunde su zona (dz metros en el centro, radio r, borde suave).
+  // Solo dentro de la huella pintada; la superficie nunca baja del suelo.
+  for (const c of hill.ctrl || []) {
+    if (!c || !Number.isFinite(c.dz) || !c.dz || !(c.r > 0)) continue;
+    const i0 = Math.max(0, Math.floor((c.x - c.r - minX) / hc)), i1 = Math.min(nx - 1, Math.ceil((c.x + c.r - minX) / hc));
+    const j0 = Math.max(0, Math.floor((c.y - c.r - minY) / hc)), j1 = Math.min(ny - 1, Math.ceil((c.y + c.r - minY) / hc));
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+      const k = j * nx + i;
+      if (!mask[k]) continue;
+      const t2 = ((minX + i * hc - c.x) ** 2 + (minY + j * hc - c.y) ** 2) / (c.r * c.r);
+      if (t2 >= 1) continue;
+      f[k] = Math.max(0.05, f[k] + c.dz * (1 - t2) * (1 - t2));
     }
   }
   const sample = (x, y) => {
@@ -355,8 +369,38 @@ export function tunnelTop(sp, t, s) {
 
 /** Densidad de polígonos del túnel (1..100) → puntos del perfil y paso a lo largo. */
 export function tunnelResolution(sp) {
-  const d = clamp(sp.tunnelDensity ?? 50, 1, 100) / 100;
-  return { N: Math.round(8 + 56 * d) + 1, step: 6 * Math.pow(1 / 8, d) };
+  const D = clamp(sp.tunnelDensity ?? 50, 1, 100);
+  const hi = (d) => ({ N: Math.round(8 + 56 * d) + 1, step: 6 * Math.pow(1 / 8, d) });
+  if (D >= 20) return hi(D / 100);
+  // 0.64: por debajo de 20 % baja más que antes, hasta 5 puntos por sección y una sección cada 15 m (al 1 %)
+  const f = (D - 1) / 19, top = hi(0.2);
+  return { N: Math.round(5 + (top.N - 5) * f), step: 15 * Math.pow(top.step / 15, f) };
+}
+
+/**
+ * Antorcha por defecto de la decoración de pared, en coordenadas locales: pivote en la base pegada a la pared,
+ * +X hacia afuera de la pared (hacia la pista), Z arriba. Dos partes: soporte (madera/metal) y llama.
+ */
+export function torchGeometry() {
+  const box = (P, I, x0, x1, y0, y1, z0, z1) => {
+    const b = P.length / 3;
+    P.push(x0, y0, z0, x1, y0, z0, x1, y1, z0, x0, y1, z0, x0, y0, z1, x1, y0, z1, x1, y1, z1, x0, y1, z1);
+    I.push(b, b + 2, b + 1, b, b + 3, b + 2, b + 4, b + 5, b + 6, b + 4, b + 6, b + 7, b, b + 1, b + 5, b, b + 5, b + 4,
+      b + 1, b + 2, b + 6, b + 1, b + 6, b + 5, b + 2, b + 3, b + 7, b + 2, b + 7, b + 6, b + 3, b, b + 4, b + 3, b + 4, b + 7);
+  };
+  const wood = { positions: [], indices: [] }, flame = { positions: [], indices: [] };
+  box(wood.positions, wood.indices, 0, 0.05, -0.09, 0.09, 0, 0.32); // placa en la pared
+  box(wood.positions, wood.indices, 0.05, 0.3, -0.03, 0.03, 0.12, 0.18); // brazo
+  box(wood.positions, wood.indices, 0.27, 0.35, -0.04, 0.04, 0.05, 0.62); // palo
+  box(wood.positions, wood.indices, 0.25, 0.37, -0.06, 0.06, 0.56, 0.66); // copa
+  // llama: dos rombos cruzados
+  const F = flame.positions, FI = flame.indices, cx = 0.31, z0 = 0.64, z1 = 0.98, zm = 0.76, w = 0.09;
+  for (const [dx, dy] of [[w, 0], [0, w]]) {
+    const b = F.length / 3;
+    F.push(cx, 0, z0, cx + dx, dy, zm, cx, 0, z1, cx - dx, -dy, zm);
+    FI.push(b, b + 1, b + 2, b, b + 2, b + 3, b, b + 2, b + 1, b, b + 3, b + 2);
+  }
+  return { wood, flame };
 }
 
 function meshOut(pos, uv, idx) {
@@ -406,6 +450,7 @@ export function applyTunnelOverrides(layout, runs, sp) {
     t.singleMesh = o && typeof o.singleMesh === 'boolean' ? o.singleMesh : sp.caveSingleMesh !== false;
     t.caveMoves = o && o.caveMoves && typeof o.caveMoves === 'object' ? o.caveMoves : null;
     t.noHill = !!(o && o.noHill); // «Quitar cerro»: queda solo el túnel (con cáscara exterior); el cerro no se genera
+    t.texUid = (o && o.texUid) || null; // texturas propias de paredes y techo (si no, las generales)
     // medidas propias del túnel (si no, las por defecto del proyecto)
     const num = (key, def, a, b) => (o && Number.isFinite(o[key]) ? clamp(o[key], a, b) : def);
     t.width = num('width', sp.tunnelWidth, 4, 200);
@@ -413,6 +458,15 @@ export function applyTunnelOverrides(layout, runs, sp) {
     t.caveSize = num('caveSize', sp.caveSize, 0, 1);
     t.portalFrame = num('frame', sp.portalFrame ?? 1, 0.05, 20);
     t.portalDepth = num('depth', sp.portalDepth ?? 1, 0, 20);
+    // decoración de pared (antorchas o un modelo de la biblioteca), a distancia pareja a lo largo del túnel
+    t.deco = !!(o && o.deco);
+    t.decoCount = Math.round(num('decoCount', 6, 1, 500));
+    t.decoHeight = num('decoHeight', 2.2, 0.1, 40);
+    t.decoSide = (o && ['left', 'right', 'both'].includes(o.decoSide)) ? o.decoSide : 'both';
+    t.decoModel = (o && o.decoModel) || null;
+    t.decoScale = num('decoScale', 1, 0.05, 20);
+    t.decoRot = num('decoRot', 0, 0, 360);
+    t.decoSingle = !(o && o.decoSingle === false);
     t.sp = { ...sp, tunnelShape: t.shape, tunnelType: t.type, tunnelDensity: t.density, tunnelWidth: t.width, tunnelHeight: t.height,
       caveSize: t.caveSize, portalFrame: t.portalFrame, portalDepth: t.portalDepth, tunnelMeshMode: t.meshMode, tunnelMaxTris: t.maxTris, tunnelAdapt: t.adapt };
   }
@@ -824,6 +878,36 @@ export function buildTunnelGeometry(layout, elev, spIn, runs, opts = {}) {
         pillars.push({ x: baseP[0], y: baseP[1], z: baseP[2], h, size: 1.1, angle: Math.atan2(F.ty, F.tx) });
       }
     }
+    // decoración de pared: pivote en la pared a la altura pedida (sobre la calzada), mirando hacia la pista
+    const wallDeco = [];
+    if (t.deco) {
+      const sides = t.decoSide === 'left' ? [1] : t.decoSide === 'right' ? [-1] : [-1, 1];
+      const a0 = t.s0 + 2, a1 = t.s1 - 2, n = t.decoCount;
+      const hq = Math.min(t.decoHeight, Hb * 0.95);
+      for (const side of sides) {
+        if (open && side === open) continue; // lado abierto: no hay pared
+        for (let k2 = 0; k2 < n && a1 > a0; k2++) {
+          const sv = a0 + ((a1 - a0) * (k2 + 0.5)) / n;
+          const a = secAt(sv), b = Math.min(ns, a + 1);
+          const f = sList[b] > sList[a] ? clamp((sv - sList[a]) / (sList[b] - sList[a]), 0, 1) : 0;
+          const loc = (q) => [ring[a].loc[q][0] * (1 - f) + ring[b].loc[q][0] * f, ring[a].loc[q][1] * (1 - f) + ring[b].loc[q][1] * f];
+          let u = null;
+          const order = side < 0 ? [...Array(N - 1).keys()] : [...Array(N - 1).keys()].reverse();
+          for (const q of order) {
+            if (!keep[q] || !keep[q + 1]) continue;
+            const [u0, v0] = loc(q), [u1, v1] = loc(q + 1);
+            if (Math.sign(u0 + u1) !== side || (v0 - hq) * (v1 - hq) > 0 || v0 === v1) continue;
+            u = u0 + ((u1 - u0) * (hq - v0)) / (v1 - v0);
+            break;
+          }
+          if (u == null) continue;
+          const F = frameAt(r, e, sv);
+          const pnt = F.at(u, hq);
+          const dx = -side * F.L[0], dy = -side * F.L[1]; // hacia el centro del túnel
+          wallDeco.push({ x: pnt[0], y: pnt[1], z: pnt[2], yaw: Math.atan2(dy, dx), side, s: sv });
+        }
+      }
+    }
     const stalactites = merge(stalItems), rocks = merge(rockItems);
     const singleMesh = t.singleMesh !== false;
     const tris = (walls.indices.length + ceiling.indices.length + walkways.indices.length + (shell ? shell.indices.length : 0) + portals.reduce((a2, p) => a2 + p.geo.indices.length, 0) + stalactites.indices.length + rocks.indices.length) / 3 + pillars.length * 12;
@@ -833,6 +917,7 @@ export function buildTunnelGeometry(layout, elev, spIn, runs, opts = {}) {
       shape: sp.tunnelShape, type: sp.tunnelType, natural, density: sp.tunnelDensity, meshMode: t.meshMode || 'uniform', maxTris: t.maxTris, adapt: t.adapt, rocksOn, stalOn, rockDensity: t.rockDensity ?? 50, stalDensity: t.stalDensity ?? 50, singleMesh, sections: ns + 1, profilePts: N,
       width: sp.tunnelWidth, height: sp.tunnelHeight, caveSize: sp.caveSize, portalFrame: sp.portalFrame ?? 1, portalDepth: sp.portalDepth ?? 1,
       walls, ceiling, walkways, portals, stalactites, rocks, stalItems, rockItems, caveSnap, pillars, tris, box, outline: open ? null : outline, shell, noHill: !!t.noHill,
+      texUid: t.texUid || null, wallDeco, deco: { on: !!t.deco, count: t.decoCount, height: t.decoHeight, side: t.decoSide, model: t.decoModel, scale: t.decoScale, rot: t.decoRot, single: t.decoSingle },
     });
   }
   return out;
