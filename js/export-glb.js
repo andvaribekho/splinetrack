@@ -143,7 +143,14 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
         root.add(rg);
         const riverMat = new THREE.MeshStandardMaterial({ name: 'rio', color: 0x2f86d6, roughness: 0.12, metalness: 0.05, transparent: true, opacity: 0.85 });
         const fallMat = new THREE.MeshStandardMaterial({ name: 'cascada', color: 0xbfe8ff, roughness: 0.25, metalness: 0, transparent: true, opacity: 0.9 });
-        for (const w of RW) rg.add(mesh(w.name, w.positions, w.indices, w.uvs, w.kind === 'fall' ? fallMat : riverMat));
+        let bedMat = null;
+        for (const w of RW) {
+          rg.add(mesh(w.name, w.positions, w.indices, w.uvs, w.kind === 'fall' ? fallMat : riverMat));
+          if (w.bed) { // lecho de un río socavado (opcional): rio_NN_lecho
+            if (!bedMat) { const t = tex(textures.riverBed); bedMat = new THREE.MeshStandardMaterial({ name: 'lecho_rio', color: t ? 0xffffff : 0x6b5a45, map: t, roughness: 1, metalness: 0 }); }
+            rg.add(mesh(w.bed.name, w.bed.positions, w.bed.indices, w.bed.uvs, bedMat));
+          }
+        }
       }
     }
     // túneles: paredes, techo, veredas, bocas, estalactitas, rocas y cada pilar como objetos propios

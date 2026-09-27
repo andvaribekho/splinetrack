@@ -30,7 +30,7 @@ export function riverField(rv) {
   if (!adds.length) return null;
   const key = JSON.stringify([rv.mode, rv.depth, rv.walls, rv.strokes]);
   const hit = cache.get(rv.id + ':' + rv.kind);
-  if (hit && hit.key === key) return hit.field;
+  if (hit && hit.key === key) { hit.field.river = rv; return hit.field; } // la forma no cambió (sí pueden sus opciones)
   const rs = adds.map((q) => q.r).sort((a, b) => a - b);
   const rMed = rs[rs.length >> 1], rMin = rs[0];
   const rock = rv.walls === 'rock';
@@ -55,6 +55,10 @@ export function riverField(rv) {
       }
     }
   }
+  // adentro, la distancia real al borde de lo pintado (no la de cada toque): así el interior de un lago pintado con
+  // muchos toques no tiene «lomas» entre ellos y los contornos interiores (pie de las paredes, lecho) quedan limpios.
+  // Afuera, el máximo por toque ya es la distancia exacta a la unión.
+  interiorDistance(F, nx, ny, c);
   const sd = (x, y) => {
     const fx = (x - x0) / c, fy = (y - y0) / c;
     if (fx < 0 || fy < 0 || fx >= nx - 1 || fy >= ny - 1) return -1e3;
@@ -81,7 +85,27 @@ export function riverField(rv) {
       return depth * p * bed;
     }
     : () => 0;
-  const field = { sd, carve, inside: (x, y) => sd(x, y) > 0, bounds: { x0, y0, x1, y1 }, cell: c, rMed, wallW, depth, river: rv };
+  const field = { sd, carve, inside: (x, y) => sd(x, y) > 0, bounds: { x0, y0, x1, y1 }, cell: c, rMed, wallW, depth, river: rv, grid: { F, nx, ny, x0, y0, c }, rock };
+  // contornos (memorizados por nivel) y forma (para saber si es un lago)
+  const cont = new Map();
+  field.contours = (iso, tol = 0.15, maxSeg = null) => {
+    const key = `${iso}|${tol}|${maxSeg}`;
+    if (!cont.has(key)) cont.set(key, simplifyLoops(marchingLoops(field.grid, iso), tol, maxSeg ?? clamp(rMed * 1.2, 1, 6)));
+    return cont.get(key);
+  };
+  let shape = null;
+  field.shape = () => {
+    if (shape) return shape;
+    let n = 0, mx = -Infinity;
+    for (let k = 0; k < F.length; k++) { if (F[k] > 0) n++; if (F[k] > mx) mx = F[k]; }
+    const loops = marchingLoops(field.grid, 0);
+    let per = 0;
+    for (const L of loops) for (let i = 0; i < L.length; i++) { const a2 = L[i], b2 = L[(i + 1) % L.length]; per += Math.hypot(b2[0] - a2[0], b2[1] - a2[1]); }
+    const area = n * c * c, compact = per > 0 ? (4 * Math.PI * area) / (per * per) : 0;
+    return (shape = { area, perimeter: per, maxSd: mx, compact, lakeLike: compact > 0.45 || (mx > 1.6 * rMed && compact > 0.2) });
+  };
+  /** ¿Es un lago? (tipo elegido en la tarjeta o, en automático, una zona rellena y compacta, no alargada) */
+  field.isLake = () => { const t = field.river.waterType; return t === 'lake' ? true : t === 'river' ? false : field.shape().lakeLike; };
   cache.set(rv.id + ':' + rv.kind, { key, field });
   return field;
 }
@@ -162,9 +186,297 @@ export function buildRivers(T, HS, rivers) {
       if (!HS || !HS.hillSample || (HS.hiddenHills && HS.hiddenHills.includes(rv.hill))) continue; // cascada de un cerro quitado
       geo = buildRiverWater(F, (x, y) => HS.hillSample(rv.hill, x, y), (x, y) => HS.hillOrig(rv.hill, x, y), skip);
     } else {
-      geo = buildRiverWater(F, (x, y) => T.sample(x, y), (x, y) => (T.ctx && T.ctx.origAt ? T.ctx.origAt(x, y) : T.sample(x, y)), skip);
+      // ríos y lagos (0.76): agua con los triángulos justos (plano con cortes, o copia del terreno si va posado) y lecho
+      const M = riverMeshes(T, F, skip, T.ctx && T.ctx.riverLevels ? T.ctx.riverLevels.get(rv.id) : null);
+      if (M.water) out.push({ id: rv.id, name: names.get(rv.id), kind: rv.kind, ...M.water, lake: M.lake, flat: M.flat, lakeSlope: M.lakeSlope, rect: M.rect, bed: M.bed ? { ...M.bed, name: `${names.get(rv.id)}_lecho` } : null });
+      continue;
     }
     if (geo) out.push({ id: rv.id, name: names.get(rv.id), kind: rv.kind, ...geo });
   }
   return out;
+}
+
+
+// ---------------------------------------------------------------------------------------------------------------
+// Contornos y planos simples (agua y lecho con los triángulos justos)
+
+/** Contornos cerrados de la grilla de distancia (marching squares) al nivel iso: [[[x, y], …], …]. */
+export function marchingLoops(G, iso) {
+  const { F, nx, ny, x0, y0, c } = G;
+  const val = (i, j) => F[j * nx + i] - iso;
+  const pts = new Map(); // arista → punto
+  const P = (key, xa, ya, va, xb, yb, vb) => {
+    if (!pts.has(key)) { const t = va / (va - vb); pts.set(key, [xa + (xb - xa) * t, ya + (yb - ya) * t]); }
+    return key;
+  };
+  const adj = new Map();
+  const link = (a, b) => { (adj.get(a) || adj.set(a, []).get(a)).push(b); (adj.get(b) || adj.set(b, []).get(b)).push(a); };
+  for (let j = 0; j < ny - 1; j++) for (let i = 0; i < nx - 1; i++) {
+    const v0 = val(i, j), v1 = val(i + 1, j), v2 = val(i + 1, j + 1), v3 = val(i, j + 1);
+    const code = (v0 > 0 ? 1 : 0) | (v1 > 0 ? 2 : 0) | (v2 > 0 ? 4 : 0) | (v3 > 0 ? 8 : 0);
+    if (code === 0 || code === 15) continue;
+    const X = x0 + i * c, Y = y0 + j * c;
+    const eB = () => P(`h${j * nx + i}`, X, Y, v0, X + c, Y, v1); // abajo
+    const eR = () => P(`v${j * nx + i + 1}`, X + c, Y, v1, X + c, Y + c, v2); // derecha
+    const eT = () => P(`h${(j + 1) * nx + i}`, X, Y + c, v3, X + c, Y + c, v2); // arriba
+    const eL = () => P(`v${j * nx + i}`, X, Y, v0, X, Y + c, v3); // izquierda
+    const mid = (v0 + v1 + v2 + v3) / 4 > 0;
+    switch (code) {
+      case 1: case 14: link(eL(), eB()); break;
+      case 2: case 13: link(eB(), eR()); break;
+      case 3: case 12: link(eL(), eR()); break;
+      case 4: case 11: link(eR(), eT()); break;
+      case 6: case 9: link(eB(), eT()); break;
+      case 7: case 8: link(eL(), eT()); break;
+      case 5: if (mid) { link(eL(), eT()); link(eB(), eR()); } else { link(eL(), eB()); link(eR(), eT()); } break;
+      case 10: if (mid) { link(eL(), eB()); link(eR(), eT()); } else { link(eL(), eT()); link(eB(), eR()); } break;
+      default: break;
+    }
+  }
+  const seen = new Set(), loops = [];
+  for (const start of adj.keys()) {
+    if (seen.has(start)) continue;
+    const L = [];
+    let prev = null, cur = start;
+    while (cur != null && !seen.has(cur)) {
+      seen.add(cur);
+      L.push(pts.get(cur));
+      const nb = adj.get(cur) || [];
+      const nxt = nb.find((q) => q !== prev && !seen.has(q));
+      prev = cur; cur = nxt ?? null;
+    }
+    if (L.length >= 3) loops.push(L);
+  }
+  return loops;
+}
+
+/** Simplifica contornos cerrados (Douglas-Peucker, tolerancia tol m) y parte los lados de más de maxSeg m. */
+export function simplifyLoops(loops, tol = 0.15, maxSeg = 4) {
+  const dp = (P, a, b, keep) => {
+    let bi = -1, bd = tol;
+    const [ax, ay] = P[a], [bx, by] = P[b], L = Math.hypot(bx - ax, by - ay) || 1e-9;
+    for (let i = a + 1; i < b; i++) { const d = Math.abs((bx - ax) * (ay - P[i][1]) - (ax - P[i][0]) * (by - ay)) / L; if (d > bd) { bd = d; bi = i; } }
+    if (bi >= 0) { keep[bi] = 1; dp(P, a, bi, keep); dp(P, bi, b, keep); }
+  };
+  const out = [];
+  for (const L of loops) {
+    const n = L.length;
+    // los dos puntos más alejados parten el contorno en dos cadenas abiertas
+    let far = 0, fd = -1;
+    for (let i = 1; i < n; i++) { const d = Math.hypot(L[i][0] - L[0][0], L[i][1] - L[0][1]); if (d > fd) { fd = d; far = i; } }
+    if (fd < tol * 2) continue; // demasiado chico
+    const P = [...L, L[0]], keep = new Uint8Array(n + 1);
+    keep[0] = keep[far] = keep[n] = 1;
+    dp(P, 0, far, keep); dp(P, far, n, keep);
+    const S = [];
+    for (let i = 0; i < n; i++) if (keep[i]) S.push(L[i]);
+    const R = [];
+    for (let i = 0; i < S.length; i++) {
+      const A = S[i], B = S[(i + 1) % S.length], d = Math.hypot(B[0] - A[0], B[1] - A[1]), k = Math.ceil(d / maxSeg);
+      for (let q = 0; q < k; q++) R.push([A[0] + ((B[0] - A[0]) * q) / k, A[1] + ((B[1] - A[1]) * q) / k]);
+    }
+    if (R.length >= 3) out.push(R);
+  }
+  return out;
+}
+
+/**
+ * Plano con los triángulos justos: los vértices de los contornos (y, si hace falta, algunos adentro) triangulados;
+ * solo quedan los triángulos cuyo centro está dentro (inside). zAt(x, y) = altura; se agregan puntos (cortes) solo donde
+ * el plano se aleja de zAt más de tol (plano: ninguno). skip(x, y, z) = true donde no va (la pista lo tapa).
+ * Devuelve {positions, uvs, indices, tris} o null.
+ */
+export function planeMesh(loops, inside, zAt, tol = 0.1, skip = null, uvTile = 4) {
+  const P = [];
+  for (const L of loops) for (const q of L) P.push(q[0], q[1]);
+  if (P.length < 6) return null;
+  let tri = null, coords = null, zs = null;
+  const build = () => {
+    coords = new Float64Array(P);
+    const d = new Delaunator(coords);
+    const nv = coords.length / 2;
+    zs = new Float64Array(nv);
+    for (let v = 0; v < nv; v++) zs[v] = zAt(coords[v * 2], coords[v * 2 + 1]);
+    tri = [];
+    for (let t = 0; t < d.triangles.length; t += 3) {
+      const a = d.triangles[t], b = d.triangles[t + 1], c2 = d.triangles[t + 2];
+      const mx = (coords[a * 2] + coords[b * 2] + coords[c2 * 2]) / 3, my = (coords[a * 2 + 1] + coords[b * 2 + 1] + coords[c2 * 2 + 1]) / 3;
+      if (!inside(mx, my)) continue;
+      tri.push(a, b, c2);
+    }
+  };
+  build();
+  if (Number.isFinite(tol)) {
+    for (let it = 0; it < 8; it++) {
+      const add = [];
+      for (let t = 0; t < tri.length; t += 3) {
+        const [a, b, c2] = [tri[t], tri[t + 1], tri[t + 2]];
+        for (const [wa, wb, wc] of [[1 / 3, 1 / 3, 1 / 3], [0.5, 0.5, 0], [0, 0.5, 0.5], [0.5, 0, 0.5]]) {
+          const x = wa * coords[a * 2] + wb * coords[b * 2] + wc * coords[c2 * 2], y = wa * coords[a * 2 + 1] + wb * coords[b * 2 + 1] + wc * coords[c2 * 2 + 1];
+          const z = wa * zs[a] + wb * zs[b] + wc * zs[c2];
+          if (Math.abs(zAt(x, y) - z) > tol) {
+            const cx = (coords[a * 2] + coords[b * 2] + coords[c2 * 2]) / 3, cy = (coords[a * 2 + 1] + coords[b * 2 + 1] + coords[c2 * 2 + 1]) / 3;
+            if (inside(cx, cy)) add.push(cx, cy);
+            break;
+          }
+        }
+      }
+      if (!add.length || P.length / 2 > 60000) break;
+      P.push(...add);
+      build();
+    }
+  }
+  const nv = coords.length / 2, idx = [];
+  for (let t = 0; t < tri.length; t += 3) {
+    const [a, b, c2] = [tri[t], tri[t + 1], tri[t + 2]];
+    if (skip) {
+      const mx = (coords[a * 2] + coords[b * 2] + coords[c2 * 2]) / 3, my = (coords[a * 2 + 1] + coords[b * 2 + 1] + coords[c2 * 2 + 1]) / 3;
+      if (skip(mx, my, (zs[a] + zs[b] + zs[c2]) / 3)) continue;
+    }
+    idx.push(a, c2, b); // Delaunator entrega sentido horario: se invierte para que la normal mire hacia arriba
+  }
+  if (!idx.length) return null;
+  const pos = new Float32Array(nv * 3), uv = new Float32Array(nv * 2);
+  for (let v = 0; v < nv; v++) { pos[v * 3] = coords[v * 2]; pos[v * 3 + 1] = coords[v * 2 + 1]; pos[v * 3 + 2] = zs[v]; uv[v * 2] = coords[v * 2] / uvTile; uv[v * 2 + 1] = coords[v * 2 + 1] / uvTile; }
+  return { positions: pos, uvs: uv, indices: new Uint32Array(idx), tris: idx.length / 3 };
+}
+
+/** Rectángulo (2 triángulos) a la altura z. */
+function rectMesh(x0, y0, x1, y1, z, uvTile = 4) {
+  return { positions: new Float32Array([x0, y0, z, x1, y0, z, x1, y1, z, x0, y1, z]), uvs: new Float32Array([x0 / uvTile, y0 / uvTile, x1 / uvTile, y0 / uvTile, x1 / uvTile, y1 / uvTile, x0 / uvTile, y1 / uvTile]), indices: new Uint32Array([0, 1, 2, 0, 2, 3]), tris: 2, rect: true };
+}
+
+/**
+ * Agua de un río posado que sigue el terreno: los mismos triángulos del terreno bajo el río, levantados lift m y
+ * recortados justo en el contorno (así nunca queda bajo el suelo ni flotando en la orilla).
+ */
+export function waterFromTerrain(T, F, lift = 0.12, skip = null) {
+  const P0 = T.positions, I = T.baseIndices || T.indices, { x0, y0, x1, y1 } = F.bounds;
+  const map = new Map(), pos = [], idx = [];
+  const sdv = new Map();
+  const sdOf = (v) => { let d = sdv.get(v); if (d === undefined) { d = F.sd(P0[v * 3], P0[v * 3 + 1]); sdv.set(v, d); } return d; };
+  const vert = (key, x, y, z) => { let k = map.get(key); if (k === undefined) { k = pos.length / 3; map.set(key, k); pos.push(x, y, z + lift); } return k; };
+  for (let t = 0; t < I.length; t += 3) {
+    const vs = [I[t], I[t + 1], I[t + 2]];
+    let out = 0;
+    for (const v of vs) { const x = P0[v * 3], y = P0[v * 3 + 1]; if (x < x0 || y < y0 || x > x1 || y > y1) out++; }
+    if (out === 3) continue;
+    const D = vs.map(sdOf);
+    if (D.every((d) => d <= 0.15)) {
+      // los tres vértices en la orilla (o afuera): decide el centro (un triángulo que cruza el río de orilla a orilla va entero)
+      const cx = (P0[vs[0] * 3] + P0[vs[1] * 3] + P0[vs[2] * 3]) / 3, cy = (P0[vs[0] * 3 + 1] + P0[vs[1] * 3 + 1] + P0[vs[2] * 3 + 1]) / 3;
+      if (F.sd(cx, cy) <= 0.05 || D.some((d) => d < -0.15)) { if (D.every((d) => d <= 0)) continue; }
+      else for (let k = 0; k < 3; k++) D[k] = Math.max(D[k], 1e-6);
+    }
+    const poly = [];
+    for (let k = 0; k < 3; k++) {
+      const a = vs[k], b = vs[(k + 1) % 3], da = D[k], db = D[(k + 1) % 3];
+      if (da > 0) poly.push(vert(a, P0[a * 3], P0[a * 3 + 1], P0[a * 3 + 2]));
+      if ((da > 0) !== (db > 0)) {
+        const tt = da / (da - db), key = a < b ? `${a}-${b}` : `${b}-${a}`;
+        poly.push(vert(key, P0[a * 3] + (P0[b * 3] - P0[a * 3]) * tt, P0[a * 3 + 1] + (P0[b * 3 + 1] - P0[a * 3 + 1]) * tt, P0[a * 3 + 2] + (P0[b * 3 + 2] - P0[a * 3 + 2]) * tt));
+      }
+    }
+    if (skip) {
+      const cx = (P0[vs[0] * 3] + P0[vs[1] * 3] + P0[vs[2] * 3]) / 3, cy = (P0[vs[0] * 3 + 1] + P0[vs[1] * 3 + 1] + P0[vs[2] * 3 + 1]) / 3, cz = (P0[vs[0] * 3 + 2] + P0[vs[1] * 3 + 2] + P0[vs[2] * 3 + 2]) / 3 + lift;
+      if (skip(cx, cy, cz)) continue;
+    }
+    for (let k = 1; k < poly.length - 1; k++) idx.push(poly[0], poly[k], poly[k + 1]);
+  }
+  if (!idx.length) return null;
+  const uv = new Float32Array((pos.length / 3) * 2);
+  for (let v = 0; v < pos.length / 3; v++) { uv[v * 2] = pos[v * 3] / 4; uv[v * 2 + 1] = pos[v * 3 + 1] / 4; }
+  return { positions: new Float32Array(pos), uvs: uv, indices: new Uint32Array(idx), tris: idx.length / 3 };
+}
+
+/** Distancia al borde (hacia adentro) donde el agua de un río socavado toca la pared (perfil = p). */
+export function riverWaterIso(F) {
+  const p = F.rock ? 0.2 : 0.25;
+  if (F.wallW <= 0) return 0;
+  let a = 0, b = F.wallW;
+  for (let k = 0; k < 30; k++) { const m = (a + b) / 2; if (smooth(0, F.wallW, m) < p) a = m; else b = m; }
+  return (a + b) / 2;
+}
+
+/**
+ * Agua (y lecho) de un río con las reglas de la 0.76. levels = {Lb, Lw} de los lagos socavados (buildTerrain).
+ * Devuelve {water, bed, lake, flat, lakeSlope, rect}.
+ */
+export function riverMeshes(T, F, skip, levels = null) {
+  const rv = F.river, carved = rv.mode === 'carved', lake = F.isLake();
+  const origAt = T.ctx && T.ctx.origAt ? T.ctx.origAt : (x, y) => T.sample(x, y);
+  const res = { water: null, bed: null, lake, flat: false, lakeSlope: false, rect: false };
+  const B = F.bounds;
+  if (carved) {
+    // el agua llega hasta el borde de arriba (queda bajo las paredes, tapada por el terreno): así no hay rendijas entre el
+    // agua y la pared aunque la roca sea irregular; el lecho llega bajo el pie de las paredes
+    const wIso = 0.03, bIso = Math.max(0, F.wallW - 0.3);
+    const flat = lake && levels;
+    res.flat = !!flat;
+    const zW = flat ? () => levels.Lw : (x, y) => origAt(x, y) - 0.3 * F.depth;
+    const zB = flat ? () => levels.Lb - 0.05 : (x, y) => origAt(x, y) - F.depth - 0.05; // un poco bajo el pie (sin parpadeo)
+    // rectángulo (lago): solo si fuera del lago el terreno queda más alto que el plano en todo el rectángulo
+    const rectOk = (iso, z, margin = 0.05) => {
+      const L = F.contours(iso);
+      if (!L.length) return null;
+      let a = Infinity, b = Infinity, c2 = -Infinity, d = -Infinity;
+      for (const Lp of L) for (const [x, y] of Lp) { a = Math.min(a, x); b = Math.min(b, y); c2 = Math.max(c2, x); d = Math.max(d, y); }
+      const st = Math.max(0.5, Math.min(c2 - a, d - b) / 40);
+      for (let y = b; y <= d + 1e-6; y += st) for (let x = a; x <= c2 + 1e-6; x += st) {
+        if (F.sd(x, y) > iso) continue;
+        const zt = Math.min(T.sample(x, y), T.ctx && T.ctx.heightAt ? T.ctx.heightAt(x, y, 0.5) : Infinity); // la malla y el relieve
+        if (zt < z + margin || (skip && skip(x, y, z))) return null;
+      }
+      return rectMesh(a, b, c2, d, z);
+    };
+    if (flat && rv.lakeRect) {
+      res.water = rectOk(wIso, levels.Lw);
+      if (rv.bed) res.bed = rectOk(bIso, levels.Lb - 0.05, 0.005);
+      res.rect = !!res.water;
+    }
+    if (!res.water) res.water = planeMesh(F.contours(wIso), (x, y) => F.sd(x, y) > wIso, zW, flat ? Infinity : 0.1, skip);
+    if (rv.bed && !res.bed) res.bed = planeMesh(F.contours(bIso), (x, y) => F.sd(x, y) > bIso, zB, flat ? Infinity : 0.1, null);
+    return res;
+  }
+  // posado: el agua sigue el terreno (copia de sus triángulos) o simplificada (con la tolerancia elegida)
+  const tol = Math.max(0.02, (rv.waterTol ?? 5) / 100);
+  if (lake) {
+    let lo = Infinity, hi = -Infinity;
+    const st = Math.max(0.5, F.cell * 2);
+    for (let y = B.y0; y <= B.y1; y += st) for (let x = B.x0; x <= B.x1; x += st) if (F.sd(x, y) > 0) { const z = T.sample(x, y); lo = Math.min(lo, z); hi = Math.max(hi, z); }
+    if (hi - lo < 0.3) { // casi plano: agua plana
+      res.flat = true;
+      res.water = planeMesh(F.contours(0), (x, y) => F.sd(x, y) > 0, () => hi + 0.12, Infinity, skip);
+      return res;
+    }
+    res.lakeSlope = true; // en pendiente: sigue el terreno (para un lago plano, socavado)
+  }
+  res.water = rv.waterMode === 'simple'
+    ? planeMesh(F.contours(0), (x, y) => F.sd(x, y) > 0, (x, y) => T.sample(x, y) + 0.12, tol, skip)
+    : waterFromTerrain(T, F, 0.12, skip);
+  return res;
+}
+
+
+/** Distancia (transformada exacta, Felzenszwalb) desde cada celda de adentro (F > 0) a la de afuera más cercana. */
+function interiorDistance(F, nx, ny, c) {
+  const INF = 1e20, n = nx * ny, D = new Float64Array(n);
+  let any = false;
+  for (let k = 0; k < n; k++) { if (F[k] > 0) { D[k] = INF; any = true; } else D[k] = 0; }
+  if (!any) return;
+  const m = Math.max(nx, ny), f = new Float64Array(m), d = new Float64Array(m), v = new Int32Array(m), z = new Float64Array(m + 1);
+  const pass = (len) => {
+    let k = 0; v[0] = 0; z[0] = -INF; z[1] = INF;
+    for (let q = 1; q < len; q++) {
+      let sq;
+      for (;;) { const p = v[k]; sq = ((f[q] + q * q) - (f[p] + p * p)) / (2 * q - 2 * p); if (sq <= z[k] && k > 0) k--; else break; }
+      if (sq <= z[k]) { v[0] = q; z[0] = -INF; z[1] = INF; k = 0; continue; }
+      k++; v[k] = q; z[k] = sq; z[k + 1] = INF;
+    }
+    k = 0;
+    for (let q = 0; q < len; q++) { while (z[k + 1] < q) k++; const p = v[k]; d[q] = (q - p) * (q - p) + f[p]; }
+  };
+  for (let i = 0; i < nx; i++) { for (let j = 0; j < ny; j++) f[j] = D[j * nx + i]; pass(ny); for (let j = 0; j < ny; j++) D[j * nx + i] = d[j]; }
+  for (let j = 0; j < ny; j++) { for (let i = 0; i < nx; i++) f[i] = D[j * nx + i]; pass(nx); for (let i = 0; i < nx; i++) D[j * nx + i] = d[i]; }
+  for (let k = 0; k < n; k++) if (F[k] > 0) { const e = Math.sqrt(D[k]) * c - 0.5 * c; if (e > F[k]) F[k] = e; }
 }

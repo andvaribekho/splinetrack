@@ -779,10 +779,25 @@ test('río bajo un puente: el agua sigue por debajo del tablero (junto a la pist
     const iB = Math.round(((b.s0 + b.s1) / 2) / r.ds) % r.n, iG = Math.round((b.s1 + 120) / r.ds) % r.n;
     t.state.rivers = [across(iB, 1), across(iG, 2)];
     t.preview.update(false); await t.idle();
-    const near = (k, i) => { const W = t.preview.riverMeshes[k]; if (!W) return -1; const P = W.geometry.getAttribute('position'), used = new Set(W.geometry.getIndex().array); let n = 0; for (const v of used) if (Math.hypot(P.getX(v) - r.x[i], P.getY(v) - r.y[i]) < 3) n++; return n; };
+    // (0.76: el agua posada copia los triángulos del terreno: se mira si cubre puntos bajo la pista)
+    const near = (k, i) => {
+      const W = t.preview.riverMeshes[k]; if (!W) return -1;
+      const P = W.geometry.getAttribute('position'), I = W.geometry.getIndex().array;
+      let n = 0;
+      for (const [ox, oy] of [[0, 0], [1.5, 0], [-1.5, 0], [0, 1.5], [0, -1.5]]) {
+        const x = r.x[i] + ox, y = r.y[i] + oy;
+        for (let q = 0; q < I.length; q += 3) {
+          const [a, b, c] = [I[q], I[q + 1], I[q + 2]], ax = P.getX(a), ay = P.getY(a), bx = P.getX(b), by = P.getY(b), qx = P.getX(c), qy = P.getY(c);
+          const d = (by - qy) * (ax - qx) + (qx - bx) * (ay - qy); if (!d) continue;
+          const l1 = ((by - qy) * (x - qx) + (qx - bx) * (y - qy)) / d, l2 = ((qy - ay) * (x - qx) + (ax - qx) * (y - qy)) / d;
+          if (l1 >= 0 && l2 >= 0 && l1 + l2 <= 1) { n++; break; }
+        }
+      }
+      return n;
+    };
     return [near(0, iB), near(1, iG), t.preview.riverMeshes.length];
   });
-  expect(w[2] === 2 && w[0] > 2 && w[1] === 0, `agua bajo el puente ${w[0]} vértices; junto a la pista a nivel ${w[1]}`);
+  expect(w[2] === 2 && w[0] >= 4 && w[1] === 0, `agua bajo el puente en ${w[0]} de 5 puntos; junto a la pista a nivel ${w[1]}`);
 });
 
 test('túneles: texturas de paredes y techo, decoración de pared (antorchas) y densidad mínima', async () => {
@@ -1158,8 +1173,14 @@ test('paredes del socavado: repetición X / Y y ajustes (generales y del tramo),
   await ev((s) => { const el = document.querySelector(s); el.checked = true; el.dispatchEvent(new Event('change', { bubbles: true })); }, q('.buvOwn'));
   await setNum(q('.buvX'), 5);
   await setNum(q('.bwallW'), 1.2);
+  // caras exteriores: se excluyen de la geometría (no solo se ocultan) y el contador de la vista 3D lo refleja
+  const triT = () => ev(() => [window.__tsg.preview.triCounts.terrain, window.__tsg.preview.wallMeshes.filter((m) => m.userData.cutPart === 'out').reduce((a, m) => a + m.geometry.getIndex().count / 3, 0)]);
+  await idle();
+  const tShow = await triT();
   await ev((s) => { const el = document.querySelector(s); el.value = 'buried'; el.dispatchEvent(new Event('change', { bubbles: true })); }, q('.bouter'));
   await idle();
+  const tBur = await triT();
+  expect(tBur[1] < tShow[1] && tShow[0] - tBur[0] === tShow[1] - tBur[1], `caras exteriores: ${JSON.stringify(tShow)} → ${JSON.stringify(tBur)} (contador y malla bajan lo mismo)`);
   const c = await ev(() => { const t = window.__tsg, cr = t.state.scene.cutRanges[0], W = t.preview.terrainData.ctx.cutStations[0].rows[3]; return [cr.uvOwn, cr.tileX, cr.tileY, cr.wallW, cr.outer, +Math.hypot(W.ox - W.tx, W.oy - W.ty).toFixed(3)]; });
   expect(c[0] === true && c[1] === 5 && c[2] === 1.5 && c[3] === 1.2 && c[4] === 'buried' && c[5] === 1.2, `tramo: ${JSON.stringify(c)}`);
   // textura propia de la tapa: en 3D su malla, y al exportar la pared va por partes
@@ -1191,6 +1212,49 @@ test('perfil de elevación: atajo Automático / Directo sincronizado con el pane
   await ev(() => document.querySelector('#elevMode button[data-mode=auto]').click());
   await idle();
   expect((await on()) === 'auto,auto', `vuelta a automático desde el panel: ${await on()}`);
+});
+
+test('ríos y lagos: lecho opcional, lago con agua plana, agua posada como el terreno o simplificada (tarjeta y exportación)', async () => {
+  await reset();
+  await page.click('#btnGenTerrain');
+  await idle();
+  await ev(async () => {
+    const t = window.__tsg, L = t.state.layout, r = L.routes[0];
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (let i = 0; i < r.n; i++) { x0 = Math.min(x0, r.x[i]); x1 = Math.max(x1, r.x[i]); y0 = Math.min(y0, r.y[i]); y1 = Math.max(y1, r.y[i]); }
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, P = (x, y, rr) => { const [a, b] = L.toLayout(x, y); return { x: a, y: b, r: rr / L.scale, e: false }; };
+    const riv = []; for (let q = 0; q <= 1; q += 0.02) riv.push(P(cx - 80 + 160 * q, cy + 15 * Math.sin(q * 6), 5));
+    const lake = []; for (let a = 0; a < 6.28; a += 0.3) for (const rr of [0, 8, 16]) lake.push(P(cx + Math.cos(a) * rr, cy + 60 + Math.sin(a) * rr, 8));
+    t.state.rivers = [{ id: 1, kind: 'river', mode: 'carved', depth: 2, walls: 'smooth', wallSubdiv: 2, strokes: riv }, { id: 2, kind: 'river', mode: 'carved', depth: 3, walls: 'smooth', wallSubdiv: 2, strokes: lake }];
+    t.app.riversChanged ? t.app.riversChanged() : t.preview.update(false);
+    await t.idle();
+  });
+  await ev(() => window.__tsg.preview.update(false));
+  await idle();
+  const q = (id, sel) => `#riverList .item[data-id="${id}"] ${sel}`;
+  const info = (id) => ev((s) => (document.querySelector(s) || {}).textContent || '', q(id, '.rinfo'));
+  const i1 = await info(1), i2 = await info(2);
+  expect(/^Río · Agua: \d/.test(i1) && /^Lago \(agua plana\) · Agua/.test(i2), `tarjetas: «${i1}» / «${i2}»`);
+  // lecho: su malla en 3D y su objeto al exportar
+  await ev((s) => { const el = document.querySelector(s); el.checked = true; el.dispatchEvent(new Event('change', { bubbles: true })); }, q(1, '.rbed'));
+  await idle();
+  const beds = await ev(() => window.__tsg.preview.riverMeshes.filter((m) => m.userData.riverBed).map((m) => m.name));
+  expect(beds.length === 1 && /lecho/.test(beds[0]) && /Lecho: \d/.test(await info(1)), `lecho: ${beds} / ${await info(1)}`);
+  const ex = await exportNames();
+  expect(ex.rios && ex.rios.some((n) => /_lecho$/.test(n)), `exportación: ${JSON.stringify(ex.rios)}`);
+  // lago: rectángulo si es seguro
+  await ev((s) => { const el = document.querySelector(s); el.checked = true; el.dispatchEvent(new Event('change', { bubbles: true })); }, q(2, '.rrect'));
+  await idle();
+  expect(/rectángulo/.test(await info(2)), `lago en rectángulo: ${await info(2)}`);
+  // posado: como el terreno → simplificada
+  await ev((s) => { const el = document.querySelector(s); el.value = 'surface'; el.dispatchEvent(new Event('change', { bubbles: true })); }, q(1, '.rmode'));
+  await idle();
+  const tTer = await ev(() => window.__tsg.preview.riverData.find((w) => w.id === 1).tris);
+  const vis = await ev(([a, b]) => [document.querySelector(a).hidden, document.querySelector(b).hidden], [q(1, '.rsurfOpts'), q(1, '.rcarvedOpts')]);
+  await ev((s) => { const el = document.querySelector(s); el.value = 'simple'; el.dispatchEvent(new Event('change', { bubbles: true })); }, q(1, '.rwmode'));
+  await idle();
+  const tSim = await ev(() => window.__tsg.preview.riverData.find((w) => w.id === 1).tris);
+  expect(!vis[0] && vis[1] && tSim < tTer, `posado: opciones ${vis}; como el terreno ${tTer} → simplificada ${tSim} triángulos`);
 });
 
 test('tarjetas: la primera vez que se abre una lista desplegable no se cierra (la tarjeta no se vuelve a dibujar)', async () => {

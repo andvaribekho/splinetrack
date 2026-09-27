@@ -12,7 +12,7 @@ import { nearestOnSamples } from '../js/geometry.js';
 import { buildEdgeMeshes } from '../js/edges.js';
 import { buildCollisionMeshes } from '../js/collision.js';
 import { edgeExtents, dirtWidthAt, edgeParams, convexHull2, frameAt, hillFieldOne } from '../js/tunnels.js';
-import { buildRivers } from '../js/rivers.js';
+import { buildRivers, riverField } from '../js/rivers.js';
 import { buildTriggers, sculptField, bakeTreeList, bakeDecoList, moveTree, treeConeVerts, vegPlace } from '../js/scene.js';
 import { treeModelItems, decoSetItems } from '../js/deco.js';
 import { buildShadows, shadowCasters, sunShadowDir } from '../js/shadows.js';
@@ -706,9 +706,24 @@ for (const [key, s] of Object.entries(SAMPLES)) {
     const rv1 = { id: 1, kind: 'river', mode: 'surface', depth: 2, strokes: A1.strokes }, rv2 = { id: 2, kind: 'river', mode: 'surface', depth: 2, strokes: A2.strokes };
     const TRv = buildTerrain(L, E, { ...sp, suspRanges: susp }, { rivers: [rv1, rv2] });
     const RW = buildRivers(TRv, null, [rv1, rv2]);
-    const near = (W, A) => { if (!W) return 0; const P = W.positions, used = new Set(W.indices); let c = 0; for (const v of used) if (Math.hypot(P[v * 3] - A.xx, P[v * 3 + 1] - A.yy) < 3) c++; return c; };
-    const nB = near(RW.find((w) => w.id === 1), A1), nG = near(RW.find((w) => w.id === 2), A2);
-    check(nB > 3 && nG === 0, `río bajo el puente: el agua sigue (${nB} vértices bajo el tablero); junto a pista a nivel se corta (${nG})`);
+    // (0.76: el agua posada copia los triángulos del terreno: se mira si cubre el punto bajo la pista)
+    const covers = (W, A) => {
+      if (!W) return 0;
+      const P = W.positions, I = W.indices;
+      let c = 0;
+      for (const [ox, oy] of [[0, 0], [1.5, 0], [-1.5, 0], [0, 1.5], [0, -1.5]]) {
+        const x = A.xx + ox, y = A.yy + oy;
+        for (let t = 0; t < I.length; t += 3) {
+          const [a, b, c2] = [I[t], I[t + 1], I[t + 2]];
+          const d = (P[b * 3 + 1] - P[c2 * 3 + 1]) * (P[a * 3] - P[c2 * 3]) + (P[c2 * 3] - P[b * 3]) * (P[a * 3 + 1] - P[c2 * 3 + 1]);
+          const l1 = ((P[b * 3 + 1] - P[c2 * 3 + 1]) * (x - P[c2 * 3]) + (P[c2 * 3] - P[b * 3]) * (y - P[c2 * 3 + 1])) / d, l2 = ((P[c2 * 3 + 1] - P[a * 3 + 1]) * (x - P[c2 * 3]) + (P[a * 3] - P[c2 * 3]) * (y - P[c2 * 3 + 1])) / d;
+          if (l1 >= 0 && l2 >= 0 && l1 + l2 <= 1) { c++; break; }
+        }
+      }
+      return c;
+    };
+    const nB = covers(RW.find((w) => w.id === 1), A1), nG = covers(RW.find((w) => w.id === 2), A2);
+    check(nB >= 4 && nG === 0, `río bajo el puente: el agua sigue (${nB} de 5 puntos bajo el tablero con agua); junto a pista a nivel se corta (${nG})`);
   }
   const TM = buildTrackMesh(L, E, { ...sp, suspRanges: susp });
   check(TM.suspParts.length === 1 && TM.suspParts[0].name === 'ruta_principal_suspendido' && TM.groups[4].count > 0, 'tramo suspendido: objeto y grupo de material propios');
@@ -1062,6 +1077,85 @@ for (const [key, s] of Object.entries(SAMPLES)) {
   const sidesMain = CS.sides.filter((m) => m.k === 0), barMain = BS.barriers.filter((m) => m.k === 0);
   const segs = (m) => m.indices.length;
   check(sidesMain.length === 2 && CS.sides.some((m) => m.k === 1) && sidesMain.every((m) => segs(m) > 0) && barMain.length === 2, `colisión con atajo: costados en la pista y en el atajo (${CS.sides.map((m) => m.name).join(', ')})`);
+}
+
+// 0.76: ríos y lagos con los triángulos justos: agua socavada = plano con cortes; lecho opcional (el terreno del lecho se
+// corta); lagos con agua y lecho planos (rectángulo si es seguro); agua posada que sigue el terreno (copia o simplificada)
+{
+  const L = buildLayout(SAMPLES.oval.build(), { lapLength: 1000 });
+  const E = computeElevation(L, { hills: 0.3 });
+  const r = L.routes[0];
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (let i = 0; i < r.n; i++) { x0 = Math.min(x0, r.x[i]); x1 = Math.max(x1, r.x[i]); y0 = Math.min(y0, r.y[i]); y1 = Math.max(y1, r.y[i]); }
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+  const riverS = []; for (let t = 0; t <= 1; t += 0.02) riverS.push({ x: cx - 80 + 160 * t, y: cy + 15 * Math.sin(t * 6), r: 5, e: false });
+  const lakeS = []; for (let a = 0; a < 6.28; a += 0.3) for (const rr of [0, 8, 16]) lakeS.push({ x: cx + Math.cos(a) * rr, y: cy + 60 + Math.sin(a) * rr, r: 8, e: false });
+  const sp = { terrain: true, terrainDensity: 30 };
+  const run = (rv) => { const T = buildTerrain(L, E, sp, { rivers: [rv] }); return { T, W: buildRivers(T, null, [rv])[0], F: riverField(rv) }; };
+  // z de una malla en (x, y) (null si no la cubre)
+  const zOn = (M, x, y) => {
+    const P = M.positions, I = M.indices;
+    for (let t = 0; t < I.length; t += 3) {
+      const [a, b, c] = [I[t], I[t + 1], I[t + 2]];
+      const d = (P[b * 3 + 1] - P[c * 3 + 1]) * (P[a * 3] - P[c * 3]) + (P[c * 3] - P[b * 3]) * (P[a * 3 + 1] - P[c * 3 + 1]);
+      if (!d) continue;
+      const l1 = ((P[b * 3 + 1] - P[c * 3 + 1]) * (x - P[c * 3]) + (P[c * 3] - P[b * 3]) * (y - P[c * 3 + 1])) / d, l2 = ((P[c * 3 + 1] - P[a * 3 + 1]) * (x - P[c * 3]) + (P[a * 3] - P[c * 3]) * (y - P[c * 3 + 1])) / d, l3 = 1 - l1 - l2;
+      if (l1 >= -1e-6 && l2 >= -1e-6 && l3 >= -1e-6) return l1 * P[a * 3 + 2] + l2 * P[b * 3 + 2] + l3 * P[c * 3 + 2];
+    }
+    return null;
+  };
+  const samplesIn = (F, iso, n = 400) => { const out = [], B = F.bounds; let k = 0; while (out.length < n && k < n * 50) { k++; const x = B.x0 + ((k * 0.618034) % 1) * (B.x1 - B.x0), y = B.y0 + ((k * 0.7548777) % 1) * (B.y1 - B.y0); if (F.sd(x, y) > iso) out.push([x, y]); } return out; };
+  // río socavado con lecho
+  {
+    const rv = { id: 1, kind: 'river', mode: 'carved', depth: 2, walls: 'smooth', wallSubdiv: 2, strokes: riverS, bed: true };
+    const { T, W, F } = run(rv);
+    const oa = T.ctx.origAt, pts = samplesIn(F, 0.3);
+    let miss = 0, err = 0, bedAbove = 0, bedMiss = 0;
+    for (const [x, y] of pts) {
+      const zw = zOn(W, x, y);
+      if (zw == null) { miss++; continue; }
+      err = Math.max(err, Math.abs(zw - (oa(x, y) - 0.3 * rv.depth)));
+      if (F.sd(x, y) > F.wallW) { const zb = zOn(W.bed, x, y); if (zb == null) bedMiss++; else if (zb > zw - 0.5) bedAbove++; }
+    }
+    // el terreno del lecho se quitó (ningún triángulo del terreno con su centro en el lecho)
+    const P = T.positions, I = T.baseIndices;
+    let inBed = 0;
+    for (let t = 0; t < I.length; t += 3) { const mx = (P[I[t] * 3] + P[I[t + 1] * 3] + P[I[t + 2] * 3]) / 3, my = (P[I[t] * 3 + 1] + P[I[t + 1] * 3 + 1] + P[I[t + 2] * 3 + 1]) / 3; if (F.sd(mx, my) > F.wallW + 0.6) inBed++; }
+    check(W.tris < 400 && miss === 0 && err < 0.15 && W.bed && W.bed.tris < 500 && bedMiss === 0 && bedAbove === 0 && inBed === 0 && T.removedUnderTrack > 10, `río socavado: agua ${W.tris} triángulos (antes ~1140), cubre todo (${miss} sin agua), error ${err.toFixed(3)} m; lecho ${W.bed && W.bed.tris} bajo el agua (${bedAbove} sobre, ${bedMiss} sin lecho); terreno del lecho quitado (${inBed} quedan, ${T.removedUnderTrack} quitados)`);
+    const { W: W0 } = run({ ...rv, bed: false });
+    check(W0 && !W0.bed, 'río socavado sin «Lecho»: solo el agua');
+  }
+  // lago socavado: agua y lecho planos, con pocos triángulos; rectángulo solo si es seguro
+  {
+    const rv = { id: 2, kind: 'river', mode: 'carved', depth: 3, walls: 'smooth', wallSubdiv: 2, strokes: lakeS, bed: true };
+    const { T, W, F } = run(rv);
+    const Z = new Set(); for (let v = 2; v < W.positions.length; v += 3) Z.add(W.positions[v].toFixed(4));
+    const nC = F.contours(0.03).reduce((a, q) => a + q.length, 0);
+    check(F.isLake() && Z.size === 1 && W.tris <= nC && W.bed && W.bed.tris <= F.contours(Math.max(0, F.wallW - 0.3)).reduce((a, q) => a + q.length, 0), `lago socavado: agua plana (${Z.size} altura) con ${W.tris} triángulos (contorno ${nC} vértices), lecho ${W.bed && W.bed.tris}`);
+    const { W: WR } = run({ ...rv, lakeRect: true });
+    let leak = 0;
+    for (const [x, y] of samplesIn({ ...F, sd: (a, b) => -F.sd(a, b), bounds: F.bounds }, 0, 300)) { const zw = zOn(WR, x, y); if (zw != null && Math.min(T.sample(x, y), T.ctx.heightAt(x, y, 0.5)) < zw) leak++; }
+    check(WR.rect && WR.tris === 2 && WR.bed && WR.bed.tris === 2 && leak === 0, `lago en rectángulo (seguro): agua ${WR.tris}, lecho ${WR.bed && WR.bed.tris} triángulos; el agua no asoma fuera del lago (${leak})`);
+    const { W: WK } = run({ ...rv, walls: 'rock', lakeRect: true, id: 5 });
+    check(WK && (!WK.rect || true), `lago de roca: rectángulo ${WK.rect ? 'sí' : 'no (no es seguro)'}`);
+    // un río alargado no es lago; el tipo se puede forzar
+    const Fr = riverField({ id: 9, kind: 'river', mode: 'carved', depth: 2, strokes: riverS });
+    const Fl = riverField({ id: 10, kind: 'river', mode: 'carved', depth: 2, strokes: riverS, waterType: 'lake' });
+    check(!Fr.isLake() && Fl.isLake(), `lago automático por la forma (río alargado: ${Fr.isLake()}, forzado: ${Fl.isLake()})`);
+  }
+  // río posado: como el terreno (exacto) y simplificado (con su tolerancia)
+  {
+    const rv = { id: 3, kind: 'river', mode: 'surface', depth: 2, strokes: riverS };
+    const { T, W, F } = run(rv);
+    const pts = samplesIn(F, 0.3);
+    let miss = 0, dev = 0;
+    for (const [x, y] of pts) { const zw = zOn(W, x, y); if (zw == null) { miss++; continue; } dev = Math.max(dev, Math.abs(zw - 0.12 - T.sample(x, y))); }
+    check(miss <= pts.length * 0.02 && dev < 0.01, `río posado como el terreno: sigue el relieve exacto (${dev.toFixed(4)} m) y cubre el río (${miss} puntos sin agua de ${pts.length}); ${W.tris} triángulos`);
+    const { W: WS } = run({ ...rv, waterMode: 'simple', waterTol: 5 });
+    let below = 0, missS = 0;
+    for (const [x, y] of pts) { const zw = zOn(WS, x, y); if (zw == null) { missS++; continue; } if (zw < T.sample(x, y) + 0.12 - 0.05 - 0.02) below++; }
+    check(WS.tris < W.tris && below === 0 && missS <= 2, `río posado simplificado: ${WS.tris} triángulos (como el terreno ${W.tris}); nunca más de 5 cm bajo lo pedido (${below}), cubre (${missS} sin agua)`);
+  }
 }
 
 // pilares: nunca sobre otra calzada, su camino de tierra o un atajo

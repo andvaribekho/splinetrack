@@ -98,7 +98,8 @@ const state = {
   coveredTex: null, // textura de los tramos cubiertos: túneles y bajo cruces (null = la de la pista un 20 % más oscura)
   dirtTex: null, // canvas de la textura del camino de tierra (null = arena por defecto)
   tunWallTex: null, tunCeilTex: null, tunnelTexOwn: {}, // texturas de los túneles: generales (paredes / techo) y propias de cada túnel {uid: {wall, ceil}}
-  riverWallTex: null, fallWallTex: null, // texturas de las paredes socavadas de ríos y cascadas (null = roca por defecto)
+  riverWallTex: null, fallWallTex: null, riverBedTex: null, // (riverBedTex: lecho de los ríos socavados)
+  // texturas de las paredes socavadas de ríos y cascadas (null = roca por defecto)
   edgeMeshes: null, // última malla de bordes (para el mapa 2D y los clics)
   grassTex: null, // canvas de la textura de hierba (null = por defecto)
   shadowTex: null, // textura propia de los planos de sombra (null = círculo difuminado por defecto)
@@ -207,6 +208,16 @@ function renderRiverPanel() {
         <div class="field"><label>Paredes</label><select class="rwalls"><option value="smooth"${rv.walls !== 'rock' ? ' selected' : ''}>Suaves</option><option value="rock"${rv.walls === 'rock' ? ' selected' : ''}>De roca</option></select></div>
         <div class="field"><label>Densidad de las paredes <span class="val rsubV">${rv.wallSubdiv} (×${subdivFactor(rv.wallSubdiv)} pol.)</span></label><input type="range" class="rsub" min="0" max="6" step="1" value="${rv.wallSubdiv}"></div>
       </div>
+      ${rv.kind === 'fall' ? '' : `<div class="field" title="Un lago (zona pintada rellena y compacta) tiene el agua y el lecho planos. Automático lo detecta por la forma"><label>Tipo</label><select class="rtype"><option value="auto"${!rv.waterType || rv.waterType === 'auto' ? ' selected' : ''}>Automático</option><option value="river"${rv.waterType === 'river' ? ' selected' : ''}>Río</option><option value="lake"${rv.waterType === 'lake' ? ' selected' : ''}>Lago</option></select></div>
+      <div class="rcarvedOpts"${rv.mode === 'carved' ? '' : ' hidden'}>
+        <label class="check small" title="Plano simple que cubre el lecho (el terreno del lecho se corta); sin él, solo queda el agua"><input type="checkbox" class="rbed"${rv.bed ? ' checked' : ''}> Lecho</label>
+        <label class="check small" title="Lagos: agua y lecho como un rectángulo de 2 triángulos, solo si alrededor el terreno queda más alto (si no, siguen el contorno)"><input type="checkbox" class="rrect"${rv.lakeRect ? ' checked' : ''}> Lago: agua y lecho en rectángulo (si es seguro)</label>
+      </div>
+      <div class="rsurfOpts"${rv.mode === 'carved' ? ' hidden' : ''}>
+        <div class="field" title="Como el terreno: el agua usa los mismos triángulos del terreno bajo el río (sigue el relieve exacto). Simplificada: menos triángulos, con el detalle elegido"><label>Agua</label><select class="rwmode"><option value="terrain"${rv.waterMode !== 'simple' ? ' selected' : ''}>Como el terreno</option><option value="simple"${rv.waterMode === 'simple' ? ' selected' : ''}>Simplificada</option></select></div>
+        <div class="field rtolBox"${rv.waterMode === 'simple' ? '' : ' hidden'} title="Cuánto puede alejarse el agua simplificada del terreno (menos = más triángulos)"><label>Detalle del agua <span class="val rtolV">${rv.waterTol ?? 5} cm</span></label><input type="range" class="rtol" min="2" max="20" step="1" value="${rv.waterTol ?? 5}"></div>
+      </div>
+      <div class="meta rinfo"></div>`}
       </div>`;
     div.querySelector('.rtoggle').addEventListener('click', () => { rv.collapsed = !rv.collapsed; div.classList.toggle('collapsed', rv.collapsed); div.querySelector('.rtoggle').textContent = rv.collapsed ? '▸' : '▾'; });
     let editing = false;
@@ -226,6 +237,15 @@ function renderRiverPanel() {
     div.querySelector('.rdepthN').addEventListener('change', (e) => { const v = parseFloat(e.target.value); if (v > 0) set('depth', v); });
     div.querySelector('.rsub').addEventListener('input', (e) => set('wallSubdiv', Math.round(parseFloat(e.target.value)), false));
     div.querySelector('.rsub').addEventListener('change', () => { editing = false; });
+    if (rv.kind !== 'fall') {
+      div.querySelector('.rtype').addEventListener('change', (e) => set('waterType', e.target.value));
+      div.querySelector('.rbed').addEventListener('change', (e) => set('bed', e.target.checked));
+      div.querySelector('.rrect').addEventListener('change', (e) => set('lakeRect', e.target.checked));
+      div.querySelector('.rwmode').addEventListener('change', (e) => { div.querySelector('.rtolBox').hidden = e.target.value !== 'simple'; set('waterMode', e.target.value); });
+      div.querySelector('.rtol').addEventListener('input', (e) => { div.querySelector('.rtolV').textContent = `${Math.round(e.target.value)} cm`; });
+      div.querySelector('.rtol').addEventListener('change', (e) => set('waterTol', Math.round(parseFloat(e.target.value))));
+      div.querySelector('.rmode').addEventListener('change', (e) => { div.querySelector('.rcarvedOpts').hidden = e.target.value !== 'carved'; div.querySelector('.rsurfOpts').hidden = e.target.value === 'carved'; });
+    }
     div.addEventListener('click', (e) => { if (e.target.closest(CARD_CTL)) return; selectRiver(state.selRiver === rv.id ? null : rv.id, false); });
     el.appendChild(div);
   }
@@ -2148,6 +2168,19 @@ const app = {
   tunnelTexCanvas(uid, kind) { const own = uid && state.tunnelTexOwn[uid]; return (own && own[kind]) || (kind === 'wall' ? state.tunWallTex : state.tunCeilTex) || null; },
   wallTexCanvas(kind) { return (kind === 'fall' ? state.fallWallTex : state.riverWallTex) || null; },
   coveredTexCanvas() { return state.coveredTex || darkenedCanvas(state.trackTex || defaultTrackCanvas(), 0.2); },
+  riversChanged() { riversChanged(); },
+  /** Tras armar los ríos: triángulos del agua y del lecho, y si es lago, en la tarjeta de cada uno. */
+  onRiversInfo(RW) {
+    for (const w of RW || []) {
+      const el = document.querySelector(`#riverList .item[data-id="${w.id}"] .rinfo`);
+      if (!el) continue;
+      const kind = w.lake ? (w.flat ? 'Lago (agua plana)' : 'Lago') : 'Río';
+      const parts = [`<span>${kind}</span>`, `<span>Agua: ${w.tris.toLocaleString('es')} triángulos</span>`];
+      if (w.rect) parts.push('<span>rectángulo</span>');
+      if (w.bed) parts.push(`<span>Lecho: ${w.bed.tris.toLocaleString('es')} triángulos</span>`);
+      el.innerHTML = parts.join(' · ') + (w.lakeSlope ? '<br><span>Lago posado en pendiente: el agua sigue el terreno. Para un lago plano, usa «Socavada».</span>' : '');
+    }
+  },
   onCollisionInfo(C) {
     const el = $('collInfo');
     if (!el) return;
@@ -5377,6 +5410,7 @@ function projectData() {
     coveredTex: state.coveredTex ? state.coveredTex.toDataURL('image/png') : null,
     dirtTex: state.dirtTex ? state.dirtTex.toDataURL('image/png') : null,
     riverWallTex: state.riverWallTex ? state.riverWallTex.toDataURL('image/png') : null,
+    riverBedTex: state.riverBedTex ? state.riverBedTex.toDataURL('image/png') : null,
     tunWallTex: state.tunWallTex ? state.tunWallTex.toDataURL('image/png') : null,
     tunCeilTex: state.tunCeilTex ? state.tunCeilTex.toDataURL('image/png') : null,
     tunnelTexOwn: Object.fromEntries(Object.entries(state.tunnelTexOwn).filter(([uid]) => (state.scene.tunnelOverrides || []).some((o) => o && o.texUid === uid)).map(([uid, t]) => [uid, { wall: t.wall ? t.wall.toDataURL('image/png') : null, ceil: t.ceil ? t.ceil.toDataURL('image/png') : null }])),
@@ -5596,6 +5630,7 @@ async function openProject(text, fileName = null) {
   }
   state.dirtTex = await toCanvas(d.dirtTex);
   state.riverWallTex = await toCanvas(d.riverWallTex);
+  state.riverBedTex = await toCanvas(d.riverBedTex);
   state.tunWallTex = await toCanvas(d.tunWallTex);
   state.tunCeilTex = await toCanvas(d.tunCeilTex);
   state.tunnelTexOwn = {};
@@ -5896,7 +5931,7 @@ function syncSceneControls() {
   };
   thumb('trackTexThumb', state.trackTex || defaultTrackCanvas(), 'btnTrackTexRemove');
   $('btnTrackTexRemove').disabled = !state.trackTex;
-  for (const [k, id] of [['cutArtTex', 'cutArtTex'], ['cutArtTopTex', 'cutArtTopTex'], ['cutArtOutTex', 'cutArtOutTex'], ['cutNatTex', 'cutNatTex'], ['riverWallTex', 'riverWall'], ['fallWallTex', 'fallWall'], ['tunWallTex', 'tunWallTex'], ['tunCeilTex', 'tunCeilTex']]) { const img = $(id + 'Thumb'); img.hidden = !state[k]; if (state[k]) img.src = thumbURL(state[k]); $(id + 'Remove').disabled = !state[k]; }
+  for (const [k, id] of [['cutArtTex', 'cutArtTex'], ['cutArtTopTex', 'cutArtTopTex'], ['cutArtOutTex', 'cutArtOutTex'], ['cutNatTex', 'cutNatTex'], ['riverWallTex', 'riverWall'], ['fallWallTex', 'fallWall'], ['riverBedTex', 'riverBed'], ['tunWallTex', 'tunWallTex'], ['tunCeilTex', 'tunCeilTex']]) { const img = $(id + 'Thumb'); img.hidden = !state[k]; if (state[k]) img.src = thumbURL(state[k]); $(id + 'Remove').disabled = !state[k]; }
   if ($('tunnelTexTile')) { $('tunnelTexTile').value = sc.tunnelTexTile ?? 6; $('tunnelTexTileVal').textContent = `${sc.tunnelTexTile ?? 6} m`; }
   set('riverWallTile', sc.riverWallTile ?? 4); set('riverWallTileNum', sc.riverWallTile ?? 4);
   { const t0 = sc.cutWallTile ?? 4, tx = sc.cutWallTileX ?? t0, ty = sc.cutWallTileY ?? t0; set('cutWallTileX', Math.min(30, tx)); set('cutWallTileXNum', tx); set('cutWallTileY', Math.min(30, ty)); set('cutWallTileYNum', ty); }
@@ -6901,7 +6936,7 @@ function bindSceneControls() {
   $('riverWallSubdiv').addEventListener('input', (e) => { sc.riverWallSubdiv = Math.round(parseFloat(e.target.value)); syncSceneControls(); });
   $('btnRiverTool').addEventListener('click', () => setTool('river'));
   // material de las paredes socavadas (ríos y cascadas)
-  for (const [id, key] of [['riverWall', 'riverWallTex'], ['fallWall', 'fallWallTex']]) {
+  for (const [id, key] of [['riverWall', 'riverWallTex'], ['fallWall', 'fallWallTex'], ['riverBed', 'riverBedTex']]) {
     $(id + 'Btn').addEventListener('click', () => $(id + 'File').click());
     $(id + 'File').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) loadTexture(f, key); });
     $(id + 'Remove').addEventListener('click', () => { state[key] = null; syncSceneControls(); sceneChanged(); });
@@ -7180,7 +7215,7 @@ function bindSceneControls() {
     const { exportGLB } = await import('./export-glb.js');
     toast('Generando escena .glb…');
     try {
-      const { buffer, info } = await exportGLB(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, cutWallFor: (i, kind, part) => app.cutWallOwnTex(i, kind, part), cutArtTop: state.cutArtTopTex, cutArtOut: state.cutArtOutTex, collisionDeck: state.elev.deck ?? 1, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas(), triggers: app.triggersWorld(), tunnelTex: (uid, kind) => app.tunnelTexCanvas(uid, kind), assetById: (id) => state.assets.find((a) => a.id === id) || null }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
+      const { buffer, info } = await exportGLB(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, cutWallFor: (i, kind, part) => app.cutWallOwnTex(i, kind, part), cutArtTop: state.cutArtTopTex, cutArtOut: state.cutArtOutTex, collisionDeck: state.elev.deck ?? 1, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, riverBed: state.riverBedTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas(), triggers: app.triggersWorld(), tunnelTex: (uid, kind) => app.tunnelTexCanvas(uid, kind), assetById: (id) => state.assets.find((a) => a.id === id) || null }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
       download('track_scene.glb', buffer, 'model/gltf-binary');
       toast(`Escena exportada: pista ${info.trackTris.toLocaleString('es')} triángulos${info.terrainTris ? `, terreno ${info.terrainTris.toLocaleString('es')}` : ''}${info.hills ? `, ${info.hills} cerro(s)` : ''}${info.tunnels ? `, ${info.tunnels} túnel(es)` : ''}${info.gateTris ? ', pórtico de salida' : ''}${info.items ? `, ${info.items} elementos de pista` : ''}${info.trees ? `, ${info.trees} árboles` : ''}. Todo como objetos separados.`);
     } catch (err) { console.error(err); toastErr('No se pudo exportar la escena: ' + err.message); }
@@ -7194,7 +7229,7 @@ function bindSceneControls() {
     const { exportFBX } = await import('./export-fbx.js');
     toast('Generando escena .fbx…');
     try {
-      const { buffer, info } = await exportFBX(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, cutWallFor: (i, kind, part) => app.cutWallOwnTex(i, kind, part), cutArtTop: state.cutArtTopTex, cutArtOut: state.cutArtOutTex, collisionDeck: state.elev.deck ?? 1, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas(), triggers: app.triggersWorld(), tunnelTex: (uid, kind) => app.tunnelTexCanvas(uid, kind), assetById: (id) => state.assets.find((a) => a.id === id) || null }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
+      const { buffer, info } = await exportFBX(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, cutWallFor: (i, kind, part) => app.cutWallOwnTex(i, kind, part), cutArtTop: state.cutArtTopTex, cutArtOut: state.cutArtOutTex, collisionDeck: state.elev.deck ?? 1, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, riverBed: state.riverBedTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas(), triggers: app.triggersWorld(), tunnelTex: (uid, kind) => app.tunnelTexCanvas(uid, kind), assetById: (id) => state.assets.find((a) => a.id === id) || null }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
       download('track_scene.fbx', buffer, 'application/octet-stream');
       toast(`FBX exportado (${(buffer.length / 1048576).toFixed(1)} MB): pista${info.terrainTris ? ', terreno' : ''}${info.hills ? `, ${info.hills} cerro(s)` : ''}${info.tunnels ? `, ${info.tunnels} túnel(es)` : ''}${info.gateTris ? ', pórtico' : ''}${info.items ? `, ${info.items} elementos de pista` : ''}${info.trees ? `, ${info.trees} árboles` : ''}${info.grass ? ', hierba' : ''}. Z arriba, en metros, con texturas incrustadas.`);
     } catch (err) { console.error(err); toastErr('No se pudo exportar el FBX: ' + err.message); }

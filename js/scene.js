@@ -971,9 +971,26 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
     return (sideZ ?? forestZ) + sc * fade;
   };
   // socavado de los ríos: se desvanece junto a la pista (nunca la deja colgando)
+  // lagos socavados: lecho y agua planos. Lb = lecho (el punto más bajo del borde menos la profundidad), Lw = agua (0,3 de
+  // la profundidad bajo ese borde); el cauce baja hasta Lb aunque el suelo suba (así el lecho nunca asoma sobre el agua)
+  const riverLevels = new Map();
+  const lakeLevels = (F) => {
+    if (F.river.mode !== 'carved' || !F.isLake()) return null;
+    if (riverLevels.has(F.river.id)) return riverLevels.get(F.river.id);
+    let lo = Infinity;
+    for (const L of F.contours(0)) for (const [x, y] of L) lo = Math.min(lo, heightAt0(x, y, 0.5));
+    const lv = Number.isFinite(lo) ? { Lb: lo - F.depth, Lw: lo - 0.3 * F.depth } : null;
+    riverLevels.set(F.river.id, lv);
+    return lv;
+  };
   const riverCarveRaw = (x, y) => {
     let c = 0;
-    for (const F of RF) { const B = F.bounds; if (x < B.x0 || y < B.y0 || x > B.x1 || y > B.y1) continue; const v = F.carve(x, y); if (v > c) c = v; }
+    for (const F of RF) {
+      const B = F.bounds; if (x < B.x0 || y < B.y0 || x > B.x1 || y > B.y1) continue;
+      let v = F.carve(x, y);
+      if (v > 0) { const lv = lakeLevels(F); if (lv) v = (v / F.depth) * Math.max(F.depth, heightAt0(x, y, 0.5) - lv.Lb); }
+      if (v > c) c = v;
+    }
     return c;
   };
   const riverCarveAt = (x, y, rho = 0.5) => {
@@ -992,12 +1009,26 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
   const anyArt = S.some((p) => p.cut && p.cut.walls !== 'nat');
   const capW = 0.3; // tapa angosta: el terreno se recorta justo en la pared (0.67), la tapa solo remata el borde
   const artSt = anyArt ? cutArtStations(layout, elev, sp, S, (x, y) => heightNat(x, y, 0.5), gap, capW) : [];
-  const guides = S.some((p) => p.cut) ? cutGuidePoints(artSt, S, capW, layout, 2.5, (x, y) => heightNat(x, y, 0.5), gap, (cut) => 20 * Math.pow(1 / 20, clamp(sp.terrainDensity, 1, 100) / 100) / Math.sqrt(subdivFactor(cut.wallSubdiv ?? 2))) : null; // también con paredes naturales
+  // ríos: puntos guía en sus contornos (borde, media pared, pie y adentro del pie si va socavado; el borde si va posado)
+  const riverGuides = [];
+  for (const F of RF) {
+    // (pocas filas y puntos separados según el ancho del río: dan la forma de las paredes y el borde del corte del lecho
+    // sin sumar muchos triángulos)
+    // socavado: la forma de las paredes la da «Densidad de las paredes» y el corte del lecho es exacto aunque no haya
+    // puntos (los triángulos se recortan en el contorno): sin puntos extra. Posado con el agua «como el terreno»: una fila
+    // en la orilla, así el agua sigue bien el contorno.
+    const isos = F.river.mode === 'carved' || F.river.waterMode === 'simple' ? [] : [0];
+    const st = clamp(F.rMed / 1.5, 1.5, 4);
+    for (const iso of isos) for (const L of F.contours(iso, 0.08, st)) for (const [x, y] of L) riverGuides.push({ x, y, zMax: null });
+  }
+  const guides0 = S.some((p) => p.cut) ? cutGuidePoints(artSt, S, capW, layout, 2.5, (x, y) => heightNat(x, y, 0.5), gap, (cut) => 20 * Math.pow(1 / 20, clamp(sp.terrainDensity, 1, 100) / 100) / Math.sqrt(subdivFactor(cut.wallSubdiv ?? 2))) : null; // también con paredes naturales
+  const guides = guides0 || riverGuides.length ? [...(guides0 || []), ...riverGuides] : null;
   const out = painted || guides
     ? adaptiveMesh(minX, minY, W, H, sp, paint || [], heightAt, guides)
     : gridMesh(minX, minY, W, H, sp, heightAt);
   out.bounds = { minX, minY, maxX, maxY };
-  out.cutGuides = guides ? guides.length : 0;
+  out.cutGuides = guides0 ? guides0.length : 0;
+  out.riverGuides = riverGuides.length;
   out.tunnels = [];
   out.sculpted = !!SF;
   out.terrainType = TT;
@@ -1012,6 +1043,7 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
   if (carvedRivers || anyCut) {
     // tramos socavados: fuera el terreno bajo la pista (antes de separar la roca de las paredes naturales, que también se
     // corta). Línea de corte: paredes lisas, la de la pared; naturales, justo bajo el borde de la pista (10 cm adentro)
+    let cutClip = null;
     if (anyCut) {
       // pared lisa inclinada hacia afuera: el corte sigue el borde de arriba de la cara (bajo la tapa), no su base
       const extOf = (p, u) => {
@@ -1048,7 +1080,32 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
         });
         return best ? infoOf(best, x, y, true) : null;
       };
-      clipTerrainAtCuts(out, wallAt, (x, y) => { const w = wallAt(x, y) || wallAtLoose(x, y); return w && w.nat ? Math.min(w.floor, heightNat(x, y, 0.5)) : heightNat(x, y, 0.5); }, wallAtLoose);
+      cutClip = { wallAt, wallAtLoose };
+    }
+    // ríos socavados: fuera el terreno del lecho (a partir del pie de las paredes; junto a la pista, donde el cauce se
+    // desvanece, no se corta). Con «Lecho», un plano simple lo cubre; si no, solo queda el agua.
+    const CR = RF.filter((F) => F.river.mode === 'carved');
+    const rivAt = CR.length ? (x, y) => {
+      let best = null;
+      for (const F of CR) {
+        const Bd = F.bounds;
+        if (x < Bd.x0 || y < Bd.y0 || x > Bd.x1 || y > Bd.y1) continue;
+        const sdv = F.sd(x, y);
+        if (sdv < F.wallW - 2) continue;
+        const dd = Math.max((F.wallW + 0.15) - sdv, 0.9 * F.depth - riverCarveAt(x, y)); // < 0: en el lecho
+        if (!best || dd < best.dd) best = { dd, river: true };
+      }
+      return best;
+    } : null;
+    if (cutClip || rivAt) {
+      const both = (a, b) => (!a ? b : !b ? a : b.dd < a.dd ? b : a);
+      const W0 = (x, y) => both(cutClip ? cutClip.wallAt(x, y) : null, rivAt ? rivAt(x, y) : null);
+      const WL = (x, y) => both(cutClip ? cutClip.wallAtLoose(x, y) : null, rivAt ? rivAt(x, y) : null);
+      clipTerrainAtCuts(out, W0, (x, y) => {
+        const w = W0(x, y) || WL(x, y);
+        if (w && w.river) return heightAt(x, y, 0.5); // borde del lecho: la altura del cauce
+        return w && w.nat ? Math.min(w.floor, heightNat(x, y, 0.5)) : heightNat(x, y, 0.5);
+      }, WL);
     }
     const cutCarve = (x, y) => { const ci = cutInfo(x, y); if (!ci.kind || ci.kind === 'cutArt') return null; const zn = heightNat(x, y, 0.5); return zn - ci.z > 0.3 ? `cutNat:${ci.idx}` : null; }; // roca: una parte por tramo
     // paredes naturales: un triángulo es roca si cualquiera de sus vértices quedó bajo el suelo natural (> 0,15 m) dentro
@@ -1133,8 +1190,9 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
     }
     out.cutWalls = { art: anyArt ? cutArtWalls(artSt, capW, Math.max(0.5, sp.cutWallTile ?? 4), sp) : null, nat };
   }
+  for (const F of RF) lakeLevels(F); // niveles de los lagos (para su agua y su lecho)
   const groundAt = (x, y) => heightNat(x, y, 0.5); // nivel natural del suelo (sin las zanjas de las secciones socavadas)
-  Object.defineProperty(out, 'ctx', { value: { S, fine, maxW, gap, zoneAt, heightAt, sp, origAt, riverCarveAt, inRiver, groundAt, cutStations: artSt, cutInfo }, enumerable: false });
+  Object.defineProperty(out, 'ctx', { value: { S, fine, maxW, gap, zoneAt, heightAt, sp, origAt, riverCarveAt, inRiver, groundAt, cutStations: artSt, cutInfo, riverLevels }, enumerable: false });
   return out;
 }
 
@@ -1837,7 +1895,15 @@ export function clipTerrainAtCuts(T, wallAt, zAt, wallAtLoose = null) {
   for (let q = 0; q < B.length; q += 3) {
     const vs = [B[q], B[q + 1], B[q + 2]];
     const W0 = vs.map(ddOf);
-    if (!W0.some((w) => w && w.dd < 0)) { out.push(vs[0], vs[1], vs[2]); continue; } // nada bajo la pista
+    if (!W0.some((w) => w && w.dd < 0)) {
+      // vértices afuera pero el triángulo cruza por encima de lo que se quita (lecho de un río, de orilla a orilla): fuera
+      if (W0.some((w) => w && w.river)) {
+        const mx = (P0[vs[0] * 3] + P0[vs[1] * 3] + P0[vs[2] * 3]) / 3, my = (P0[vs[0] * 3 + 1] + P0[vs[1] * 3 + 1] + P0[vs[2] * 3 + 1]) / 3, wc = wallAt(mx, my);
+        if (wc && wc.river && wc.dd < -0.3) { removed++; continue; }
+      }
+      out.push(vs[0], vs[1], vs[2]);
+      continue;
+    } // nada bajo la pista
     const W = vs.map(ddLoose);
     if (W.every((w) => w.dd <= 0)) { removed++; continue; } // todo bajo la pista: se quita
     // polígono de la parte de afuera (dd >= 0), en el orden original (conserva el sentido de las caras)

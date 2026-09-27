@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Track Spline Generator v0.75</title>
+  <title>Track Spline Generator v0.77</title>
   <link rel="stylesheet" href="styles.css">
   <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.75</span></div>
+    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.77</span></div>
     <label class="proj-name-wrap" title="Nombre del proyecto: se usa al guardar (<nombre>.tsg.json) y en los autoguardados (<nombre>_auto_…)"><input id="projectName" class="proj-name" value="pista" spellcheck="false" maxlength="80"><span class="small muted" id="autosaveState"></span></label>
     <div class="top-actions">
       <button id="btnNew" title="Empezar de cero">Nuevo</button>
@@ -525,6 +525,10 @@
         <div class="row gap" style="margin-top:6px"><span class="small" style="min-width:62px">Cascadas</span><button id="fallWallBtn">Cargar textura…</button><button id="fallWallRemove" disabled>Por defecto</button><img id="fallWallThumb" class="thumb" hidden alt=""></div>
         <input id="fallWallFile" type="file" accept="image/*" hidden>
         <div class="field"><label>Repetición de la textura <span class="val"><input type="number" id="riverWallTileNum" min="0.5" step="0.5" style="width:56px"> m</span></label><input type="range" id="riverWallTile" min="0.5" max="30" step="0.5"></div>
+        <h3 class="subhead">Lecho de los ríos socavados</h3>
+        <p class="hint">El terreno del lecho de los ríos socavados se corta (ahorra triángulos). Con <b>Lecho</b> (en la tarjeta de cada río) lo cubre un plano simple (<code>rio_NN_lecho</code>, material <code>lecho_rio</code>).</p>
+        <div class="row gap"><span class="small" style="min-width:62px">Lecho</span><button id="riverBedBtn">Cargar textura…</button><button id="riverBedRemove" disabled>Por defecto</button><img id="riverBedThumb" class="thumb" hidden alt=""></div>
+        <input id="riverBedFile" type="file" accept="image/*" hidden>
       </section>
 
       <section class="panel" data-panel="trees" data-group="Vegetación y decoración">

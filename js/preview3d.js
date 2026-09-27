@@ -844,7 +844,7 @@ export class Preview3D {
           this.extras.add(wm);
           info.terrainTris += T.wall.tris;
         }
-        info.terrainTris = T.tris;
+        info.terrainTris += (T.baseIndices || T.indices).length / 3; // lo que se dibuja (sin lo recortado), más las paredes
         // agua (playa y montaña): un plano azul al nivel del mar
         if (T.waterLevel != null) {
           const b = T.bounds, mg = 400;
@@ -893,7 +893,18 @@ export class Preview3D {
         const riverMat = new THREE.MeshStandardMaterial({ color: 0x2f86d6, roughness: 0.12, metalness: 0.05, transparent: true, opacity: 0.85, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
         const fallMat = new THREE.MeshStandardMaterial({ color: 0xbfe8ff, emissive: 0x16323f, roughness: 0.25, metalness: 0, transparent: true, opacity: 0.9, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
         info.riverTris = 0;
+        const bedTex = this.texture(this.app.state.riverBedTex || null);
+        if (bedTex) { bedTex.wrapS = bedTex.wrapT = THREE.RepeatWrapping; bedTex.needsUpdate = true; }
+        const bedMat = new THREE.MeshStandardMaterial({ map: bedTex, color: bedTex ? 0xffffff : 0x6b5a45, roughness: 1, metalness: 0 });
         for (const w of RW) {
+          if (w.bed) { // lecho: plano simple bajo el agua
+            const bm = new THREE.Mesh(mkGeo(w.bed), bedMat.clone()); // propio (para resaltarlo)
+            bm.userData.riverId = w.id; bm.userData.riverBed = true; bm.name = w.bed.name;
+            this.markExag(bm, (x, y, z) => z);
+            this.riverMeshes.push(bm);
+            this.extras.add(bm);
+            info.riverTris += w.bed.tris;
+          }
           const m = new THREE.Mesh(mkGeo(w), (w.kind === 'fall' ? fallMat : riverMat).clone()); // material propio (para resaltarlo)
           m.userData.riverId = w.id;
           m.name = w.name;
@@ -904,6 +915,7 @@ export class Preview3D {
           info.riverTris += w.tris;
         }
         this.riverData = RW;
+        if (this.app.onRiversInfo) this.app.onRiversInfo(RW);
         this.setRiverSelection(this.app.state.selRiver, false);
       }
       // túneles: paredes, techo, veredas y bocas como mallas separadas
