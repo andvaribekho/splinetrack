@@ -696,6 +696,7 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
   // lo esculpido recibe más detalle (como una zona pintada de densidad)
   let paint = PI.density && PI.density.length ? PI.density : null;
   if (sculptDabs && sp.sculptDetail !== false) paint = [...(paint || []), ...sculptDabs.map((d) => ({ x: d.x, y: d.y, r: d.r, e: false }))];
+  const S = trackSamples(layout, elev, sp);
   // secciones socavadas: más detalle en la zanja y sus paredes
   if (sp.cutRanges && sp.cutRanges.length) {
     for (const c of sp.cutRanges) {
@@ -709,7 +710,8 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
       for (let sv = c.s0; sv <= c.s1 + 1e-6; sv += step) {
         const ss = r.closed ? ((sv % r.L) + r.L) % r.L : Math.min(r.L, sv);
         const i = Math.min(r.n - 1, Math.round(ss / r.ds)) % r.n;
-        add.push({ x: r.x[i], y: r.y[i], r: r.w[i] / 2 + 4 + reach, e: false, f });
+        const q = S.find((p) => p.k === c.k && p.i === i); // ancho con el camino de tierra y la barrera
+        add.push({ x: r.x[i], y: r.y[i], r: (q ? Math.max(q.uL, q.uR) : r.w[i] / 2) + 4 + reach, e: false, f });
       }
       void len;
       paint = [...(paint || []), ...add];
@@ -720,7 +722,6 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
     const f = subdivFactor(F.river.wallSubdiv ?? 2);
     if (f > 1) paint = [...(paint || []), ...F.river.strokes.filter((q) => !q.e).map((q) => ({ x: q.x, y: q.y, r: q.r + F.wallW * 0.5 + 0.5, e: false, f }))];
   }
-  const S = trackSamples(layout, elev, sp);
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, maxW = 0;
   for (const p of S) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); maxW = Math.max(maxW, p.ew); }
   // tipo de terreno: bosque (normal), playa (costa hacia el agua) o montaña (acantilado a un lado, pared de roca al otro)
@@ -915,9 +916,14 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
   const heightAt0 = anySusp ? (x, y, rho) => {
     const zone = zoneAt(x, y, rho, null, 1);
     const zs = zoneAt(x, y, rho, null, 3); // puentes y tramos suspendidos (en los socavados manda la zanja: cutInfo)
-    if (zone < Infinity) return Math.min(zone, zs) - gap; // junto al extremo de un puente: tampoco sobre su tablero
-    let z = heightNat(x, y, rho);
-    if (zs < Infinity) z = Math.min(z, zs - gap);
+    let z;
+    if (zone < Infinity) z = Math.min(zone, zs) - gap; // junto al extremo de un puente: tampoco sobre su tablero
+    else {
+      z = heightNat(x, y, rho);
+      if (zs < Infinity) z = Math.min(z, zs - gap);
+    }
+    // dentro de una zanja manda su piso, también junto a sus extremos (ahí un triángulo grande alcanza la pista de afuera,
+    // más alta, y sin esto el vértice quedaba a esa altura: sobre la rampa de entrada)
     if (anyCut) { const ci = cutInfo(x, y); if (ci.z < z) z = ci.z; }
     return z;
   } : (x, y, rho) => {
@@ -959,10 +965,16 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
   const inRiver = RF.length ? (x, y) => RF.some((F) => { const B = F.bounds; return x >= B.x0 && y >= B.y0 && x <= B.x1 && y <= B.y1 && F.sd(x, y) > -0.5; }) : null;
   if (extraPaint.length) paint = [...(paint || []), ...extraPaint];
   const painted = paint && paint.length && paint.some((st) => !st.e && paintFv(st.f ?? sp.paintFactor) !== 1); // más o menos polígonos
-  const out = painted
-    ? adaptiveMesh(minX, minY, W, H, sp, paint, heightAt)
+  // paredes lisas: estaciones (las mismas secciones que la pista) y puntos guía del terreno junto a ellas
+  const anyArt = S.some((p) => p.cut && p.cut.walls !== 'nat');
+  const capW = 0.3; // tapa angosta: el terreno se recorta justo en la pared (0.67), la tapa solo remata el borde
+  const artSt = anyArt ? cutArtStations(layout, elev, sp, S, (x, y) => heightNat(x, y, 0.5), gap, capW) : [];
+  const guides = artSt.length ? cutGuidePoints(artSt, S, capW, layout) : null;
+  const out = painted || guides
+    ? adaptiveMesh(minX, minY, W, H, sp, paint || [], heightAt, guides)
     : gridMesh(minX, minY, W, H, sp, heightAt);
   out.bounds = { minX, minY, maxX, maxY };
+  out.cutGuides = guides ? guides.length : 0;
   out.tunnels = [];
   out.sculpted = !!SF;
   out.terrainType = TT;
@@ -974,14 +986,12 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
   // paredes lisas de los tramos socavados: malla propia que sube desde el borde exterior de la pista (después del camino de
   // tierra y la barrera) hasta el suelo natural, con una tapa arriba y una cara exterior que baja bajo el suelo. En su
   // franja el terreno se abre (esos triángulos se quitan), así no hay escalones ni rampas contra la pared.
-  const anyArt = S.some((p) => p.cut && p.cut.walls !== 'nat');
-  const capW = 0.3; // tapa angosta: el terreno se recorta justo en la pared (0.67), la tapa solo remata el borde
   if (carvedRivers || anyCut) {
     const cutCarve = (x, y) => { const ci = cutInfo(x, y); if (!ci.kind || ci.kind === 'cutArt') return null; const zn = heightNat(x, y, 0.5); return zn - ci.z > 0.3 ? ci.kind : null; };
     const classify = (x, y) => (carvedRivers && riverCarveAt(x, y) > 0.05 ? 'river' : anyCut ? cutCarve(x, y) : null);
     splitParts(out, classify, { river: Math.max(0.5, sp.riverWallTile ?? 4), cutArt: Math.max(0.5, sp.cutWallTile ?? 4), cutNat: Math.max(0.5, sp.cutWallTile ?? 4) });
     out.wall = out.parts.river || null; // compatibilidad: cauces de los ríos
-    out.cutWalls = { art: anyArt ? cutArtWalls(S, (x, y) => heightNat(x, y, 0.5), gap, capW, Math.max(0.5, sp.cutWallTile ?? 4)) : null, nat: out.parts.cutNat || null };
+    out.cutWalls = { art: anyArt ? cutArtWalls(artSt, capW, Math.max(0.5, sp.cutWallTile ?? 4)) : null, nat: out.parts.cutNat || null };
     // paredes lisas: los triángulos del terreno que cruzan la línea de la pared se recortan ahí; queda la parte de afuera,
     // con su borde nuevo a la altura del suelo natural (bajo la tapa), sin importar el tamaño de los triángulos
     if (anyArt) clipTerrainAtArtWalls(out, (x, y) => {
@@ -996,7 +1006,7 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
     }, (x, y) => heightNat(x, y, 0.5));
   }
   const groundAt = (x, y) => heightNat(x, y, 0.5); // nivel natural del suelo (sin las zanjas de las secciones socavadas)
-  Object.defineProperty(out, 'ctx', { value: { S, fine, maxW, gap, zoneAt, heightAt, sp, origAt, riverCarveAt, inRiver, groundAt }, enumerable: false });
+  Object.defineProperty(out, 'ctx', { value: { S, fine, maxW, gap, zoneAt, heightAt, sp, origAt, riverCarveAt, inRiver, groundAt, cutStations: artSt }, enumerable: false });
   return out;
 }
 
@@ -1381,19 +1391,29 @@ export function buildHills(layout, elev, spIn, T, hills) {
  * mesh.baseIndices y mesh.parts = {clave: malla compacta con UV oblicuas (ver splitWalls)}. tiles: {clave: metros}.
  */
 /**
- * Paredes lisas de los tramos socavados, extruidas desde el borde exterior de la pista (calzada + camino de tierra +
- * barrera): cara interior vertical (desde un poco bajo la calzada hasta el suelo natural), tapa de ancho capW y cara
- * exterior que baja 1 m bajo el suelo. S = muestras de la pista (trackSamples); nat(x, y) = suelo natural.
+ * Estaciones de las paredes lisas de los tramos socavados: las mismas secciones que la malla de la pista (trackRows:
+ * densidad, «Optimizada», tope de triángulos y transiciones), así la base de la pared sigue el borde de la pista, del
+ * camino de tierra y de la barrera sin cortes. Entre dos estaciones se agregan solo las que hacen falta para que el
+ * borde de arriba siga el suelo natural (sobre la cuerda, sin salirse de la línea de la pista).
+ * Devuelve [{key (tramo), sg (+1 izquierda, -1 derecha), rows: [{ix, iy, ox, oy, zb, top, zo, s}]}].
  */
-export function cutArtWalls(S, nat, gap, capW, tile = 4) {
-  const parts = new Map(); // por tramo socavado (idx): {pos, uv, idx}
-  let pos, uv, idx;
+export function cutArtStations(layout, elev, sp, S, nat, gap, capW) {
+  const isArt = (p) => p && p.cut && p.cut.walls !== 'nat';
+  if (!S.some(isArt)) return [];
+  const rowsK = trackRows(layout, elev, { ...sp, skirts: sp.terrain && sp.skirts }).map((qs, k) => new Set(qs.map((q) => q % layout.routes[k].n)));
   const byRoute = new Map();
   for (const p of S) { if (!byRoute.has(p.k)) byRoute.set(p.k, []); byRoute.get(p.k).push(p); }
-  const isArt = (p) => p && p.cut && p.cut.walls !== 'nat';
-  for (const list of byRoute.values()) {
+  const out = [];
+  const TOL_UP = 0.12, TOL_DOWN = 0.35; // cuánto puede quedar el suelo sobre / bajo el borde recto de la pared
+  const finish = (r) => {
+    const ni = nat(r.ix, r.iy), no = nat(r.ox, r.oy);
+    r.top = Math.max(r.zb + 0.35, Math.max(ni, no) + 0.05);
+    r.zo = Math.min(r.top, no) - 1;
+    return r;
+  };
+  const lerp = (A, B, t) => finish({ ix: A.ix + (B.ix - A.ix) * t, iy: A.iy + (B.iy - A.iy) * t, ox: A.ox + (B.ox - A.ox) * t, oy: A.oy + (B.oy - A.oy) * t, zb: A.zb + (B.zb - A.zb) * t, s: A.s + (B.s - A.s) * t, extra: true });
+  for (const [k, list] of byRoute) {
     const n = list.length;
-    // tramos seguidos de muestras «lisas» (en un circuito, un tramo puede pasar por el inicio)
     let start = list.findIndex((p) => !isArt(p));
     if (start < 0) start = 0;
     const runs = [];
@@ -1402,33 +1422,55 @@ export function cutArtWalls(S, nat, gap, capW, tile = 4) {
       const p = list[(start + q) % n];
       if (isArt(p)) { if (!cur) runs.push((cur = [])); cur.push(p); } else cur = null;
     }
+    const rows = rowsK[k] || new Set();
     for (const run of runs) {
       if (run.length < 2) continue;
       const key = run[0].cut.idx ?? 0;
-      if (!parts.has(key)) parts.set(key, { pos: [], uv: [], idx: [] });
-      ({ pos, uv, idx } = parts.get(key));
+      const keep = run.filter((p, j) => j === 0 || j === run.length - 1 || rows.has(p.i));
       for (const sg of [1, -1]) {
-        const rows = run.map((p) => {
+        const st = keep.map((p) => {
           const ext = (sg > 0 ? p.uL : p.uR) + 0.05, lx = -p.ty * sg, ly = p.tx * sg;
-          const ix = p.x + lx * ext, iy = p.y + ly * ext, ox = p.x + lx * (ext + capW), oy = p.y + ly * (ext + capW);
-          const zb = p.zc + p.sr * sg * ext - Math.max(0.35, gap + 0.05);
-          const top = Math.max(zb + 0.35, Math.max(nat(ix, iy), nat(ox, oy)) + 0.05);
-          return { ix, iy, ox, oy, zb, top, zo: Math.min(top, nat(ox, oy)) - 1, s: p.s };
+          return finish({ ix: p.x + lx * ext, iy: p.y + ly * ext, ox: p.x + lx * (ext + capW), oy: p.y + ly * (ext + capW), zb: p.zc + p.sr * sg * ext - Math.max(0.35, gap + 0.05), s: p.s, i: p.i });
         });
-        // tres tiras: cara interior, tapa y cara exterior; el orden de los vértices deja las normales hacia afuera
-        const strip = (A, B, vA, vB) => {
-          const base = pos.length / 3;
-          rows.forEach((r, q) => { const a = A(r), b = B(r); pos.push(...a, ...b); uv.push(r.s / tile, vA(r) / tile, r.s / tile, vB(r) / tile); void q; });
-          for (let q = 0; q < rows.length - 1; q++) {
-            const a0 = base + q * 2, b0 = a0 + 1, a1 = a0 + 2, b1 = a0 + 3;
-            if (sg > 0) idx.push(a0, a1, b0, b0, a1, b1); else idx.push(a0, b0, a1, b0, b1, a1);
+        const res = [st[0]];
+        const refine = (A, B, depth) => {
+          if (depth > 7 || Math.hypot(B.ix - A.ix, B.iy - A.iy) < 1.5) return;
+          let need = false;
+          for (const t of [0.25, 0.5, 0.75]) {
+            const dev = lerp(A, B, t).top - (A.top + (B.top - A.top) * t);
+            if (dev > TOL_UP || dev < -TOL_DOWN) { need = true; break; }
           }
+          if (!need) return;
+          const M = lerp(A, B, 0.5);
+          refine(A, M, depth + 1); res.push(M); refine(M, B, depth + 1);
         };
-        strip((r) => [r.ix, r.iy, r.zb], (r) => [r.ix, r.iy, r.top], (r) => r.zb, (r) => r.top); // interior (mira a la pista)
-        strip((r) => [r.ix, r.iy, r.top], (r) => [r.ox, r.oy, r.top], () => 0, () => capW); // tapa
-        strip((r) => [r.ox, r.oy, r.top], (r) => [r.ox, r.oy, r.zo], (r) => r.top, (r) => r.zo); // exterior
+        for (let j = 1; j < st.length; j++) { refine(st[j - 1], st[j], 0); res.push(st[j]); }
+        out.push({ key, sg, k, rows: res });
       }
     }
+  }
+  return out;
+}
+
+/** Malla de las paredes lisas (cara interior, tapa y cara exterior) a partir de sus estaciones (cutArtStations). */
+export function cutArtWalls(stations, capW, tile = 4) {
+  const parts = new Map(); // por tramo socavado (idx): {pos, uv, idx}
+  for (const { key, sg, rows } of stations) {
+    if (rows.length < 2) continue;
+    if (!parts.has(key)) parts.set(key, { pos: [], uv: [], idx: [] });
+    const { pos, uv, idx } = parts.get(key);
+    // tres tiras: cara interior, tapa y cara exterior; el orden de los vértices deja las normales hacia afuera
+    const strip = (A, B, vA, vB) => {
+      const base = pos.length / 3;
+      for (const r of rows) { pos.push(...A(r), ...B(r)); uv.push(r.s / tile, vA(r) / tile, r.s / tile, vB(r) / tile); }
+      for (let q = 0; q < rows.length - 1; q++) {
+        const a0 = base + q * 2, b0 = a0 + 1, a1 = a0 + 2, b1 = a0 + 3;
+        if (sg > 0) idx.push(a0, a1, b0, b0, a1, b1); else idx.push(a0, b0, a1, b0, b1, a1);
+      }
+    };
+    strip((r) => [r.ix, r.iy, r.zb], (r) => [r.ix, r.iy, r.top], (r) => r.zb, (r) => r.top); // interior (mira a la pista)
+    strip((r) => [r.ix, r.iy, r.top], (r) => [r.ox, r.oy, r.top], () => 0, () => capW); // tapa
+    strip((r) => [r.ox, r.oy, r.top], (r) => [r.ox, r.oy, r.zo], (r) => r.top, (r) => r.zo); // exterior
   }
   // una malla por tramo (exportación) y todas juntas (vista)
   const P = [], U = [], I = [], list = [];
@@ -1439,7 +1481,54 @@ export function cutArtWalls(S, nat, gap, capW, tile = 4) {
     list.push({ idx: k, positions: new Float32Array(q.pos), uvs: new Float32Array(q.uv), indices: new Uint32Array(q.idx), tris: q.idx.length / 3 });
   }
   if (!I.length) return null;
-  return { positions: new Float32Array(P), uvs: new Float32Array(U), indices: new Uint32Array(I), tris: I.length / 3, extruded: true, parts: list };
+  const stationsN = stations.reduce((a, w) => a + w.rows.length, 0);
+  return { positions: new Float32Array(P), uvs: new Float32Array(U), indices: new Uint32Array(I), tris: I.length / 3, extruded: true, parts: list, stations: stationsN };
+}
+
+/**
+ * Puntos guía del terreno para las paredes lisas: una fila justo afuera de cada pared (bajo la tapa), una justo adentro
+ * y una por el centro del fondo, cada ≤ 2,5 m (y unos metros más allá de los extremos del socavado). Así ningún
+ * triángulo del terreno cruza de un lado al otro de la zanja ni tapa la rampa de entrada, aunque la densidad sea baja.
+ * Devuelve [{x, y, zMax}] (zMax: altura máxima del punto; null = la que diga el terreno).
+ */
+export function cutGuidePoints(stations, S, capW, layout, step = 2.5) {
+  const pts = [];
+  const push = (x, y, zMax = null) => pts.push({ x, y, zMax });
+  for (const { rows } of stations) {
+    let lx = Infinity, ly = Infinity;
+    for (let j = 0; j < rows.length; j++) {
+      const A = rows[j];
+      // en cada estación (si la pista es muy densa, cada ~step m): afuera, pegado a la tapa, y adentro (queda bajo la pista)
+      if (j === 0 || j === rows.length - 1 || Math.hypot(A.ix - lx, A.iy - ly) >= step * 0.8) {
+        push(A.ox + (A.ox - A.ix) * 0.1 / capW, A.oy + (A.oy - A.iy) * 0.1 / capW, A.top - 0.03);
+        push(A.ix - (A.ox - A.ix) * 0.35 / capW, A.iy - (A.oy - A.iy) * 0.35 / capW);
+        lx = A.ix; ly = A.iy;
+      }
+      if (j === rows.length - 1) break;
+      const B = rows[j + 1], L = Math.hypot(B.ix - A.ix, B.iy - A.iy), m = Math.floor(L / step);
+      for (let q = 1; q <= m; q++) {
+        const t = q / (m + 1);
+        const ix = A.ix + (B.ix - A.ix) * t, iy = A.iy + (B.iy - A.iy) * t, ox = A.ox + (B.ox - A.ox) * t, oy = A.oy + (B.oy - A.oy) * t;
+        push(ox + (ox - ix) * 0.1 / capW, oy + (oy - iy) * 0.1 / capW, A.top + (B.top - A.top) * t - 0.03);
+        push(ix - (ox - ix) * 0.35 / capW, iy - (oy - iy) * 0.35 / capW);
+      }
+    }
+  }
+  // fondo: por el centro de la pista, desde unos metros antes hasta unos metros después de cada socavado liso
+  const isArt = (p) => p && p.cut && p.cut.walls !== 'nat';
+  const byRoute = new Map();
+  for (const p of S) { if (!byRoute.has(p.k)) byRoute.set(p.k, []); byRoute.get(p.k).push(p); }
+  for (const [k, list] of byRoute) {
+    const n = list.length, ds = list[0].ds || 1, reach = Math.ceil(8 / ds), every = Math.max(1, Math.round(step / ds));
+    const closed = !!(layout && layout.routes[k] && layout.routes[k].closed);
+    const near = new Uint8Array(n);
+    for (let i = 0; i < n; i++) {
+      if (!isArt(list[i])) continue;
+      for (let o = -reach; o <= reach; o++) { const j = i + o; if (j >= 0 && j < n) near[j] = 1; else if (closed) near[((j % n) + n) % n] = 1; }
+    }
+    for (let i = 0; i < n; i++) if (near[i] && (i % every === 0 || !near[(i + n - 1) % n] || !near[(i + 1) % n])) push(list[i].x, list[i].y);
+  }
+  return pts;
 }
 
 /**
@@ -1590,7 +1679,7 @@ function gridMesh(minX, minY, W, H, sp, heightAt) {
   return { positions: pos, uvs: uv, indices: idx, nx, ny, cell: Math.max(cx, cy), cellFine: null, tris: nx * ny * 2, sample, adaptive: false };
 }
 
-function adaptiveMesh(minX, minY, W, H, sp, paint, heightAt) {
+function adaptiveMesh(minX, minY, W, H, sp, paint, heightAt, guides = null) {
   // 1) máscara de lo pintado: cada celda guarda el multiplicador de densidad de la última pincelada que la tocó
   //    (cada pincelada lleva su propio multiplicador «f»; las antiguas usan el general sp.paintFactor)
   const mc = Math.max(1, Math.max(W, H) / 600);
@@ -1622,7 +1711,8 @@ function adaptiveMesh(minX, minY, W, H, sp, paint, heightAt) {
   let pts = Ar / (c * c);
   for (const [fv, a] of areas) pts += (Math.min(a, W * H) * fv) / (c * c);
   const maxTris = Math.max(200, sp.terrainMaxPolys);
-  if (2 * pts > maxTris) c *= Math.sqrt((2 * pts) / maxTris);
+  const nG = guides ? guides.length : 0; // puntos guía (paredes lisas): fijos, el resto se ajusta al tope
+  if (2 * (pts + nG) > maxTris) c *= Math.sqrt((2 * pts) / Math.max(200, maxTris - 2 * nG));
   // 3) puntos: grilla base fuera de lo pintado + una grilla fina por nivel (con un leve desfase para evitar degeneraciones)
   const P = [];
   const nx = Math.max(2, Math.ceil(W / c)), ny = Math.max(2, Math.ceil(H / c));
@@ -1647,6 +1737,8 @@ function adaptiveMesh(minX, minY, W, H, sp, paint, heightAt) {
       }
     }
   }
+  const g0 = P.length / 2; // desde aquí, los puntos guía
+  if (nG) for (const g of guides) P.push(clamp(g.x, minX, minX + W), clamp(g.y, minY, minY + H));
   const coords = new Float64Array(P);
   const del = new Delaunator(coords);
   const tri = del.triangles;
@@ -1664,7 +1756,8 @@ function adaptiveMesh(minX, minY, W, H, sp, paint, heightAt) {
   const pos = new Float32Array(nv * 3), uv = new Float32Array(nv * 2), hz = new Float32Array(nv);
   for (let v = 0; v < nv; v++) {
     const x = coords[v * 2], y = coords[v * 2 + 1];
-    const z = heightAt(x, y, rhoV[v] * 1.05 + 0.5);
+    let z = heightAt(x, y, rhoV[v] * 1.05 + 0.5);
+    if (v >= g0 && guides[v - g0].zMax != null) z = Math.min(z, guides[v - g0].zMax); // afuera de una pared lisa: bajo la tapa
     hz[v] = z;
     pos[v * 3] = x; pos[v * 3 + 1] = y; pos[v * 3 + 2] = z;
     uv[v * 2] = ((x - minX) / W) * sp.terrainTexRepX;

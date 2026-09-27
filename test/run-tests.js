@@ -794,6 +794,58 @@ for (const [key, s] of Object.entries(SAMPLES)) {
     check(spikes === 0 && dips === 0 && T.clippedAtWalls > 0 && inTrench === 0, `pared lisa con camino de ${dw} m: terreno recortado en la pared (${T.clippedAtWalls} triángulos), puntas ${spikes}, hundidas ${dips}, árboles en la zanja ${inTrench}`);
 
   }
+  // 0.68: las paredes lisas usan las mismas secciones que la pista (densidad, «Optimizada», tope de triángulos): ninguna
+  // estación propia salvo las del borde de arriba (sobre la cuerda) donde el suelo natural se aleja de la línea recta
+  const runN = r.s.filter((sv) => sv >= s0 && sv <= s1).length;
+  // relieve esculpido ondulado junto a la zanja: el borde de arriba necesita estaciones extra
+  const bumps = [];
+  for (let sv = s0 + 10; sv < s1 - 10; sv += 9) for (const sg of [1, -1]) {
+    const q = Math.round(sv / r.ds) % r.n, u = sg * (r.w[q] / 2 + 2.5);
+    bumps.push({ x: r.x[q] - r.ty[q] * u, y: r.y[q] + r.tx[q] * u, r: 4, h: (Math.round(sv / 9) % 2 ? 2.5 : -1.5) });
+  }
+  for (const [mode, extra, paint] of [['uniform', {}, null], ['optimized', {}, null], ['optimized', { trackMaxTris: 800 }, null], ['optimized', {}, { density: null, sculpt: bumps }]]) {
+    const spM = { ...sp, trackMeshMode: mode, trackDensity: 40, ...extra, cutRanges: [{ k: 0, s0, s1, walls: 'art', wallSubdiv: 1 }] };
+    const T = buildTerrain(L, E, spM, paint);
+    const rows = new Set(trackRows(L, E, { ...spM, skirts: spM.terrain && (spM.skirts ?? true) })[0].map((q) => q % r.n)); // como la malla de la pista
+    const st = T.ctx.cutStations;
+    let own = 0, extraN = 0, chordOff = 0;
+    for (const w of st) {
+      const base = w.rows.filter((q) => !q.extra);
+      own += base.filter((q, j) => j > 0 && j < base.length - 1 && !rows.has(q.i)).length;
+      for (let j = 0; j < w.rows.length; j++) {
+        const q = w.rows[j];
+        if (!q.extra) continue;
+        extraN++;
+        let a = j - 1, b = j + 1;
+        while (w.rows[a].extra) a--;
+        while (w.rows[b].extra) b++;
+        const A = w.rows[a], B = w.rows[b], cr = (B.ix - A.ix) * (q.iy - A.iy) - (B.iy - A.iy) * (q.ix - A.ix);
+        if (Math.abs(cr) / Math.hypot(B.ix - A.ix, B.iy - A.iy) > 0.01) chordOff++;
+      }
+    }
+    const W = T.cutWalls.art;
+    check(st.length === 2 && own === 0 && chordOff === 0 && W.tris < (runN - 1) * 12 / 2 && (!paint || extraN > 0), `pared lisa ${mode}${extra.trackMaxTris ? ' con tope' : ''}${paint ? ' con relieve' : ''}: estaciones de la pista (${W.stations} estaciones, ${extraN} solo arriba, propias ${own}, fuera de la cuerda ${chordOff}; ${W.tris} triángulos, antes ${(runN - 1) * 12})`);
+  }
+  // 0.68: con el terreno a densidad mínima (triángulos de ~20 m) ningún triángulo del terreno queda sobre la pista ni el
+  // camino de tierra, tampoco en los extremos de la zanja (puntos guía junto a las paredes y por el fondo)
+  for (const dw of [0, 3, 8]) {
+    const spD = { ...sp, terrainDensity: 1, dirtSide: 'both', dirtWidth: dw, dirtWidthL: dw, dirtWidthR: dw, cutRanges: [{ k: 0, s0, s1, walls: 'art', wallSubdiv: 1 }] };
+    const T = buildTerrain(L, E, spD);
+    const TP = T.positions, TI = T.baseIndices, S = T.ctx.S;
+    let over = 0;
+    for (let t = 0; t < TI.length && over < 5; t += 3) {
+      const vs = [TI[t], TI[t + 1], TI[t + 2]];
+      for (const w of [[1 / 3, 1 / 3, 1 / 3], [0.6, 0.2, 0.2], [0.2, 0.6, 0.2], [0.2, 0.2, 0.6]]) {
+        const [px, py, pz] = [0, 1, 2].map((c) => w[0] * TP[vs[0] * 3 + c] + w[1] * TP[vs[1] * 3 + c] + w[2] * TP[vs[2] * 3 + c]);
+        const n = nearestOnSamples(r, px, py), P = S[n.i];
+        if (r.s[n.i] < s0 - 15 || r.s[n.i] > s1 + 15) continue;
+        const u = (px - P.x) * -P.ty + (py - P.y) * P.tx;
+        if (u > P.uL - 0.1 || -u > P.uR - 0.1) continue;
+        if (pz > P.zc + P.sr * u + 0.05) { over++; break; }
+      }
+    }
+    check(T.adaptive && T.cutGuides > 50 && over === 0, `pared lisa, terreno de baja densidad y camino de ${dw} m: ningún triángulo sobre la pista (${over}; ${T.cutGuides} puntos guía, ${T.tris} triángulos)`);
+  }
 }
 
 // pilares: nunca sobre otra calzada, su camino de tierra o un atajo

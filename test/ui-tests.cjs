@@ -993,6 +993,51 @@ test('camino de tierra: transición entre tramos de distinto ancho (barra en Bor
   expect(w0[0] === 0 && w0[1] === '0' && Math.abs(w0[2] - 9) < 1e-6, `transición 0: ${w0}`);
 });
 
+test('tramo socavado: paredes con las secciones de la pista y terreno de baja densidad sin triángulos sobre la pista', async () => {
+  await reset();
+  await ev(() => { const sc = window.__tsg.state.scene; sc.dirtSide = 'both'; sc.dirtWidthL = 8; sc.dirtWidthR = 8; sc.dirtWidth = 8; sc.trackMeshMode = 'optimized'; sc.trackDensity = 40; });
+  await ev(() => document.querySelector('#elevMode button[data-mode=direct]').click());
+  await idle();
+  await makeTramo('cut', [4, 5, 6, 7, 8, 9, 10, 11, 12]);
+  await ev(() => { const t = window.__tsg, zs = t.state.project.main.ctrlZ; for (const i of [6, 7, 8, 9, 10]) zs[i] = -7; zs[5] = -3.5; zs[11] = -3.5; t.state.project.main.bridges[0].wallSubdiv = 1; t.scheduleBuild(); });
+  await page.click('#btnGenTerrain');
+  await ev(() => { const el = document.getElementById('terrainDensity'); el.value = '1'; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); });
+  await idle();
+  const res = await ev(async () => {
+    const t = window.__tsg, m = await import('/js/scene.js'), L = t.state.layout, E = t.state.result, sp = t.state.scene, T = t.preview.terrainData, r = L.routes[0];
+    const rows = new Set(m.trackRows(L, E, { ...sp, skirts: sp.terrain && sp.skirts })[0].map((q) => q % r.n));
+    const erows = new Set(m.trackRows(L, E, { ...sp, coveredRanges: t.preview.coveredCache || [] })[0].map((q) => q % r.n)); // camino de tierra y barrera
+    let own = 0, eown = 0, n = 0;
+    for (const w of T.ctx.cutStations) for (const q of w.rows) { if (q.extra) continue; n++; if (!rows.has(q.i)) own++; if (!erows.has(q.i)) eown++; }
+    // triángulos del terreno sobre la pista o el camino (en toda la zanja y unos metros antes y después)
+    const b = r.bridges.find((x) => x.type === 'cut'), S = T.ctx.S, P = T.positions, I = T.baseIndices;
+    let over = 0;
+    for (let k = 0; k < I.length; k += 3) {
+      const x = (P[I[k] * 3] + P[I[k + 1] * 3] + P[I[k + 2] * 3]) / 3, y = (P[I[k] * 3 + 1] + P[I[k + 1] * 3 + 1] + P[I[k + 2] * 3 + 1]) / 3, z = (P[I[k] * 3 + 2] + P[I[k + 1] * 3 + 2] + P[I[k + 2] * 3 + 2]) / 3;
+      let bi = 0, bd = Infinity;
+      for (let q = 0; q < r.n; q++) { const d = (r.x[q] - x) ** 2 + (r.y[q] - y) ** 2; if (d < bd) { bd = d; bi = q; } }
+      if (r.s[bi] < b.s0 - 15 || r.s[bi] > b.s1 + 15) continue;
+      const p = S[bi], u = (x - p.x) * -p.ty + (y - p.y) * p.tx;
+      if (u < p.uL - 0.1 && -u < p.uR - 0.1 && z > p.zc + p.sr * u + 0.05) over++;
+    }
+    return { n, own, eown, over, guides: T.cutGuides, adaptive: T.adaptive, stations: T.cutWalls.art.stations };
+  });
+  expect(res.n > 10 && res.own === 0 && res.eown <= 2 && res.over === 0 && res.guides > 50 && res.adaptive, `paredes y terreno: ${JSON.stringify(res)}`);
+});
+
+test('tarjetas: la primera vez que se abre una lista desplegable no se cierra (la tarjeta no se vuelve a dibujar)', async () => {
+  await reset();
+  await makeTramo('cut', [5, 6, 7, 8, 9]);
+  await ev(() => { window.__tsg.app.selectBridge ? window.__tsg.app.selectBridge(null) : (window.__tsg.state.selBridge = null); });
+  await idle();
+  const box = await ev(() => { const s = document.querySelector('#bridgeList .item select'); s.scrollIntoView({ block: 'center' }); s.dataset.probe = '1'; const r = s.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; });
+  await page.mouse.click(box[0], box[1]);
+  await page.waitForTimeout(150);
+  const st = await ev(() => { const s = document.querySelector('#bridgeList select[data-probe="1"]'); return [!!s, document.activeElement === s]; });
+  await page.keyboard.press('Escape');
+  expect(st[0] && st[1], `la lista sigue abierta tras el primer clic: ${st}`);
+});
+
 // ---------------------------------------------------------------------------------------------------------------
 /** Corre las pruebas elegidas en un navegador propio (un proceso). Devuelve {pass, fails, total}. */
 async function runTests(run, port) {

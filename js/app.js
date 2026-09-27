@@ -28,6 +28,8 @@ import { initI18n, t as _t, setLang, getLang, LANGS, onLangChange, orig, origTex
 import { initSearch } from './search.js';
 import { computeItems, defaultGroup, nextGroupId, itemAt, projectToTrack, groupName, itemName, ITEM_TYPES, SHARED_KEYS, effectiveGroup } from './items.js';
 
+/** Controles dentro de las tarjetas: un clic en ellos no selecciona la tarjeta (volver a dibujar la lista cerraría la lista desplegable recién abierta). */
+const CARD_CTL = 'input,button,select,textarea,label,img,.chip';
 const $ = (id) => document.getElementById(id);
 
 const state = {
@@ -223,7 +225,7 @@ function renderRiverPanel() {
     div.querySelector('.rdepthN').addEventListener('change', (e) => { const v = parseFloat(e.target.value); if (v > 0) set('depth', v); });
     div.querySelector('.rsub').addEventListener('input', (e) => set('wallSubdiv', Math.round(parseFloat(e.target.value)), false));
     div.querySelector('.rsub').addEventListener('change', () => { editing = false; });
-    div.addEventListener('click', (e) => { if (e.target.closest('input,button,select,label')) return; selectRiver(state.selRiver === rv.id ? null : rv.id, false); });
+    div.addEventListener('click', (e) => { if (e.target.closest(CARD_CTL)) return; selectRiver(state.selRiver === rv.id ? null : rv.id, false); });
     el.appendChild(div);
   }
   const info = document.getElementById('riverInfo');
@@ -3267,7 +3269,7 @@ function refreshBridgeList() {
     d.querySelectorAll('button.btexRm').forEach((btn) => btn.addEventListener('click', () => app.setBridgeTexture(i, btn.dataset.kind, null)));
     d.querySelector('button.btoggle').addEventListener('click', () => { b.collapsed = !b.collapsed; d.classList.toggle('collapsed', b.collapsed); d.querySelector('button.btoggle').textContent = b.collapsed ? '▸' : '▾'; });
     d.querySelector('button.bdel').addEventListener('click', () => { pushUndo(); m.bridges.splice(i, 1); state.selBridge = null; scheduleBuild(); });
-    d.addEventListener('click', (e) => { if (e.target.closest('input,button,label,img')) return; if (e.target.closest('.bbody') && state.selBridge === i) return; selectBridge(state.selBridge === i ? null : i); });
+    d.addEventListener('click', (e) => { if (e.target.closest(CARD_CTL)) return; if (e.target.closest('.bbody') && state.selBridge === i) return; selectBridge(state.selBridge === i ? null : i); });
     el.appendChild(d);
   });
 }
@@ -4240,7 +4242,7 @@ function refreshPanels() {
       div.querySelector('[data-k=flip]').addEventListener('click', () => app.toggleCrossing(c.id));
       const sr = div.querySelector('[data-k=sepReset]');
       if (sr) sr.addEventListener('click', () => setCrossingOverride(c.id, { sep: 0 }));
-      div.addEventListener('click', (e) => { if (e.target.closest('input,select,button')) return; app.selectCrossing(c.id); });
+      div.addEventListener('click', (e) => { if (e.target.closest(CARD_CTL)) return; app.selectCrossing(c.id); });
       so.value = o.order && o.order !== 'auto' ? o.order : 'auto';
       stp.value = o.type || 'auto';
       so.addEventListener('change', () => setCrossingOverride(c.id, { order: so.value }));
@@ -4350,7 +4352,7 @@ function refreshPanels() {
     // texturas propias del atajo
     div.querySelectorAll('button.atex').forEach((btn) => btn.addEventListener('click', () => pickAltTexture(a, btn.dataset.kind)));
     div.querySelectorAll('button.atexRm').forEach((btn) => btn.addEventListener('click', () => { const t = state.altTexs[a.uid]; if (t) t[btn.dataset.kind] = null; refreshPanels(); sceneChanged(); }));
-    div.addEventListener('click', (e) => { if (e.target.closest('input,button,label,select,img')) return; if (e.target.closest('.abody') && state.selAlt === i) return; selectAlt(state.selAlt === i ? null : i); });
+    div.addEventListener('click', (e) => { if (e.target.closest(CARD_CTL)) return; if (e.target.closest('.abody') && state.selAlt === i) return; selectAlt(state.selAlt === i ? null : i); });
     al.appendChild(div);
   });
   // zonas planas
@@ -6181,7 +6183,7 @@ function renderTriggerPanel() {
     d.innerHTML = `<div class="head"><span class="row" style="gap:6px;min-width:0"><input class="tgn" value="${t.name.replace(/"/g, '&quot;')}" title="Nombre del trigger (se exporta como «trigger_<nombre>»)" style="width:150px"></span><button class="x" title="Quitar el trigger">✕</button></div>
       <div class="meta">${inf ? `${inf.name} · ${state.layout.routes[inf.k].name} · s ${inf.s.toFixed(0)} m · ancho ${inf.w.toFixed(1)} m` : ''}</div>
       <div class="row gap"><label class="small">Profundidad <input type="number" class="tgd" min="0.1" max="50" step="0.1" style="width:58px" value="${t.depth ?? 2}"> m</label><label class="small">Alto <input type="number" class="tgh" min="0.1" max="100" step="0.5" style="width:58px" value="${t.height ?? 6}"> m</label></div>`;
-    d.addEventListener('click', (e) => { if (e.target.closest('input,button')) return; selectTrigger(t.id, false); });
+    d.addEventListener('click', (e) => { if (e.target.closest(CARD_CTL)) return; selectTrigger(t.id, false); });
     d.querySelector('.tgn').addEventListener('change', (e) => { const v = e.target.value.trim(); if (!v) { e.target.value = t.name; return; } pushUndo(); t.name = v; renderTriggerPanel(); triggersChanged(); });
     for (const [cls, key] of [['.tgd', 'depth'], ['.tgh', 'height']]) d.querySelector(cls).addEventListener('change', (e) => { const v = parseFloat(e.target.value); if (!(v > 0)) return; pushUndo(); t[key] = v; triggersChanged(); renderTriggerPanel(); });
     d.querySelector('button.x').addEventListener('click', () => { pushUndo(); state.triggers = state.triggers.filter((q) => q !== t); if (state.selTrigger === t.id) state.selTrigger = null; renderTriggerPanel(); triggersChanged(); });
@@ -6358,7 +6360,7 @@ function renderDecoPanel() {
       set.assets = [...cur];
       commit(true); renderAssetList();
     }));
-    d.addEventListener('click', (e) => { if (e.target.closest('input,button,select,.chip')) return; state.selDeco = set.id; el.querySelectorAll('.item').forEach((x) => x.classList.toggle('sel', x === d)); });
+    d.addEventListener('click', (e) => { if (e.target.closest(CARD_CTL)) return; state.selDeco = set.id; el.querySelectorAll('.item').forEach((x) => x.classList.toggle('sel', x === d)); });
     el.appendChild(d);
   });
   refreshDecoCounts();
@@ -6518,6 +6520,8 @@ function focusPanel(id, sub = null) {
     return;
   }
   const sb = sec.closest('.sidebar') || $('sidebar'); // barra izquierda o derecha
+  const ae = document.activeElement;
+  if (ae && ae.tagName === 'SELECT' && sb.contains(ae)) return; // una lista desplegable abierta en la barra: desplazarla la cerraría
   const target = sub && sub.getBoundingClientRect().height ? sub : sec;
   // la sección arriba; si hay un elemento interior (un grupo, el cerro seleccionado) y no cabe, se baja hasta él
   let top = sec.getBoundingClientRect().top - sb.getBoundingClientRect().top + sb.scrollTop - 6;
