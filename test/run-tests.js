@@ -951,6 +951,70 @@ for (const [key, s] of Object.entries(SAMPLES)) {
     // sin tocar los controles, la roca de siempre (sin grilla extra)
     check(r0.T.cutGuides < rh.T.cutGuides / 2, `roca natural por defecto: sin puntos extra (${r0.T.cutGuides} guías; con relieve ${rh.T.cutGuides})`);
   }
+  // 0.72: UV de las paredes sin deformación (repetición X / Y), adaptación a la altura, ajuste al tramo; ancho de la pared
+  // lisa y caras exteriores
+  {
+    const spU = { ...sp, dirtSide: 'both', dirtWidth: 3, dirtWidthL: 3, dirtWidthR: 3 };
+    const art = (extra, cut = {}) => buildTerrain(L, E, { ...spU, ...extra, cutRanges: [{ k: 0, s0, s1, walls: 'art', wallSubdiv: 1, idx: 0, ...cut }] });
+    // u por metro a lo largo en los bordes horizontales de la cara interior (bordes de abajo) de cada lado; v por metro en la altura
+    const faceDens = (T) => {
+      const q = T.cutWalls.art.parts[0], P = q.positions, U = q.uvs, F = q.sub.face, du = [], dv = [];
+      for (let t = 0; t < F.length; t += 3) for (let e = 0; e < 3; e++) {
+        const a = F[t + e], c = F[t + (e + 1) % 3];
+        const dx = P[c * 3] - P[a * 3], dy = P[c * 3 + 1] - P[a * 3 + 1], dz = P[c * 3 + 2] - P[a * 3 + 2], h = Math.hypot(dx, dy);
+        if (Math.abs(dz) < 1e-4 && h > 0.5 && Math.abs(U[c * 2 + 1] - U[a * 2 + 1]) < 1e-6) du.push(Math.abs(U[c * 2] - U[a * 2]) / h);
+        if (h < 0.05 && Math.abs(dz) > 1) dv.push(Math.abs(U[c * 2 + 1] - U[a * 2 + 1]) / Math.abs(dz));
+      }
+      return { du, dv };
+    };
+    const TA = art({ cutWallTileX: 3, cutWallTileY: 2 });
+    const D = faceDens(TA), devU = Math.max(...D.du.map((v) => Math.abs(v * 3 - 1))), devV = Math.max(...D.dv.map((v) => Math.abs(v * 2 - 1)));
+    check(D.du.length > 20 && devU < 0.01 && devV < 0.01, `pared lisa: textura sin deformación a lo largo (${(devU * 100).toFixed(2)} %) y en la altura (${(devV * 100).toFixed(2)} %) con X = 3 m, Y = 2 m`);
+    // adaptación 100 %: la textura termina en el borde de arriba (v de arriba entero y constante); ajuste: u final entero
+    const TF = art({ cutWallTileX: 3, cutWallTileY: 2 }, { uvOwn: true, tileX: 3, tileY: 2, uvFit: 100, uvSnap: true });
+    const q = TF.cutWalls.art.parts[0], topV = new Set(), ends = [];
+    const F = q.sub.face;
+    for (let t = 0; t < F.length; t++) { const v = F[t]; if (q.uvs[v * 2 + 1] > 0.5) topV.add(+q.uvs[v * 2 + 1].toFixed(4)); }
+    let maxU = 0;
+    for (let t = 0; t < F.length; t++) maxU = Math.max(maxU, q.uvs[F[t] * 2]);
+    ends.push(maxU);
+    check(topV.size <= 2 && [...topV].every((v) => Math.abs(v - Math.round(v)) < 1e-3) && ends.every((u) => Math.abs(u - Math.round(u)) < 1e-3), `pared lisa: adaptación 100 % (v arriba ${[...topV].join('/')}) y ajuste al tramo (u final ${maxU.toFixed(3)})`);
+    // ancho de la pared: la tapa mide lo pedido, el terreno no asoma sobre ella ni queda bajo la pista
+    const TW = art({}, { wallW: 1.5 });
+    let capOk = 0, capN = 0;
+    for (const w of TW.ctx.cutStations) for (const r of w.rows) { capN++; if (Math.abs(Math.hypot(r.ox - r.tx, r.oy - r.ty) - 1.5) < 1e-6) capOk++; }
+    const S3 = TW.ctx.S, TPw = TW.positions, TIw = TW.baseIndices;
+    let pokeCap = 0;
+    for (let t = 0; t < TIw.length; t += 3) {
+      const [px, py, pz] = [0, 1, 2].map((c) => (TPw[TIw[t] * 3 + c] + TPw[TIw[t + 1] * 3 + c] + TPw[TIw[t + 2] * 3 + c]) / 3);
+      const n = nearestOnSamples(r, px, py), P3 = S3[n.i];
+      if (r.s[n.i] < s0 + 3 || r.s[n.i] > s1 - 3) continue;
+      const u = (px - P3.x) * -P3.ty + (py - P3.y) * P3.tx, du = Math.abs(u) - ((u >= 0 ? P3.uL : P3.uR) + 0.05);
+      if (du > 0.1 && du < 1.4) { const st = TW.ctx.cutStations.find((w) => (w.sg > 0) === (u >= 0)); const rr = st.rows.reduce((b2, x) => (Math.hypot(x.ix - px, x.iy - py) < Math.hypot(b2.ix - px, b2.iy - py) ? x : b2)); if (pz > rr.top + 0.05) pokeCap++; }
+    }
+    const uw = under(TW, 'art');
+    check(capOk === capN && pokeCap === 0 && uw.inside === 0, `pared lisa de 1,5 m de ancho: tapa ${capOk}/${capN}, terreno asomando ${pokeCap}, bajo la pista ${uw.inside}`);
+    // caras exteriores: mostrar > ocultar las enterradas > ocultar todas (quedan los extremos)
+    const outN = (o) => art({}, { outer: o }).cutWalls.art.parts[0].sub.out.length / 3;
+    const oS = outN('show'), oB = outN('buried'), oH = outN('hide');
+    check(oS > oB && oB >= oH && oH === 2 * 2 * 3, `pared lisa: caras exteriores ${oS} → enterradas ocultas ${oB} → todas ocultas ${oH} (solo los extremos)`);
+    // roca natural: la textura no se estira aunque la pared sea empinada (área en UV / área real ≈ 1 / (X·Y))
+    const rockDens = (ang) => {
+      const T = buildTerrain(L, E, { ...spU, cutWallTileX: 2, cutWallTileY: 2, cutRanges: [{ k: 0, s0, s1, walls: 'nat', wallSubdiv: 2, idx: 0, angL: ang, angR: ang }] });
+      const W = T.cutWalls.nat.parts[0], P = W.positions, U = W.uvs, rs = [];
+      for (let t = 0; t < W.indices.length; t += 3) {
+        const [a, b2, c] = [W.indices[t], W.indices[t + 1], W.indices[t + 2]];
+        const e1 = [0, 1, 2].map((k) => P[b2 * 3 + k] - P[a * 3 + k]), e2 = [0, 1, 2].map((k) => P[c * 3 + k] - P[a * 3 + k]);
+        const A3 = Math.hypot(e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]) / 2;
+        const A2 = Math.abs((U[b2 * 2] - U[a * 2]) * (U[c * 2 + 1] - U[a * 2 + 1]) - (U[c * 2] - U[a * 2]) * (U[b2 * 2 + 1] - U[a * 2 + 1])) / 2;
+        if (A3 > 0.05) rs.push((A2 / A3) * 4);
+      }
+      rs.sort((x, y) => x - y);
+      return [0.1, 0.5, 0.9].map((f) => rs[Math.floor(rs.length * f)]);
+    };
+    const m45 = rockDens(45), m85 = rockDens(85);
+    check([...m45, ...m85].every((v) => v > 0.7 && v < 1.35) && Math.abs(m45[1] - 1) < 0.08 && Math.abs(m85[1] - 1) < 0.08, `roca natural: textura sin estirarse a 45° (${m45.map((v) => v.toFixed(2)).join(' / ')}) y a 85° (${m85.map((v) => v.toFixed(2)).join(' / ')}; 1 = sin deformación)`);
+  }
 }
 
 // 0.71: geometría de colisión: camino de tierra (plano) y costados (plano o volumen cerrado), con el alto recortado bajo

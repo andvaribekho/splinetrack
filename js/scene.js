@@ -1022,7 +1022,7 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
         const zEdge = p.zc + p.sr * sg * (e + 0.05), lx = -p.ty * sg, ly = p.tx * sg;
         let off = k * Math.max(0.35, heightNat(p.x + lx * (e + 0.05), p.y + ly * (e + 0.05), 0.5) + 0.05 - zEdge);
         off = k * Math.max(0.35, heightNat(p.x + lx * (e + 0.05 + off), p.y + ly * (e + 0.05 + off), 0.5) + 0.05 - zEdge);
-        return e + 0.05 + off + 0.15;
+        return e + 0.05 + off + Math.min(0.15, wallOf(p.cut).width / 2);
       };
       const infoOf = (p, x, y, loose) => {
         const dx = x - p.x, dy = y - p.y, a = Math.abs(dx * p.tx + dy * p.ty), u = dx * -p.ty + dy * p.tx;
@@ -1058,12 +1058,58 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
     const natParts = Object.entries(out.parts).filter(([k]) => k.startsWith('cutNat:')).map(([k, q]) => ({ idx: +k.slice(7), ...q }));
     let nat = null;
     if (natParts.length) {
+      // UV de la roca alineadas a la pared (sin estirarse en pendientes empinadas): u = largo del pie de la roca en cada
+      // lado (acumulado por tramo, con ajuste a un número entero de repeticiones si se pide), v = distancia subiendo por
+      // la roca desde el pie (con adaptación: la textura termina en el borde de arriba)
+      const foot = new Map(); // `${j}:${lado}` → {c: largo acumulado del pie, t: repetición efectiva, N, UV}
+      const byK = new Map();
+      for (const p of S) { if (!byK.has(p.k)) byK.set(p.k, []); byK.get(p.k).push(p); }
+      for (const list of byK.values()) {
+        const n = list.length;
+        let st = list.findIndex((p) => !(p.cut && p.cut.walls === 'nat'));
+        if (st < 0) st = 0;
+        const runs = [];
+        let cur = null;
+        for (let q = 0; q < n; q++) { const p = list[(st + q) % n]; if (p.cut && p.cut.walls === 'nat') { if (!cur) runs.push((cur = [])); cur.push(p); } else cur = null; }
+        for (const run of runs) for (const sg of [1, -1]) {
+          const UV = wallUVOf(run[0].cut, sp), sinA = Math.sin((cutAngle(run[0].cut, sg) * Math.PI) / 180);
+          const fp = run.map((p) => { const e = (sg > 0 ? p.uL : p.uR) + 0.4; return [p.x - p.ty * sg * e, p.y + p.tx * sg * e]; });
+          const c = [0];
+          for (let q = 1; q < run.length; q++) c.push(c[q - 1] + Math.hypot(fp[q][0] - fp[q - 1][0], fp[q][1] - fp[q - 1][1]));
+          const Lt = c[c.length - 1], t = UV.snap && Lt > 0.5 ? Lt / Math.max(1, Math.round(Lt / UV.x)) : UV.x;
+          let hs = 0;
+          run.forEach((p, q) => { hs += Math.max(0, heightNat(fp[q][0], fp[q][1], 0.5) - (p.z - gap)) / Math.max(0.2, sinA); });
+          const N = Math.max(1, Math.round(hs / run.length / UV.y));
+          const tanA = Math.tan((cutAngle(run[0].cut, sg) * Math.PI) / 180);
+          run.forEach((p, q) => foot.set(`${p.j}:${sg}`, { c: c[q], t, N, UV, sinA: Math.max(0.2, sinA), tanA: Math.max(0.2, tanA) }));
+        }
+      }
+      for (const q of natParts) {
+        const P = q.positions, U = q.uvs;
+        for (let v = 0; v < P.length / 3; v++) {
+          const x = P[v * 3], y = P[v * 3 + 1], z = P[v * 3 + 2];
+          let best = null, ba = Infinity;
+          fine.query(x, y, maxW / 2 + 26, (p) => {
+            if (!p.cut || p.cut.walls !== 'nat') return;
+            const d2 = (p.x - x) ** 2 + (p.y - y) ** 2;
+            if (d2 < ba) { ba = d2; best = p; }
+          });
+          if (!best) continue;
+          const p = best, dx = x - p.x, dy = y - p.y, u = dx * -p.ty + dy * p.tx, sg = u >= 0 ? 1 : -1, F = foot.get(`${p.j}:${sg}`);
+          if (!F) continue;
+          const a = dx * p.tx + dy * p.ty, dd = Math.abs(u) - ((sg > 0 ? p.uL : p.uR) + 0.4), d = Math.max(0, dd), h = Math.max(0, z - (p.z - gap));
+          // distancia sobre la roca desde el pie: por la pendiente (h / sen θ) y, pasado el borde de arriba, por el suelo
+          const up = dd < 0 ? dd : h / F.sinA + Math.max(0, d - h / F.tanA), H = Math.max(0.3, heightNat(x, y, 0.5) - (p.z - gap)), f = F.UV.fit;
+          U[v * 2] = (F.c + a) / F.t;
+          U[v * 2 + 1] = (1 - f) * (up / F.UV.y) + f * Math.min(1, h / H) * F.N;
+        }
+      }
       const P = [], U = [], I = [];
       for (const q of natParts) { const b = P.length / 3; P.push(...q.positions); U.push(...q.uvs); for (const v of q.indices) I.push(b + v); }
       nat = { positions: new Float32Array(P), uvs: new Float32Array(U), indices: new Uint32Array(I), tris: I.length / 3, parts: natParts };
       out.parts.cutNat = nat;
     }
-    out.cutWalls = { art: anyArt ? cutArtWalls(artSt, capW, Math.max(0.5, sp.cutWallTile ?? 4)) : null, nat };
+    out.cutWalls = { art: anyArt ? cutArtWalls(artSt, capW, Math.max(0.5, sp.cutWallTile ?? 4), sp) : null, nat };
   }
   const groundAt = (x, y) => heightNat(x, y, 0.5); // nivel natural del suelo (sin las zanjas de las secciones socavadas)
   Object.defineProperty(out, 'ctx', { value: { S, fine, maxW, gap, zoneAt, heightAt, sp, origAt, riverCarveAt, inRiver, groundAt, cutStations: artSt }, enumerable: false });
@@ -1467,6 +1513,23 @@ export function rockOf(cut) {
   const st = cut && (cut.rockStyle === 'sharp' || cut.rockStyle === 'strata') ? cut.rockStyle : 'irregular';
   return { style: st, rough: clamp(Number.isFinite(cut && cut.rough) ? cut.rough : 25, 0, 100), size: clamp(Number.isFinite(cut && cut.rockSize) ? cut.rockSize : 0.9, 0.3, 8) };
 }
+/** Pared lisa de un socavado: ancho (tapa, m) y caras exteriores ('show' | 'buried' = solo las que se ven | 'hide'). */
+export function wallOf(cut) {
+  const w = cut && Number.isFinite(cut.wallW) ? cut.wallW : 0.3;
+  const o = cut && (cut.outer === 'buried' || cut.outer === 'hide') ? cut.outer : 'show';
+  return { width: clamp(w, 0.1, 3), outer: o };
+}
+/**
+ * Mapeo de la textura de las paredes de un socavado: repetición a lo largo (x) y en la altura (y) en metros, adaptación
+ * a la altura (fit 0–1: 0 = metros exactos; 1 = la textura termina justo en el borde de arriba) y ajuste a un número
+ * entero de repeticiones a lo largo (snap). El tramo usa los suyos (uvOwn) o los generales de la escena.
+ */
+export function wallUVOf(cut, sp = {}) {
+  const t0 = Math.max(0.5, +sp.cutWallTile || 4);
+  const G = { x: Number.isFinite(sp.cutWallTileX) ? sp.cutWallTileX : t0, y: Number.isFinite(sp.cutWallTileY) ? sp.cutWallTileY : t0, fit: +sp.cutWallFit || 0, snap: !!sp.cutWallSnap };
+  const O = cut && cut.uvOwn ? { x: cut.tileX ?? G.x, y: cut.tileY ?? G.y, fit: cut.uvFit ?? G.fit, snap: cut.uvSnap ?? G.snap } : G;
+  return { x: clamp(+O.x || t0, 0.1, 200), y: clamp(+O.y || t0, 0.1, 200), fit: clamp((+O.fit || 0) / 100, 0, 1), snap: !!O.snap }; // fit en %
+}
 /** Desplazamiento horizontal hacia afuera por metro de altura (cotangente; 0 en 90°). */
 export const cutLean = (deg) => (Math.abs(deg - 90) < 1e-6 ? 0 : 1 / Math.tan((deg * Math.PI) / 180));
 
@@ -1491,24 +1554,27 @@ export function cutArtStations(layout, elev, sp, S, nat, gap, capW) {
   const TOL_UP = 0.12, TOL_DOWN = 0.35; // cuánto puede quedar el suelo sobre / bajo el borde recto de la pared
   const finish = (r) => {
     const k = r.lean;
-    let top = Math.max(r.zb + 0.35, Math.max(nat(r.ix, r.iy), nat(r.ix + r.nx * capW, r.iy + r.ny * capW)) + 0.05);
+    const cw = r.capW ?? capW; // ancho de la pared (tapa) de este tramo
+    let top = Math.max(r.zb + 0.35, Math.max(nat(r.ix, r.iy), nat(r.ix + r.nx * cw, r.iy + r.ny * cw)) + 0.05);
     for (let it = 0; it < (k ? 3 : 1); it++) { // la altura mueve el borde de arriba (inclinada) y el borde, la altura
-      const off = k * Math.max(0, top - r.zEdge), oo = Math.max(off, 0) + capW;
+      const off = k * Math.max(0, top - r.zEdge), oo = Math.max(off, 0) + cw;
       r.tx = r.ix + r.nx * off; r.ty = r.iy + r.ny * off;
       r.ox = r.ix + r.nx * oo; r.oy = r.iy + r.ny * oo;
-      top = Math.max(r.zb + 0.35, Math.max(nat(r.tx, r.ty), nat(r.ox, r.oy)) + 0.05);
+      const mid = cw > 0.6 ? nat((r.tx + r.ox) / 2, (r.ty + r.oy) / 2) : -Infinity; // tapa ancha: que el suelo no asome al medio
+      top = Math.max(r.zb + 0.35, Math.max(nat(r.tx, r.ty), nat(r.ox, r.oy), mid) + 0.05);
     }
     r.top = top;
     const bo = k * (r.zb - r.zEdge); // el pie sigue la misma inclinación (bajo la barrera / el camino)
     r.bx = r.ix + r.nx * bo; r.by = r.iy + r.ny * bo;
-    r.zo = Math.min(top, nat(r.ox, r.oy)) - 1;
+    r.natO = nat(r.ox, r.oy);
+    r.zo = Math.min(top, r.natO) - 1;
     return r;
   };
   const L = (A, B, t, f) => A[f] + (B[f] - A[f]) * t;
   const lerp = (A, B, t) => {
     let nx = L(A, B, t, 'nx'), ny = L(A, B, t, 'ny');
     const h = Math.hypot(nx, ny) || 1; nx /= h; ny /= h;
-    return finish({ ix: L(A, B, t, 'ix'), iy: L(A, B, t, 'iy'), nx, ny, zEdge: L(A, B, t, 'zEdge'), zb: L(A, B, t, 'zb'), s: L(A, B, t, 's'), lean: A.lean, extra: true });
+    return finish({ ix: L(A, B, t, 'ix'), iy: L(A, B, t, 'iy'), nx, ny, zEdge: L(A, B, t, 'zEdge'), zb: L(A, B, t, 'zb'), s: L(A, B, t, 's'), lean: A.lean, capW: A.capW, extra: true });
   };
   for (const [k, list] of byRoute) {
     const n = list.length;
@@ -1527,9 +1593,10 @@ export function cutArtStations(layout, elev, sp, S, nat, gap, capW) {
       const keep = run.filter((p, j) => j === 0 || j === run.length - 1 || rows.has(p.i));
       for (const sg of [1, -1]) {
         const lean = cutLean(cutAngle(run[0].cut, sg));
+        const wallW = wallOf(run[0].cut).width;
         const st = keep.map((p) => {
           const ext = (sg > 0 ? p.uL : p.uR) + 0.05, lx = -p.ty * sg, ly = p.tx * sg, zEdge = p.zc + p.sr * sg * ext;
-          return finish({ ix: p.x + lx * ext, iy: p.y + ly * ext, nx: lx, ny: ly, zEdge, zb: zEdge - Math.max(0.35, gap + 0.05), s: p.s, i: p.i, lean });
+          return finish({ ix: p.x + lx * ext, iy: p.y + ly * ext, nx: lx, ny: ly, zEdge, zb: zEdge - Math.max(0.35, gap + 0.05), s: p.s, i: p.i, lean, capW: wallW });
         });
         const res = [st[0]];
         const refine = (A, B, depth) => {
@@ -1544,58 +1611,79 @@ export function cutArtStations(layout, elev, sp, S, nat, gap, capW) {
           refine(A, M, depth + 1); res.push(M); refine(M, B, depth + 1);
         };
         for (let j = 1; j < st.length; j++) { refine(st[j - 1], st[j], 0); res.push(st[j]); }
-        out.push({ key, sg, k, lean, rows: res });
+        out.push({ key, sg, k, lean, rows: res, cut: run[0].cut });
       }
     }
   }
   return out;
 }
 
-/** Malla de las paredes lisas (cara interior, tapa, cara exterior, pie y extremos) a partir de sus estaciones (cutArtStations). */
-export function cutArtWalls(stations, capW, tile = 4) {
-  const parts = new Map(); // por tramo socavado (idx): {pos, uv, idx}
-  for (const { key, sg, rows } of stations) {
+/**
+ * Malla de las paredes lisas (cara interior, tapa, cara exterior, pie y extremos) a partir de sus estaciones
+ * (cutArtStations). UV sin deformación: a lo largo, el largo de cada borde de cada cara (en una curva, la cara de adentro
+ * y la de afuera miden lo suyo); en la altura, el largo sobre la cara. Repetición X / Y, adaptación a la altura y ajuste a
+ * un número entero de repeticiones según wallUVOf. Cada tramo lleva sus índices por parte: face (cara interior y pie),
+ * top (tapa) y out (cara exterior y extremos), para texturas distintas. Caras exteriores: según wallOf(cut).outer.
+ */
+export function cutArtWalls(stations, capW, tile = 4, sp = {}) {
+  const parts = new Map(); // por tramo socavado (idx): {pos, uv, face, top, out}
+  for (const { key, sg, rows, cut } of stations) {
     if (rows.length < 2) continue;
-    if (!parts.has(key)) parts.set(key, { pos: [], uv: [], idx: [] });
-    const { pos, uv, idx } = parts.get(key);
-    // tiras a lo largo; el orden de los vértices deja las normales hacia afuera
-    const strip = (A, B, vA, vB) => {
+    if (!parts.has(key)) parts.set(key, { pos: [], uv: [], face: [], top: [], out: [] });
+    const Pt = parts.get(key), pos = Pt.pos, uv = Pt.uv;
+    const UV = wallUVOf(cut, { cutWallTile: tile, ...sp }), W = wallOf(cut);
+    // largo acumulado de un borde (polilínea) y su repetición efectiva (ajustada a un número entero si se pide)
+    const along = (fx, fy) => {
+      const c = [0];
+      for (let j = 1; j < rows.length; j++) c.push(c[j - 1] + Math.hypot(rows[j][fx] - rows[j - 1][fx], rows[j][fy] - rows[j - 1][fy]));
+      const Lt = c[c.length - 1], t = UV.snap && Lt > 0.5 ? Lt / Math.max(1, Math.round(Lt / UV.x)) : UV.x;
+      return c.map((v) => v / t);
+    };
+    const uB = along('bx', 'by'), uT = along('tx', 'ty'), uO = along('ox', 'oy');
+    // tira a lo largo: A/B = vértices de cada fila, uA/uB = u de cada borde, vA/vB = v; el orden deja las normales afuera
+    const strip = (list, A, B, uA, uBv, vA, vB, skip = null) => {
       const base = pos.length / 3;
-      for (const r of rows) { pos.push(...A(r), ...B(r)); uv.push(r.s / tile, vA(r) / tile, r.s / tile, vB(r) / tile); }
+      rows.forEach((r, j) => { pos.push(...A(r), ...B(r)); uv.push(uA[j], vA(r), uBv[j], vB(r)); });
       for (let q = 0; q < rows.length - 1; q++) {
+        if (skip && skip(q)) continue;
         const a0 = base + q * 2, b0 = a0 + 1, a1 = a0 + 2, b1 = a0 + 3;
-        if (sg > 0) idx.push(a0, a1, b0, b0, a1, b1); else idx.push(a0, b0, a1, b0, b1, a1);
+        if (sg > 0) list.push(a0, a1, b0, b0, a1, b1); else list.push(a0, b0, a1, b0, b1, a1);
       }
     };
-    // cara interior (mira a la pista): v = largo sobre la cara, así la textura no se estira al inclinarla
+    // cara interior: v sobre la cara; con adaptación, la textura termina justo en el borde de arriba
     const faceV = (r) => Math.hypot(r.top - r.zb, Math.hypot(r.tx - r.bx, r.ty - r.by));
-    strip((r) => [r.bx, r.by, r.zb], (r) => [r.tx, r.ty, r.top], (r) => r.zb, (r) => r.zb + faceV(r));
-    strip((r) => [r.tx, r.ty, r.top], (r) => [r.ox, r.oy, r.top], () => 0, (r) => Math.hypot(r.ox - r.tx, r.oy - r.ty)); // tapa
-    strip((r) => [r.ox, r.oy, r.top], (r) => [r.ox, r.oy, r.zo], (r) => r.top, (r) => r.zo); // exterior
-    // pie: franja angosta hacia la pista a la altura de la base (el terreno bajo la pista se quita: tapa la rendija entre
-    // la barrera o el camino de tierra y la pared)
-    strip((r) => [r.bx - r.nx * 0.4, r.by - r.ny * 0.4, r.zb], (r) => [r.bx, r.by, r.zb], () => -0.4, () => 0);
+    const Lf = rows.reduce((a, r) => a + faceV(r), 0) / rows.length, Nf = Math.max(1, Math.round(Lf / UV.y)), f = UV.fit;
+    strip(Pt.face, (r) => [r.bx, r.by, r.zb], (r) => [r.tx, r.ty, r.top], uB, uT, (r) => (1 - f) * (r.zb / UV.y), (r) => (1 - f) * ((r.zb + faceV(r)) / UV.y) + f * Nf);
+    strip(Pt.top, (r) => [r.tx, r.ty, r.top], (r) => [r.ox, r.oy, r.top], uT, uO, () => 0, (r) => Math.hypot(r.ox - r.tx, r.oy - r.ty) / UV.y); // tapa
+    // cara exterior: se puede ocultar toda o solo donde el suelo la tapa (enterrada)
+    if (W.outer !== 'hide') {
+      const buried = (r) => r.top - (r.natO ?? r.top) <= 0.12;
+      strip(Pt.out, (r) => [r.ox, r.oy, r.top], (r) => [r.ox, r.oy, r.zo], uO, uO, (r) => r.top / UV.y, (r) => r.zo / UV.y, W.outer === 'buried' ? (q) => buried(rows[q]) && buried(rows[q + 1]) : null);
+    }
+    // pie: franja angosta hacia la pista a la altura de la base (tapa la rendija entre la barrera o el camino y la pared)
+    strip(Pt.face, (r) => [r.bx - r.nx * 0.4, r.by - r.ny * 0.4, r.zb], (r) => [r.bx, r.by, r.zb], uB, uB, () => -0.4 / UV.y, () => 0);
     // tapas de los extremos (el perfil de la pared), mirando hacia afuera del tramo
     for (const [r, o] of [[rows[0], rows[1]], [rows[rows.length - 1], rows[rows.length - 2]]]) {
       const base = pos.length / 3, fx = r.ix - o.ix, fy = r.iy - o.iy; // hacia afuera del tramo
-      const Q = [[r.bx, r.by, r.zb], [r.tx, r.ty, r.top], [r.ox, r.oy, r.top], [r.ox, r.oy, r.zo], [r.ix + r.nx * capW, r.iy + r.ny * capW, r.zb]];
-      for (const v of Q) { pos.push(...v); uv.push(((v[0] - r.ix) * -fy + (v[1] - r.iy) * fx) / Math.hypot(fx, fy) / tile, v[2] / tile); }
+      const cw = r.capW ?? capW;
+      const Q = [[r.bx, r.by, r.zb], [r.tx, r.ty, r.top], [r.ox, r.oy, r.top], [r.ox, r.oy, r.zo], [r.ix + r.nx * cw, r.iy + r.ny * cw, r.zb]];
+      for (const v of Q) { pos.push(...v); uv.push(((v[0] - r.ix) * r.nx + (v[1] - r.iy) * r.ny) / UV.x, v[2] / UV.y); }
       // perfil cerrado: pie de la cara → arriba → tapa → pie de afuera → bajo la base (sirve también si la cara cuelga)
-      const tri = [[0, 1, 2], [0, 2, 4], [4, 2, 3]];
-      for (const [a, b, c] of tri) {
-        const A = Q[a], B = Q[b], C = Q[c];
+      for (const [a, b2, c] of [[0, 1, 2], [0, 2, 4], [4, 2, 3]]) {
+        const A = Q[a], B = Q[b2], C = Q[c];
         const nx = (B[1] - A[1]) * (C[2] - A[2]) - (B[2] - A[2]) * (C[1] - A[1]), ny = (B[2] - A[2]) * (C[0] - A[0]) - (B[0] - A[0]) * (C[2] - A[2]);
-        if (nx * fx + ny * fy >= 0) idx.push(base + a, base + b, base + c); else idx.push(base + a, base + c, base + b);
+        if (nx * fx + ny * fy >= 0) Pt.out.push(base + a, base + b2, base + c); else Pt.out.push(base + a, base + c, base + b2);
       }
     }
   }
-  // una malla por tramo (exportación) y todas juntas (vista)
+  // una malla por tramo (exportación; con sus índices por parte) y todas juntas (vista)
   const P = [], U = [], I = [], list = [];
   for (const [k, q] of parts) {
-    if (!q.idx.length) continue;
+    const all = [...q.face, ...q.top, ...q.out];
+    if (!all.length) continue;
     const base = P.length / 3;
-    P.push(...q.pos); U.push(...q.uv); for (const v of q.idx) I.push(base + v);
-    list.push({ idx: k, positions: new Float32Array(q.pos), uvs: new Float32Array(q.uv), indices: new Uint32Array(q.idx), tris: q.idx.length / 3 });
+    P.push(...q.pos); U.push(...q.uv); for (const v of all) I.push(base + v);
+    list.push({ idx: k, positions: new Float32Array(q.pos), uvs: new Float32Array(q.uv), indices: new Uint32Array(all), tris: all.length / 3, sub: { face: new Uint32Array(q.face), top: new Uint32Array(q.top), out: new Uint32Array(q.out) } });
   }
   if (!I.length) return null;
   const stationsN = stations.reduce((a, w) => a + w.rows.length, 0);
@@ -2011,7 +2099,7 @@ function scatter(layout, elev, sp, ground, o) {
       const sg = u >= 0 ? 1 : -1, k = Math.max(0, cutLean(cutAngle(p.cut, sg)));
       const zg = k && ground && ground.sample ? ground.sample(x, y) : null, zEdge = p.zc + p.sr * sg * ((sg > 0 ? p.uL : p.uR) + 0.05);
       const lean = zg != null && Number.isFinite(zg) ? k * Math.max(0, zg - zEdge) : 0;
-      if (Math.abs(u) < (u >= 0 ? p.uL : p.uR) + 0.5 + lean) ok = false;
+      if (Math.abs(u) < (u >= 0 ? p.uL : p.uR) + Math.max(0.5, wallOf(p.cut).width + 0.2) + lean) ok = false;
     });
     if (!ok) return;
     placed.query(x, y, o.minSpace, (t) => { if (ok && Math.hypot(t.x - x, t.y - y) < o.minSpace) ok = false; });

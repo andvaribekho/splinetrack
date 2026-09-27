@@ -79,15 +79,28 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
       const cw = terrain.cutWalls || {};
       // material general de cada tipo o uno propio por tramo (su textura: «muro_socavado_NN» / «roca_socavada_NN»)
       const nn = (i) => String(i + 1).padStart(2, '0');
-      const ownOf = (i, kind) => (textures.cutWallFor && i != null ? textures.cutWallFor(i, kind) : null);
+      const ownOf = (i, kind, part = 'face') => (textures.cutWallFor && i != null ? textures.cutWallFor(i, kind, part) : null);
       const cutMats = {};
-      const cutMat = (kind, own = null, i = null) => {
-        const key = own ? `${kind}${i}` : kind;
+      // part: face (cara interior), top (tapa), out (cara exterior); gen = textura general de esa parte
+      const cutMat = (kind, own = null, i = null, part = 'face', gen = null) => {
+        const sfx = part === 'top' ? '_tapa' : part === 'out' ? '_exterior' : '';
+        const key = `${kind}${sfx}${own ? i : ''}`;
         if (cutMats[key]) return cutMats[key];
-        const t = tex(own || (kind === 'art' ? textures.cutArt : textures.cutNat));
-        return (cutMats[key] = new THREE.MeshStandardMaterial({ name: (kind === 'art' ? 'muro_socavado' : 'roca_socavada') + (own ? `_${nn(i)}` : ''), color: t ? 0xffffff : kind === 'art' ? 0x9c9d98 : 0x6b6158, map: t, roughness: kind === 'art' ? 0.85 : 1, metalness: 0 }));
+        const t = tex(own || gen || (kind === 'art' ? textures.cutArt : textures.cutNat));
+        return (cutMats[key] = new THREE.MeshStandardMaterial({ name: (kind === 'art' ? 'muro_socavado' : 'roca_socavada') + sfx + (own ? `_${nn(i)}` : ''), color: t ? 0xffffff : kind === 'art' ? 0x9c9d98 : 0x6b6158, map: t, roughness: kind === 'art' ? 0.85 : 1, metalness: 0 }));
       };
-      if (cw.art && cw.art.parts) { for (const q of cw.art.parts) { const own = ownOf(q.idx, 'art'); root.add(mesh(`socavado_${nn(q.idx)}_paredes`, q.positions, q.indices, q.uvs, cutMat('art', own, q.idx))); } } // paredes lisas: una por tramo, extruidas desde la pista
+      if (cw.art && cw.art.parts) { // paredes lisas: una por tramo, extruidas desde la pista
+        for (const q of cw.art.parts) {
+          const ownF = ownOf(q.idx, 'art'), ownT = ownOf(q.idx, 'art', 'top'), ownO = ownOf(q.idx, 'art', 'out');
+          const split = q.sub && (ownT || ownO || textures.cutArtTop || textures.cutArtOut); // tapa o exterior con otra textura: objetos por parte
+          if (!split) { root.add(mesh(`socavado_${nn(q.idx)}_paredes`, q.positions, q.indices, q.uvs, cutMat('art', ownF, q.idx))); continue; }
+          // cada parte: su textura propia → la general de esa parte → la de la cara interior (mismo material)
+          const matOf = (part, ownP, gen) => (part !== 'face' && ownP ? cutMat('art', ownP, q.idx, part) : part !== 'face' && gen ? cutMat('art', null, null, part, gen) : cutMat('art', ownF, q.idx));
+          for (const [part, sfx, ownP, gen] of [['face', '', null, null], ['top', '_tapa', ownT, textures.cutArtTop], ['out', '_exterior', ownO, textures.cutArtOut]]) {
+            if (q.sub[part].length) root.add(mesh(`socavado_${nn(q.idx)}_paredes${sfx}`, q.positions, q.sub[part], q.uvs, matOf(part, ownP, gen)));
+          }
+        }
+      }
       else if (cw.art) root.add(mesh('terreno_muros_socavados', cw.art.positions, cw.art.indices, cw.art.uvs, cutMat('art')));
       if (cw.nat) {
         // roca: los tramos con la textura general van juntos (como siempre); los que tienen la suya, un objeto propio

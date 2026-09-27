@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Track Spline Generator v0.71</title>
+  <title>Track Spline Generator v0.72</title>
   <link rel="stylesheet" href="styles.css">
   <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.71</span></div>
+    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.72</span></div>
     <label class="proj-name-wrap" title="Nombre del proyecto: se usa al guardar (<nombre>.tsg.json) y en los autoguardados (<nombre>_auto_…)"><input id="projectName" class="proj-name" value="pista" spellcheck="false" maxlength="80"><span class="small muted" id="autosaveState"></span></label>
     <div class="top-actions">
       <button id="btnNew" title="Empezar de cero">Nuevo</button>
@@ -157,11 +157,19 @@
         <div class="meta" id="bridgeInfo"></div>
         <div id="bridgeList" class="list"></div>
         <h3 class="subhead">Paredes de los tramos socavados</h3>
+        <p class="hint">Texturas generales: cada tramo socavado puede tener las suyas en su tarjeta.</p>
         <div class="row gap"><span class="small" style="min-width:74px">Lisas</span><button id="cutArtTexBtn">Cargar textura…</button><button id="cutArtTexRemove" disabled>Por defecto</button><img id="cutArtTexThumb" class="thumb" hidden alt=""></div>
         <input id="cutArtTexFile" type="file" accept="image/*" hidden>
+        <div class="row gap" style="margin-top:6px"><span class="small" style="min-width:74px">Lisas: tapa</span><button id="cutArtTopTexBtn">Cargar textura…</button><button id="cutArtTopTexRemove" disabled>Como la cara interior</button><img id="cutArtTopTexThumb" class="thumb" hidden alt=""></div>
+        <input id="cutArtTopTexFile" type="file" accept="image/*" hidden>
+        <div class="row gap" style="margin-top:6px"><span class="small" style="min-width:74px">Lisas: exterior</span><button id="cutArtOutTexBtn">Cargar textura…</button><button id="cutArtOutTexRemove" disabled>Como la cara interior</button><img id="cutArtOutTexThumb" class="thumb" hidden alt=""></div>
+        <input id="cutArtOutTexFile" type="file" accept="image/*" hidden>
         <div class="row gap" style="margin-top:6px"><span class="small" style="min-width:74px">Naturales</span><button id="cutNatTexBtn">Cargar textura…</button><button id="cutNatTexRemove" disabled>Por defecto</button><img id="cutNatTexThumb" class="thumb" hidden alt=""></div>
         <input id="cutNatTexFile" type="file" accept="image/*" hidden>
-        <div class="field"><label>Repetición de la textura <span class="val"><input type="number" id="cutWallTileNum" min="0.5" step="0.5" style="width:56px"> m</span></label><input type="range" id="cutWallTile" min="0.5" max="30" step="0.5"></div>
+        <div class="field"><label>Repetición a lo largo (X) <span class="val"><input type="number" id="cutWallTileXNum" min="0.1" step="0.5" style="width:56px"> m</span></label><input type="range" id="cutWallTileX" min="0.5" max="30" step="0.5"></div>
+        <div class="field"><label>Repetición en la altura (Y) <span class="val"><input type="number" id="cutWallTileYNum" min="0.1" step="0.5" style="width:56px"> m</span></label><input type="range" id="cutWallTileY" min="0.5" max="30" step="0.5"></div>
+        <div class="field"><label>Adaptación a la altura <span class="val" id="cutWallFitVal"></span></label><input type="range" id="cutWallFit" min="0" max="100" step="1"></div>
+        <label class="check small"><input type="checkbox" id="cutWallSnap"> Ajustar repeticiones al tramo</label>
       </section>
 
       <section class="panel" data-panel="alts">

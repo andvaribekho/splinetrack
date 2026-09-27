@@ -811,14 +811,19 @@ export class Preview3D {
           if (!geo) continue;
           for (const part of geo.parts && geo.parts.length ? geo.parts : [geo]) {
             if (!part.indices || !part.indices.length) continue;
-            const cv = this.app.cutWallTexCanvas ? this.app.cutWallTexCanvas(kind, part.idx ?? null) : null;
-            const wm = new THREE.Mesh(mkGeo(part), wallMat(kind, cv));
-            wm.userData.cutWall = kind;
-            wm.userData.cutIdx = part.idx ?? null;
-            this.markExag(wm, (x, y, z) => z);
-            this.wallMeshes.push(wm);
-            this.extras.add(wm);
-            info.terrainTris += part.tris;
+            // lisas: cara interior, tapa y cara exterior, cada una con su textura
+            const subs = part.sub ? Object.entries(part.sub).filter(([, ix]) => ix.length) : [['face', part.indices]];
+            for (const [sub, ix] of subs) {
+              const cv = this.app.cutWallTexCanvas ? this.app.cutWallTexCanvas(kind, part.idx ?? null, false, sub) : null;
+              const wm = new THREE.Mesh(mkGeo({ positions: part.positions, uvs: part.uvs, indices: ix }), wallMat(kind, cv));
+              wm.userData.cutWall = kind;
+              wm.userData.cutIdx = part.idx ?? null;
+              wm.userData.cutPart = sub;
+              this.markExag(wm, (x, y, z) => z);
+              this.wallMeshes.push(wm);
+              this.extras.add(wm);
+              info.terrainTris += ix.length / 3;
+            }
           }
         }
         // nivel natural del suelo a lo largo de la ruta principal (para el gráfico de perfil)

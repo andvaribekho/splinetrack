@@ -58,7 +58,7 @@ async function drag(x0, y0, x1, y1, steps = 3) { await page.mouse.move(x0, y0); 
 /** Nombres de los objetos de la escena exportada, agrupados por su padre. */
 const exportNames = () => ev(async () => {
   const t = window.__tsg, m = await import('/js/export-glb.js');
-  const { root } = await m.buildExportScene(t.state.layout, t.state.result, t.state.scene, { deco: { assetById: (id) => t.app.assetById(id), sets: t.state.decoSets, paintFor: (s) => t.app.decoPaintWorld(s) }, triggers: t.app.triggersWorld(), tunnelTex: (uid, k) => t.app.tunnelTexCanvas(uid, k), assetById: (id) => t.app.assetById(id), cutWallFor: (i, k) => t.app.cutWallOwnTex(i, k) }, t.app.terrainPaintWorld ? t.app.terrainPaintWorld() : null, t.app.hillsWorld(), null);
+  const { root } = await m.buildExportScene(t.state.layout, t.state.result, t.state.scene, { deco: { assetById: (id) => t.app.assetById(id), sets: t.state.decoSets, paintFor: (s) => t.app.decoPaintWorld(s) }, triggers: t.app.triggersWorld(), tunnelTex: (uid, k) => t.app.tunnelTexCanvas(uid, k), assetById: (id) => t.app.assetById(id), cutWallFor: (i, k, p) => t.app.cutWallOwnTex(i, k, p), cutArtTop: t.state.cutArtTopTex, cutArtOut: t.state.cutArtOutTex }, t.app.terrainPaintWorld ? t.app.terrainPaintWorld() : null, t.app.hillsWorld(), null);
   const out = {};
   root.traverse((o) => { if (o !== root && o.name && o.parent) (out[o.parent.name || '?'] = out[o.parent.name || '?'] || []).push(o.name); });
   return out;
@@ -1131,6 +1131,51 @@ test('colisión: camino de tierra y costados (vista 3D, alto y grosor, exportaci
   await idle();
   const g1 = await ev((s) => { const t = window.__tsg, c = t.state.scene.cutRanges[0]; return [c.rockStyle, c.rough, !document.querySelector(s).hidden, t.preview.terrainData.cutGuides]; }, q('.bRockBox'));
   expect(g1[0] === 'sharp' && g1[1] === 80 && g1[2], `roca: ${JSON.stringify(g1)} (guías antes ${g0})`);
+});
+
+test('paredes del socavado: repetición X / Y y ajustes (generales y del tramo), ancho, caras exteriores y texturas de tapa y exterior', async () => {
+  await reset();
+  await ev(() => document.querySelector('#elevMode button[data-mode=direct]').click());
+  await idle();
+  await makeTramo('cut', [4, 5, 6, 7, 8, 9, 10, 11, 12]);
+  await ev(() => { const t = window.__tsg, zs = t.state.project.main.ctrlZ; for (const i of [6, 7, 8, 9, 10]) zs[i] = -7; zs[5] = -3.5; zs[11] = -3.5; t.scheduleBuild(); });
+  await page.click('#btnGenTerrain');
+  await idle();
+  const q = (sel) => `#bridgeList .item[data-i="0"] ${sel}`;
+  // texturas al principio de la sección del socavado: interior, tapa y exterior (lisas)
+  const rows = await ev((s) => [...document.querySelectorAll(s)].map((b) => b.dataset.kind), q('.bcutBox button.btex'));
+  expect(JSON.stringify(rows) === JSON.stringify(['wallArt', 'wallArtTop', 'wallArtOut']), `filas de textura: ${rows}`);
+  // repetición general X / Y
+  const setNum = (sel, v) => ev(([sel, v]) => { const el = document.querySelector(sel); el.value = String(v); el.dispatchEvent(new Event('change', { bubbles: true })); }, [sel, v]);
+  await setNum('#cutWallTileXNum', 3); await setNum('#cutWallTileYNum', 1.5);
+  await idle();
+  const g = await ev(() => { const sc = window.__tsg.state.scene; return [sc.cutWallTileX, sc.cutWallTileY]; });
+  expect(g[0] === 3 && g[1] === 1.5, `repetición general: ${g}`);
+  // propia del tramo, ancho de la pared y caras exteriores
+  await ev((s) => { const el = document.querySelector(s); el.checked = true; el.dispatchEvent(new Event('change', { bubbles: true })); }, q('.buvOwn'));
+  await setNum(q('.buvX'), 5);
+  await setNum(q('.bwallW'), 1.2);
+  await ev((s) => { const el = document.querySelector(s); el.value = 'buried'; el.dispatchEvent(new Event('change', { bubbles: true })); }, q('.bouter'));
+  await idle();
+  const c = await ev(() => { const t = window.__tsg, cr = t.state.scene.cutRanges[0], W = t.preview.terrainData.ctx.cutStations[0].rows[3]; return [cr.uvOwn, cr.tileX, cr.tileY, cr.wallW, cr.outer, +Math.hypot(W.ox - W.tx, W.oy - W.ty).toFixed(3)]; });
+  expect(c[0] === true && c[1] === 5 && c[2] === 1.5 && c[3] === 1.2 && c[4] === 'buried' && c[5] === 1.2, `tramo: ${JSON.stringify(c)}`);
+  // textura propia de la tapa: en 3D su malla, y al exportar la pared va por partes
+  await ev(() => { const cv = document.createElement('canvas'); cv.width = cv.height = 8; cv.getContext('2d').fillStyle = '#0f0'; cv.getContext('2d').fillRect(0, 0, 8, 8); window.__tsg.app.setBridgeTexture(0, 'wallArtTop', cv); });
+  await idle();
+  const pm = await ev(() => window.__tsg.preview.wallMeshes.filter((m) => m.userData.cutWall === 'art').map((m) => [m.userData.cutPart, !!m.material.map]));
+  expect(pm.some(([p, t]) => p === 'top' && t) && pm.some(([p, t]) => p === 'face' && !t), `mallas por parte: ${JSON.stringify(pm)}`);
+  const names = Object.values(await exportNames()).flat();
+  expect(names.includes('socavado_01_paredes') && names.includes('socavado_01_paredes_tapa') && names.includes('socavado_01_paredes_exterior'), `exportación por partes: ${names.filter((n) => /socav/.test(n))}`);
+  // sin texturas de tapa ni exterior, un solo objeto como antes
+  await ev(() => window.__tsg.app.setBridgeTexture(0, 'wallArtTop', null));
+  await idle();
+  const n2 = Object.values(await exportNames()).flat().filter((n) => /socavado_01_paredes/.test(n));
+  expect(JSON.stringify(n2) === JSON.stringify(['socavado_01_paredes']), `un objeto: ${n2}`);
+  // naturales: una sola fila de textura (la roca)
+  await ev((s) => { const el = document.querySelector(s); el.value = 'nat'; el.dispatchEvent(new Event('change', { bubbles: true })); }, q('.bwalls'));
+  await idle();
+  const rn = await ev((s) => [...document.querySelectorAll(s)].map((b) => b.dataset.kind), q('.bcutBox button.btex'));
+  expect(JSON.stringify(rn) === JSON.stringify(['wallNat']) && (await ev((s) => document.querySelector(s).hidden, q('.bArtBox'))), `naturales: ${rn}`);
 });
 
 test('tarjetas: la primera vez que se abre una lista desplegable no se cierra (la tarjeta no se vuelve a dibujar)', async () => {
