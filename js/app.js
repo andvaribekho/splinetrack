@@ -4519,6 +4519,7 @@ function bindItemsPanel() {
   $('btnNewPuddle').addEventListener('click', () => addGroup('puddle'));
   // botón «Elementos de pista ▾» de la barra del mapa
   $('btnTbPuddle').addEventListener('click', () => addGroup('puddle'));
+  $('btnTbSigns').addEventListener('click', () => { const cb = $('signs'); if (!cb.checked) { cb.checked = true; cb.dispatchEvent(new Event('change', { bubbles: true })); } focusPanel('items', $('signsHead')); });
   $('btnTbPad').addEventListener('click', () => addGroup('pad'));
   $('btnTbStrip').addEventListener('click', () => addGroup('strip'));
   // texturas de los elementos y borde de los nitro strips

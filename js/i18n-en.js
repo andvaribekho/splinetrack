@@ -1,6 +1,9 @@
 // Traducción al inglés de la interfaz. Clave = texto en español tal como aparece en la página (espacios colapsados);
 // {0}, {1}… son partes variables (números, nombres). Lo que no está aquí se muestra en español.
 export default {
+  "Charcos, turbo pads y nitro strips, en grupos, y la señalética de las curvas (al final). Clic en un elemento (mapa o 3D, con «Navegar») para seleccionarlo; arrástralo en el mapa o con el gizmo en 3D. Siempre queda sobre la pista y paralelo a su superficie.": "Puddles, turbo pads and nitro strips, in groups, and the curve signage (at the end). Click an item (map or 3D, with «Navigate») to select it; drag it on the map or with the gizmo in 3D. It always stays on the track and parallel to its surface.",
+  "Agregar elementos de pista (nitro strips, turbo pads, charcos, señalética de curvas)": "Add track items (nitro strips, turbo pads, puddles, curve signage)",
+  "Activa los carteles de las curvas y abre su sección": "Turns on the curve signs and opens their section",
   "Señalética de curvas": "Curve signage",
   "Carteles antes de las curvas de la ruta principal, según el sentido de marcha (si lo inviertes, se rehacen):": "Signs before the curves of the main route, according to the driving direction (if you reverse it, they are rebuilt):",
   "curva a la derecha": "right curve",

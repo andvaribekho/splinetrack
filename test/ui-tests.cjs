@@ -1358,13 +1358,17 @@ test('ríos: modo Línea (recta, encadenada, extremos rectos), Suavizar y Estabi
   expect(hasDet, 'detalle del contorno en la tarjeta');
 });
 
-test('señalética de curvas: carteles por fuera de la curva, lista de curvas con tipo forzado, textura propia, sentido invertido y exportación', async () => {
+test('señalética de curvas (en Elementos de pista): carteles por fuera de la curva, lista de curvas con tipo forzado, textura propia, sentido invertido y exportación', async () => {
   await reset();
   await page.click('#btnGenTerrain');
   await idle();
   const setv = (id, v) => ev(([id, v]) => { const el = document.getElementById(id); if (el.type === 'checkbox') el.checked = v; else el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }, [id, v]);
-  await setv('signs', true);
+  // desde el menú «Elementos de pista ▾»: la activa y abre su sección (dentro del panel Elementos de pista)
+  await page.click('#btnItemsMenu');
+  await page.click('#btnTbSigns');
   await idle();
+  const inItems = await ev(() => [!!document.querySelector('section.panel[data-panel="items"] #signs'), document.getElementById('signs').checked, !document.querySelector('section.panel[data-panel="signs"]')]);
+  expect(inItems.every(Boolean), `señalética en Elementos de pista, activada desde el menú: ${inItems}`);
   const info = () => ev(() => { const t = window.__tsg, SG = t.preview.signData; return SG ? { n: SG.signs.length, types: SG.curves.map((c) => c.type), sides: [...new Set(SG.signs.map((q) => q.side))], meshes: t.preview.signGroup ? t.preview.signGroup.children.map((m) => `${m.userData.sign}:${m.userData.signPart}`) : [], rows: document.querySelectorAll('#signCurveList .sign-curve').length, stats: document.querySelector('.stats, #stats3d') ? document.querySelector('.stats, #stats3d').textContent : '' } : null; });
   const a = await info();
   expect(a && a.n >= 2 && a.types.every((x) => x === 'right') && a.sides.join() === 'left' && a.meshes.includes('right:sign') && a.meshes.includes('right:post') && a.rows === a.types.length, `carteles: ${JSON.stringify(a)}`);
