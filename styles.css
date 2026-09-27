@@ -470,8 +470,8 @@ button.km-keys:hover { border-color: var(--accent); background: rgba(242,169,59,
 #autosaveState { white-space: nowrap; }
 
 /* buscador (barra superior) */
-.search-wrap { position: relative; margin-left: auto; flex: 0 1 300px; min-width: 150px; }
-.search-wrap input { width: 100%; background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; color: var(--text); padding: 5px 9px; font-size: calc(12.5px * var(--fs, 1)); }
+.search-wrap { position: relative; flex: 0 1 210px; min-width: 130px; } /* justo después de «Exportar» */
+.search-wrap input { width: 100%; background: var(--panel2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%238b95a8' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='10.5' cy='10.5' r='6.5'/%3E%3Cpath d='M15.5 15.5L21 21'/%3E%3C/svg%3E") no-repeat 8px center; border: 1px solid var(--line); border-radius: 6px; color: var(--text); padding: 5px 9px 5px 28px; font-size: calc(12.5px * var(--fs, 1)); }
 .search-wrap input:focus { outline: none; border-color: var(--accent); }
 .search-results { position: absolute; right: 0; top: calc(100% + 4px); width: min(460px, 92vw); max-height: 70vh; overflow-y: auto; z-index: 3000;
   background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); padding: 4px; }

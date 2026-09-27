@@ -1,6 +1,12 @@
 // Traducción al inglés de la interfaz. Clave = texto en español tal como aparece en la página (espacios colapsados);
 // {0}, {1}… son partes variables (números, nombres). Lo que no está aquí se muestra en español.
 export default {
+  ": la superficie se hunde (profundidad y paredes lisas o naturales, como los tramos socavados; las cascadas, suaves o de roca) y el agua queda dentro del cauce. Alt o clic derecho borra; Supr borra el río o la cascada seleccionados.": ": the surface sinks (depth and smooth or natural walls, like trench sections; waterfalls, smooth or rock) and the water stays inside the riverbed. Alt or right-click erases; Delete removes the selected river or waterfall.",
+  "Buscar… (Ctrl+K)": "Search… (Ctrl+K)",
+  "Buscar herramienta o parámetro (Ctrl+K)": "Search tool or setting (Ctrl+K)",
+  "One sided (solo de frente)": "One sided (front only)",
+  "Sin la copia trasera: el cartel solo se ve de frente (4 triángulos en vez de 8). Desmarcado, cada plano lleva una copia 1 cm más atrás con las caras hacia atrás, y por detrás se ve la misma imagen, legible": "Without the back copy: the sign is only visible from the front (4 triangles instead of 8). Unchecked, each plane has a copy 1 cm behind facing backwards, and from behind you see the same image, readable",
+  "{0} borrado (Ctrl+Z para deshacer).": "{0} deleted (Ctrl+Z to undo).",
   "Charcos, turbo pads y nitro strips, en grupos, y la señalética de las curvas (al final). Clic en un elemento (mapa o 3D, con «Navegar») para seleccionarlo; arrástralo en el mapa o con el gizmo en 3D. Siempre queda sobre la pista y paralelo a su superficie.": "Puddles, turbo pads and nitro strips, in groups, and the curve signage (at the end). Click an item (map or 3D, with «Navigate») to select it; drag it on the map or with the gizmo in 3D. It always stays on the track and parallel to its surface.",
   "Agregar elementos de pista (nitro strips, turbo pads, charcos, señalética de curvas)": "Add track items (nitro strips, turbo pads, puddles, curve signage)",
   "Activa los carteles de las curvas y abre su sección": "Turns on the curve signs and opens their section",

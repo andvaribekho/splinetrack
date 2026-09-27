@@ -1330,6 +1330,8 @@ test('ríos: modo Línea (recta, encadenada, extremos rectos), Suavizar y Estabi
   expect(st.length === 1 && q2 && q2.x === q1.x2 && q2.y === q1.y2 && !q2.c0 && q2.c1 === 's' && !q1.c1, `encadenada: ${JSON.stringify(st)}`);
   // suavizar: agrega toques de suavizado solo a los ríos que toca; en un lugar vacío no deja nada (ni un paso de deshacer)
   await setv('riverShape', 'smooth');
+  const hid = await ev(() => ['riverMode', 'riverCarvedBox', 'riverStabBox', 'riverSmoothBox', 'paintEraseLbl'].map((id) => document.getElementById(id).hidden));
+  expect(hid[0] && hid[1] && hid[2] && !hid[3] && hid[4], `suavizar: solo el pincel y su fuerza en la barra (ocultos: ${hid})`);
   const und0 = await ev(() => window.__tsg.undoLen());
   const E0 = await mapXY(c[0] - 20, c[1] + 70), E1 = await mapXY(c[0] + 10, c[1] + 70);
   await drag(E0[0], E0[1], E1[0], E1[1], 4);
@@ -1356,6 +1358,17 @@ test('ríos: modo Línea (recta, encadenada, extremos rectos), Suavizar y Estabi
   // detalle del contorno en la tarjeta
   const hasDet = await ev(() => !!document.querySelector('#riverList .item .rdet'));
   expect(hasDet, 'detalle del contorno en la tarjeta');
+  // Supr borra el río seleccionado; Ctrl+Z lo devuelve
+  await tool('pan');
+  const nR0 = await ev(() => { const t = window.__tsg; t.app.selectRiver(t.state.rivers[0].id); return t.state.rivers.length; });
+  await ev(() => document.activeElement && document.activeElement.blur && document.activeElement.blur());
+  await page.keyboard.press('Delete');
+  await idle();
+  const nR1 = await ev(() => [window.__tsg.state.rivers.length, window.__tsg.state.selRiver]);
+  await page.keyboard.press('Control+z');
+  await idle();
+  const nR2 = await ev(() => window.__tsg.state.rivers.length);
+  expect(nR1[0] === nR0 - 1 && nR1[1] == null && nR2 === nR0, `Supr borra el río: ${nR0} → ${nR1[0]} → (Ctrl+Z) ${nR2}`);
 });
 
 test('señalética de curvas (en Elementos de pista): carteles por fuera de la curva, lista de curvas con tipo forzado, textura propia, sentido invertido y exportación', async () => {
@@ -1398,6 +1411,26 @@ test('señalética de curvas (en Elementos de pista): carteles por fuera de la c
     return !!(m && m.material.map && m.material.map.image === c);
   });
   expect(same, 'la textura propia de «curva a la derecha» va en su cartel');
+  // clic en un cartel (mapa, con Navegar): abre la señalética y resalta su curva en la lista
+  await tool('pan');
+  const mk = await ev(() => { const m = window.__tsg.app.signMarkersL(); return m[m.length - 1]; });
+  const [mx, my] = await ev(([x, y]) => { const t = window.__tsg, [sx, sy] = t.editor.toScreen(x, y), r = document.getElementById('canvas2d').getBoundingClientRect(); return [sx + r.left, sy + r.top]; }, [mk.x, mk.y]);
+  await page.mouse.click(mx, my);
+  await idle();
+  const foc = await ev(() => { const t = window.__tsg, row = document.querySelector('#signCurveList .sign-curve.sel'); return [t.state.selSignCurve, row ? +row.dataset.i : null]; });
+  expect(foc[0] === mk.curve && foc[1] === mk.curve, `clic en un cartel: curva ${mk.curve}, seleccionada ${foc}`);
+  // clic en un cartel en 3D: lo mismo (por el rayo, sobre el plano del cartel)
+  const q0 = await ev(() => { const t = window.__tsg, P = t.preview, q = P.signData.signs[0], H = t.state.scene.signHeight; t.state.selSignCurve = null;
+    P.controls.target.set(q.x + q.nx * 0.02, q.y + q.ny * 0.02, q.z + H); P.camera.position.set(q.x + q.nx * 7, q.y + q.ny * 7, q.z + H); P.controls.update(); P.needsFrame = true; return q.curve; });
+  await idle();
+  const vb = await page.locator('#view3d').boundingBox();
+  await page.mouse.click(vb.x + vb.width / 2, vb.y + vb.height / 2);
+  await idle();
+  const foc3 = await ev(() => window.__tsg.state.selSignCurve);
+  expect(foc3 === q0, `clic en un cartel en 3D: curva ${q0}, seleccionada ${foc3}`);
+  // buscador justo después de «Exportar»
+  const sp = await ev(() => { const a = document.getElementById('btnExportMenu').getBoundingClientRect(), b = document.getElementById('searchWrap').getBoundingClientRect(); return [Math.round(b.left - a.right), Math.abs((a.top + a.bottom) / 2 - (b.top + b.bottom) / 2) < 6]; });
+  expect(sp[0] >= 0 && sp[0] < 40 && sp[1], `buscador después de Exportar: ${sp}`);
   const names = Object.values(await exportNames()).flat();
   expect(names.includes('senaletica') || names.includes('senal_curva_der'), `exportación: ${names.filter((n) => /senal/.test(n))}`);
   const ex = await exportNames();

@@ -9,7 +9,7 @@ export const SIGN_TYPES = ['right', 'left', 'round', 'zigzag'];
 export const SIGN_NAMES = { right: 'senal_curva_der', left: 'senal_curva_izq', round: 'senal_rotonda', zigzag: 'senal_zigzag' };
 export const SIGN_DEFAULTS = {
   signs: false, signRadius: 60, signMinTurn: 25, signZigGap: 60, signRoundTurn: 180,
-  signDist: 40, signCount: 1, signSep: 10, signSide: 'auto', signOffset: 1.5, signHeight: 1.9, signSize: 0.9, signYaw: 0,
+  signDist: 40, signCount: 1, signSep: 10, signSide: 'auto', signOffset: 1.5, signHeight: 1.9, signSize: 0.9, signYaw: 0, signOneSided: false,
   signOverrides: [], // [{x, y, type: 'curve' | 'round' | 'zigzag' | 'none'}] en metros (el vértice de la curva)
 };
 const opt = (sp, k) => (sp && sp[k] != null ? sp[k] : SIGN_DEFAULTS[k]);
@@ -136,7 +136,9 @@ export function placeSigns(layout, elev, sp = {}, ground = null, tunnels = []) {
 /**
  * Mallas de los carteles, por tipo: cartel (un plano cuadrado de signSize, centrado a signHeight sobre el suelo) y poste
  * (un plano de 0,1 m de ancho desde 0,2 m bajo el suelo hasta el centro del cartel). UV del cartel: (0,0)–(1,1), u hacia
- * la derecha de quien lo mira de frente. Devuelve {right: {sign, post, count}, …, tris}.
+ * la derecha de quien lo mira de frente. Salvo «One sided» (signOneSided), cada plano lleva una copia 1 cm más atrás con
+ * las caras (y las normales) hacia atrás y la u invertida: por detrás se ve la misma imagen, legible (8 triángulos por
+ * cartel; 4 con One sided). Materiales de una cara. Devuelve {right: {sign, post, count, vps}, …, tris}.
  */
 export function buildSigns(layout, elev, sp = {}, ground = null, tunnels = []) {
   const P = placeSigns(layout, elev, sp, ground, tunnels);
@@ -145,21 +147,24 @@ export function buildSigns(layout, elev, sp = {}, ground = null, tunnels = []) {
   for (const t of SIGN_TYPES) {
     const L = P.signs.filter((q) => q.type === t);
     if (!L.length) continue;
-    const plane = (list, fn) => {
+    const two = !opt(sp, 'signOneSided');
+    // f = cuánto va delante del punto (el cartel 2 cm delante del poste, sin parpadeo); la copia trasera, 1 cm atrás
+    const plane = (list, corners, f) => {
       const pos = [], uv = [], idx = [];
       for (const q of list) {
-        const b = pos.length / 3, [rx, ry] = [-q.ny, q.nx]; // derecha de quien mira el frente
-        for (const [a, h, u, v] of fn(q)) { pos.push(q.x + rx * a, q.y + ry * a, q.z + h); uv.push(u, v); }
+        const [rx, ry] = [-q.ny, q.nx]; // derecha de quien mira el frente
+        const put = (off, flipU) => { const b = pos.length / 3; for (const [a, h, u, v] of corners) { pos.push(q.x + rx * a + q.nx * off, q.y + ry * a + q.ny * off, q.z + h); uv.push(flipU ? 1 - u : u, v); } return b; };
+        const b = put(f, false);
         idx.push(b, b + 1, b + 2, b, b + 2, b + 3); // de frente (normal hacia n): antihorario visto desde afuera
+        if (two) { const k = put(f - 0.01, true); idx.push(k, k + 2, k + 1, k, k + 3, k + 2); } // por detrás: al revés
       }
       return { positions: new Float32Array(pos), uvs: new Float32Array(uv), indices: new Uint32Array(idx) };
     };
-    const sign = plane(L, () => [[-Sz / 2, H - Sz / 2, 0, 0], [Sz / 2, H - Sz / 2, 1, 0], [Sz / 2, H + Sz / 2, 1, 1], [-Sz / 2, H + Sz / 2, 0, 1]]);
-    const post = plane(L, () => [[-pw / 2, -0.2, 0, 0], [pw / 2, -0.2, 1, 0], [pw / 2, H, 1, 1], [-pw / 2, H, 0, 1]]);
-    // el cartel apenas delante del poste (sin parpadeo)
-    for (let v = 0; v < sign.positions.length / 3; v++) { const q = L[Math.floor(v / 4)]; sign.positions[v * 3] += q.nx * 0.02; sign.positions[v * 3 + 1] += q.ny * 0.02; }
-    res.byType[t] = { sign, post, count: L.length };
-    res.tris += L.length * 4;
+    const sign = plane(L, [[-Sz / 2, H - Sz / 2, 0, 0], [Sz / 2, H - Sz / 2, 1, 0], [Sz / 2, H + Sz / 2, 1, 1], [-Sz / 2, H + Sz / 2, 0, 1]], 0.02);
+    const post = plane(L, [[-pw / 2, -0.2, 0, 0], [pw / 2, -0.2, 1, 0], [pw / 2, H, 1, 1], [-pw / 2, H, 0, 1]], 0);
+    const vps = two ? 8 : 4; // vértices por cartel en cada malla
+    res.byType[t] = { sign, post, count: L.length, vps };
+    res.tris += L.length * (two ? 8 : 4);
   }
   return res;
 }

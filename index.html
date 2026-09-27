@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Track Spline Generator v0.81</title>
+  <title>Track Spline Generator v0.82</title>
   <link rel="stylesheet" href="styles.css">
   <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.81</span></div>
+    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.82</span></div>
     <label class="proj-name-wrap" title="Nombre del proyecto: se usa al guardar (<nombre>.tsg.json) y en los autoguardados (<nombre>_auto_…)"><input id="projectName" class="proj-name" value="pista" spellcheck="false" maxlength="80"><span class="small muted" id="autosaveState"></span></label>
     <div class="top-actions">
       <button id="btnNew" title="Empezar de cero">Nuevo</button>
@@ -22,7 +22,7 @@
       <button class="primary" id="btnExportMenu" title="Exportar la pista o la escena (ventana)">Exportar</button>
     </div>
     <div class="search-wrap" id="searchWrap">
-      <input id="searchBox" type="search" placeholder="Buscar herramienta o parámetro… (Ctrl+K)" autocomplete="off" spellcheck="false" aria-label="Buscar herramienta o parámetro">
+      <input id="searchBox" type="search" placeholder="Buscar… (Ctrl+K)" title="Buscar herramienta o parámetro (Ctrl+K)" autocomplete="off" spellcheck="false" aria-label="Buscar herramienta o parámetro">
       <div id="searchResults" class="search-results" hidden role="listbox"></div>
     </div>
   </header>
@@ -381,6 +381,7 @@
         <div class="field" title="Por defecto cada cartel mira al auto que llega; esto lo gira a mano (positivo: antihorario visto desde arriba)"><label>Giro <span class="val"><input type="number" id="signYawNum" min="-180" max="180" step="1" style="width:58px"> °</span></label><input type="range" id="signYaw" min="-180" max="180" step="1"></div>
         <div class="field" title="Altura del centro del cartel sobre el suelo"><label>Altura <span class="val"><input type="number" id="signHeightNum" min="0.3" max="10" step="0.05" style="width:58px"> m</span></label><input type="range" id="signHeight" min="0.3" max="6" step="0.05"></div>
         <div class="field" title="Ancho y alto del cartel"><label>Tamaño <span class="val"><input type="number" id="signSizeNum" min="0.1" max="6" step="0.05" style="width:58px"> m</span></label><input type="range" id="signSize" min="0.1" max="3" step="0.05"></div>
+        <label class="check small" title="Sin la copia trasera: el cartel solo se ve de frente (4 triángulos en vez de 8). Desmarcado, cada plano lleva una copia 1 cm más atrás con las caras hacia atrás, y por detrás se ve la misma imagen, legible"><input type="checkbox" id="signOneSided"> One sided (solo de frente)</label>
         <h4 class="mini">Texturas</h4>
         <div class="row gap"><span class="small" style="min-width:86px">Curva derecha</span><button id="signTexRightBtn">Cargar textura…</button><button id="signTexRightRemove" disabled>Por defecto</button><img id="signTexRightThumb" class="thumb checker" alt=""></div>
         <input id="signTexRightFile" type="file" accept="image/*" hidden>
@@ -548,7 +549,7 @@
 
       <section class="panel" data-panel="rivers">
         <h2>Ríos y cascadas <span class="badge" id="riverCount">0</span></h2>
-        <p class="hint">Con <b>Ríos y cascadas</b> (barra superior) pintas ríos sobre el terreno; con un cerro seleccionado, lo que pintes sobre él es una cascada de ese cerro. Si empiezas sobre un río, lo extiendes, y si el trazo se abre, se bifurca. <b>Posado</b>: solo el agua sobre la superficie. <b>Socavado</b>: la superficie se hunde (profundidad y paredes lisas o naturales, como los tramos socavados; las cascadas, suaves o de roca) y el agua queda dentro del cauce. Alt o clic derecho borra.</p>
+        <p class="hint">Con <b>Ríos y cascadas</b> (barra superior) pintas ríos sobre el terreno; con un cerro seleccionado, lo que pintes sobre él es una cascada de ese cerro. Si empiezas sobre un río, lo extiendes, y si el trazo se abre, se bifurca. <b>Posado</b>: solo el agua sobre la superficie. <b>Socavado</b>: la superficie se hunde (profundidad y paredes lisas o naturales, como los tramos socavados; las cascadas, suaves o de roca) y el agua queda dentro del cauce. Alt o clic derecho borra; Supr borra el río o la cascada seleccionados.</p>
         <div class="row gap"><button id="btnRiverTool">Pintar ríos…</button><button id="btnRiverClear">Borrar todos</button></div>
         <div id="riverList" class="list"></div>
         <p class="hint" id="riverInfo"></p>
@@ -796,7 +797,7 @@
               <select id="riverWalls" style="font-size:calc(12px * var(--fs, 1))" title="Paredes del cauce de los ríos nuevos (las cascadas empiezan con paredes suaves)"><option value="nat">Paredes naturales</option><option value="art">Paredes lisas</option></select>
               <label class="small" title="Subdivisiones extra de las paredes socavadas">Dens. paredes <input type="range" id="riverWallSubdiv" min="0" max="6" step="1" style="width:56px"> <span class="val" id="riverWallSubdivVal"></span></label>
             </span>
-            <span class="small muted">cerro seleccionado = cascada</span>
+            <span class="small muted" id="riverFallNote">cerro seleccionado = cascada</span>
           </span>
           <span id="editBox" class="row" hidden>
             <span id="xformBox" class="row">

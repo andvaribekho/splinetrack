@@ -230,6 +230,9 @@ export class Editor2D {
           // trigger propio: seleccionar y arrastrar a lo largo de la pista
           const tg = tool === 'pan' ? this.hitTrigger(sx, sy) : null;
           if (tg) { this.app.selectTrigger(tg.custom); this.app.beginTriggerDrag(tg.custom); this.trigDrag = true; return; }
+          // cartel de una curva: sus parámetros (y su curva en la lista)
+          const sg = tool === 'pan' ? this.hitSign(sx, sy) : null;
+          if (sg) { this.app.focusSign(sg.curve); this.draw(); return; }
           // árbol o adorno de un grupo sin «single mesh»: seleccionar y arrastrar (en planta, apoyado en el suelo)
           const vg = tool === 'pan' ? this.hitVeg(sx, sy) : null;
           if (vg) {
@@ -354,6 +357,7 @@ export class Editor2D {
       if (tl === 'pan' && this.hitCave(sx, sy)) { cv.style.cursor = 'move'; return; }
       if (tl === 'pan' && this.app.placingTrigger && this.app.placingTrigger()) { cv.style.cursor = 'copy'; return; }
       if (tl === 'pan' && this.hitTrigger(sx, sy)) { cv.style.cursor = 'move'; return; }
+      if (tl === 'pan' && this.hitSign(sx, sy)) { cv.style.cursor = 'pointer'; return; }
       if (tl === 'pan' && this.hitVeg(sx, sy)) { cv.style.cursor = 'move'; return; }
       if (tl === 'pan' && this.app.itemAtLayout(p, 6 / this.view.zoom)) { cv.style.cursor = 'move'; return; }
       if (tl === 'pan' && this.app.state.ref3d && this.app.state.ref3d.sel && !this.app.state.ref3d.locked && this.hitRef3d(p)) { cv.style.cursor = 'move'; return; }
@@ -778,6 +782,14 @@ export class Editor2D {
     ctx.restore();
   }
 
+  /** Cartel de la señalética bajo el cursor (en pantalla, a menos de 7 px) o null. */
+  hitSign(sx, sy) {
+    const list = this.app.signMarkersL ? this.app.signMarkersL() : [];
+    let best = null, bd = 7;
+    for (const q of list) { const [x, y] = this.toScreen(q.x, q.y), d = Math.hypot(x - sx, y - sy); if (d < bd) { bd = d; best = q; } }
+    return best;
+  }
+
   /** Señalética de curvas: un rombo amarillo por cartel (celeste la rotonda, naranjo el zigzag). */
   drawSigns() {
     const list = this.app.signMarkersL ? this.app.signMarkersL() : [];
@@ -786,7 +798,7 @@ export class Editor2D {
     ctx.save();
     ctx.lineWidth = 1.2; ctx.strokeStyle = '#111';
     for (const q of list) {
-      const [x, y] = this.toScreen(q.x, q.y), r = 5;
+      const [x, y] = this.toScreen(q.x, q.y), r = q.curve === this.app.state.selSignCurve ? 7 : 5;
       ctx.fillStyle = q.type === 'round' ? '#7fd3ff' : q.type === 'zigzag' ? '#ffa24a' : '#f5c518';
       ctx.beginPath(); ctx.moveTo(x, y - r); ctx.lineTo(x + r, y); ctx.lineTo(x, y + r); ctx.lineTo(x - r, y); ctx.closePath(); ctx.fill(); ctx.stroke();
     }

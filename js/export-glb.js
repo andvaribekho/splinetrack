@@ -387,7 +387,7 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
       grp.name = 'senaletica';
       root.add(grp);
       const texOf = (t) => (textures.signTex ? textures.signTex(t) : null);
-      const mat = (name, cv, color) => { const t = tex(cv); return new THREE.MeshStandardMaterial({ name, map: t, color: t ? 0xffffff : color, alphaTest: 0.5, transparent: false, side: THREE.DoubleSide, roughness: 0.7, metalness: 0 }); };
+      const mat = (name, cv, color) => { const t = tex(cv); return new THREE.MeshStandardMaterial({ name, map: t, color: t ? 0xffffff : color, alphaTest: 0.5, transparent: false, side: THREE.FrontSide, roughness: 0.7, metalness: 0 }); }; // de una cara (la copia trasera va en la malla)
       const postMat = mat('poste_senal', texOf('post'), 0x9da1a8);
       for (const [type, M] of Object.entries(SG.byType)) {
         const nm = SIGN_NAMES[type];

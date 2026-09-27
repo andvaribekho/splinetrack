@@ -127,6 +127,17 @@ export function riverField(rv) {
   // muchos toques no tiene «lomas» entre ellos y los contornos interiores (pie de las paredes, lecho) quedan limpios.
   // Afuera, el máximo por toque ya es la distancia exacta a la unión.
   interiorDistance(F, nx, ny, c);
+  // suavizado: donde pasó el pincel, el contorno se simplifica más (hasta 15 cm con fuerza 100 %)
+  let TG = null, tolMax = 0;
+  for (const q of rv.strokes) {
+    if (!q.s) continue;
+    if (!TG) TG = new Float32Array(nx * ny);
+    const tv = 0.15 * clamp(Number.isFinite(q.s) ? q.s : 0.5, 0.05, 1);
+    tolMax = Math.max(tolMax, tv);
+    const ia = Math.max(0, Math.floor((q.x - q.r - x0) / c)), ib = Math.min(nx - 1, Math.ceil((q.x + q.r - x0) / c)), ja = Math.max(0, Math.floor((q.y - q.r - y0) / c)), jb = Math.min(ny - 1, Math.ceil((q.y + q.r - y0) / c));
+    for (let j = ja; j <= jb; j++) for (let i = ia; i <= ib; i++) if (Math.hypot(x0 + i * c - q.x, y0 + j * c - q.y) < q.r && TG[j * nx + i] < tv) TG[j * nx + i] = tv;
+  }
+  const tolAt = TG ? (x, y) => { const i = Math.round((x - x0) / c), j = Math.round((y - y0) / c); return i < 0 || j < 0 || i >= nx || j >= ny ? 0 : TG[j * nx + i]; } : null;
   const sd = (x, y) => {
     const fx = (x - x0) / c, fy = (y - y0) / c;
     if (fx < 0 || fy < 0 || fx >= nx - 1 || fy >= ny - 1) return -1e3;
@@ -175,12 +186,12 @@ export function riverField(rv) {
       return depth * p * bed;
     }
     : () => 0;
-  const field = { sd, carve, inside: (x, y) => sd(x, y) > 0, bounds: { x0, y0, x1, y1 }, cell: c, rMed, wallW, depth, river: rv, grid: { F, nx, ny, x0, y0, c }, rock, walls: RW };
+  const field = { sd, carve, inside: (x, y) => sd(x, y) > 0, bounds: { x0, y0, x1, y1 }, cell: c, rMed, wallW, depth, river: rv, grid: { F, nx, ny, x0, y0, c }, rock, walls: RW, tolMax };
   // contornos (memorizados por nivel) y forma (para saber si es un lago)
   const cont = new Map();
   field.contours = (iso, tol = 0.15, maxSeg = null) => {
     const key = `${iso}|${tol}|${maxSeg}`;
-    if (!cont.has(key)) cont.set(key, simplifyLoops(marchingLoops(field.grid, iso), tol, maxSeg ?? clamp(rMed * 1.2, 1, 6)));
+    if (!cont.has(key)) cont.set(key, simplifyLoops(marchingLoops(field.grid, iso), tol, maxSeg ?? clamp(rMed * 1.2, 1, 6), tolAt));
     return cont.get(key);
   };
   let shape = null;
@@ -341,12 +352,13 @@ export function marchingLoops(G, iso) {
 }
 
 /** Simplifica contornos cerrados (Douglas-Peucker, tolerancia tol m) y parte los lados de más de maxSeg m. */
-export function simplifyLoops(loops, tol = 0.15, maxSeg = 4) {
+export function simplifyLoops(loops, tol = 0.15, maxSeg = 4, tolAt = null) {
+  // tolAt(x, y): tolerancia propia del lugar (pincel de suavizar), si es mayor que tol
   const dp = (P, a, b, keep) => {
-    let bi = -1, bd = tol;
+    let bi = -1, bd = -1;
     const [ax, ay] = P[a], [bx, by] = P[b], L = Math.hypot(bx - ax, by - ay) || 1e-9;
     for (let i = a + 1; i < b; i++) { const d = Math.abs((bx - ax) * (ay - P[i][1]) - (ax - P[i][0]) * (by - ay)) / L; if (d > bd) { bd = d; bi = i; } }
-    if (bi >= 0) { keep[bi] = 1; dp(P, a, bi, keep); dp(P, bi, b, keep); }
+    if (bi >= 0 && bd > (tolAt ? Math.max(tol, tolAt(P[bi][0], P[bi][1])) : tol)) { keep[bi] = 1; dp(P, a, bi, keep); dp(P, bi, b, keep); }
   };
   const out = [];
   for (const L of loops) {
@@ -503,7 +515,7 @@ export function riverMeshes(T, F, skip, levels = null) {
     // lisas: el agua y el lecho llegan hasta la cara aunque esté inclinada (si cuelga, pasan bajo ella; si se abre, llegan
     // bajo la tapa y quedan tapados); naturales: el lecho llega bajo el pie de la roca
     const art = F.walls && F.walls.type === 'art', k = art ? F.walls.lean : 0;
-    const dk = riverDetail(rv) / 0.08, ct = 0.15 * dk; // «Detalle del contorno» (8 cm = como antes)
+    const dk = riverDetail(rv) / 0.08, ct = 0.15 * dk + (F.tolMax || 0); // «Detalle del contorno» (8 cm = como antes) y el suavizado
     // (lisas: el contorno simplificado puede quedar hasta ct adentro: el agua y el lecho se corren eso más afuera, bajo la pared)
     const wIso = art ? Math.min(0.03, k * (0.3 * F.depth + 0.3) - 0.05) - ct : 0.03;
     const bIso = art ? Math.min(0, k * (F.depth + 0.5)) - 0.3 - ct : Math.max(0, F.wallW - 0.3);
@@ -579,26 +591,37 @@ function interiorDistance(F, nx, ny, c) {
 }
 
 /**
- * Pincel de suavizar: dentro de su radio, el campo se promedia con sus vecinos (caja de radio b), con un peso que se
- * apaga hacia el borde del pincel. Redondea las esquinas, quita las ondas entre toques y los salientes finos.
+ * Pincel de suavizar (0.82): dentro de su radio, el campo se promedia con sus vecinos (caja), con un peso que se apaga
+ * hacia el borde del pincel. El radio del promedio nunca pasa de un tercio del medio ancho del río en ese lugar: quita
+ * las ondas del borde sin angostarlo ni comerse las partes finas.
  */
 function smoothGrid(F, nx, ny, c, x0, y0, q, m) {
   const R = q.r, st = clamp(Number.isFinite(q.s) ? q.s : 0.5, 0.05, 1);
-  const nb = Math.max(1, Math.round(clamp(0.3 * R * st, c, 6) / c));
-  const i0 = Math.max(0, Math.floor((q.x - R - x0) / c) - nb), i1 = Math.min(nx - 1, Math.ceil((q.x + R - x0) / c) + nb);
-  const j0 = Math.max(0, Math.floor((q.y - R - y0) / c) - nb), j1 = Math.min(ny - 1, Math.ceil((q.y + R - y0) / c) + nb);
+  const nbMax = Math.max(1, Math.round(clamp(0.6 * R * st, c, 8) / c)), nh = 3 * nbMax; // radio del promedio; del ancho local
+  const i0 = Math.max(0, Math.floor((q.x - R - x0) / c) - nh), i1 = Math.min(nx - 1, Math.ceil((q.x + R - x0) / c) + nh);
+  const j0 = Math.max(0, Math.floor((q.y - R - y0) / c) - nh), j1 = Math.min(ny - 1, Math.ceil((q.y + R - y0) / c) + nh);
   if (i1 <= i0 || j1 <= j0) return;
-  const w = i1 - i0 + 1, h = j1 - j0 + 1, lo = -(m + (nb + 2) * c);
-  const A = new Float32Array(w * h), B = new Float32Array(w * h);
+  const w = i1 - i0 + 1, h = j1 - j0 + 1, lo = -(m + (nbMax + 2) * c);
+  const A = new Float64Array(w * h);
   for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) A[j * w + i] = Math.max(lo, F[(j0 + j) * nx + i0 + i]);
-  // caja separable (en x y después en y)
-  for (let j = 0; j < h; j++) { let acc = 0, cnt = 0; for (let i = -nb; i < w + nb; i++) { const a = i + nb; if (a < w) { acc += A[j * w + a]; cnt++; } const r = i - nb - 1; if (r >= 0 && r < w) { acc -= A[j * w + r]; cnt--; } if (i >= 0 && i < w) B[j * w + i] = acc / cnt; } }
-  for (let i = 0; i < w; i++) { let acc = 0, cnt = 0; for (let j = -nb; j < h + nb; j++) { const a = j + nb; if (a < h) { acc += B[a * w + i]; cnt++; } const r = j - nb - 1; if (r >= 0 && r < h) { acc -= B[r * w + i]; cnt--; } if (j >= 0 && j < h) A[j * w + i] = acc / cnt; } }
+  // medio ancho local: el máximo de adentro a menos de nh celdas (separable)
+  const T = new Float64Array(w * h), M = new Float64Array(w * h);
+  for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) { let v = 0; for (let d = Math.max(0, i - nh); d <= Math.min(w - 1, i + nh); d++) v = Math.max(v, A[j * w + d]); T[j * w + i] = v; }
+  for (let i = 0; i < w; i++) for (let j = 0; j < h; j++) { let v = 0; for (let d = Math.max(0, j - nh); d <= Math.min(h - 1, j + nh); d++) v = Math.max(v, T[d * w + i]); M[j * w + i] = v; }
+  // tabla de sumas (promedio de caja de cualquier radio en O(1))
+  const W1 = w + 1, SAT = new Float64Array(W1 * (h + 1));
+  for (let j = 0; j < h; j++) { let row = 0; for (let i = 0; i < w; i++) { row += A[j * w + i]; SAT[(j + 1) * W1 + i + 1] = SAT[j * W1 + i + 1] + row; } }
+  const box = (i, j, r) => {
+    const a = Math.max(0, i - r), b = Math.min(w - 1, i + r), cc = Math.max(0, j - r), d = Math.min(h - 1, j + r);
+    return (SAT[(d + 1) * W1 + b + 1] - SAT[cc * W1 + b + 1] - SAT[(d + 1) * W1 + a] + SAT[cc * W1 + a]) / ((b - a + 1) * (d - cc + 1));
+  };
   for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
-    const x = x0 + (i0 + i) * c, y = y0 + (j0 + j) * c, d = Math.hypot(x - q.x, y - q.y);
-    if (d >= R) continue;
-    const t = 1 - smooth(0.55 * R, R, d), k = (j0 + j) * nx + i0 + i, v0 = F[k];
-    if (v0 < lo && A[j * w + i] <= lo + 1e-6) continue; // lejos de todo: sigue vacío
-    F[k] = v0 + (A[j * w + i] - Math.max(lo, v0)) * t;
+    const x = x0 + (i0 + i) * c, y = y0 + (j0 + j) * c, dd = Math.hypot(x - q.x, y - q.y);
+    if (dd >= R) continue;
+    const k = j * w + i, nb = Math.min(nbMax, Math.floor((M[k] / 2.5) / c));
+    if (nb < 1) continue;
+    const t = 1 - smooth(0.55 * R, R, dd), kk = (j0 + j) * nx + i0 + i, v0 = F[kk], av = box(i, j, nb);
+    if (v0 < lo && av <= lo + 1e-6) continue; // lejos de todo: sigue vacío
+    F[kk] = v0 + (av - Math.max(lo, v0)) * t;
   }
 }

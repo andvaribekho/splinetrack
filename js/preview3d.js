@@ -1096,7 +1096,7 @@ export class Preview3D {
     this.signData = SG;
     const grp = new THREE.Group();
     grp.userData.signs = true;
-    const mat = (cv) => { const t = this.texture(cv); return new THREE.MeshStandardMaterial({ map: t, alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.7, metalness: 0 }); };
+    const mat = (cv) => { const t = this.texture(cv); return new THREE.MeshStandardMaterial({ map: t, alphaTest: 0.5, side: THREE.FrontSide, roughness: 0.7, metalness: 0 }); }; // de una cara: por detrás va la copia (salvo One sided)
     const postMat = mat(this.app.signTexCanvas('post'));
     for (const [type, M] of Object.entries(SG.byType)) {
       const add = (geo, m, part) => {
@@ -1109,7 +1109,8 @@ export class Preview3D {
         mesh.userData.sign = type; mesh.userData.signPart = part;
         // cada cartel sube o baja con el suelo exagerado, sin estirarse (4 vértices por plano)
         const pos = g.getAttribute('position'), list = SG.signs.filter((q) => q.type === type);
-        mesh.userData.exag = { base: new Float32Array(pos.array), shift: Float32Array.from({ length: pos.count }, (_, v) => list[Math.floor(v / 4)].z) };
+        mesh.userData.exag = { base: new Float32Array(pos.array), shift: Float32Array.from({ length: pos.count }, (_, v) => list[Math.floor(v / M.vps)].z) };
+        mesh.userData.signTris = M.vps / 2; // triángulos por cartel (clic: faceIndex / esto = el cartel)
         grp.add(mesh);
       };
       add(M.sign, mat(this.app.signTexCanvas(type)), 'sign');
@@ -1556,7 +1557,7 @@ export class Preview3D {
     const decoMeshes = [];
     if (this.decoGroup) this.decoGroup.traverse((o) => { if (o.isInstancedMesh) decoMeshes.push(o); });
     const water = this.waterMesh && this.extras.children.includes(this.waterMesh) ? [this.waterMesh] : [];
-    const objs = [...refMeshes, ...edgeMeshes, ...(this.riverMeshes || []), ...(this.wallMeshes || []), ...water, ...decoMeshes, ...this.itemsGroup.children, ...this.hillMeshes, ...(this.tunnelMeshes || []), ...(this.tunnelDecoMeshes || []), ...(this.terrainMesh ? [this.terrainMesh] : []), ...this.trackGroup.children, ...veg];
+    const objs = [...refMeshes, ...edgeMeshes, ...(this.riverMeshes || []), ...(this.wallMeshes || []), ...water, ...decoMeshes, ...this.itemsGroup.children, ...this.hillMeshes, ...(this.tunnelMeshes || []), ...(this.tunnelDecoMeshes || []), ...(this.terrainMesh ? [this.terrainMesh] : []), ...this.trackGroup.children, ...veg, ...(this.signGroup ? this.signGroup.children : [])];
     const st0 = this.app.state;
     // puntos de control del cerro seleccionado (se ven y se eligen a través del cerro)
     const hcs = this.hillCtrlGroup ? ray.intersectObjects(this.hillCtrlGroup.children.filter((o) => o.isMesh), false) : [];
@@ -1596,6 +1597,7 @@ export class Preview3D {
     if (this.app.state.selBridge != null && !(onTrack && this.app.bridgeAtWorld(h[0].point.x, h[0].point.y) === this.app.state.selBridge)) this.app.selectBridge(null);
     if (h.length && (h[0].object === this.terrainMesh || h[0].object.userData.water) && this.app.focusPanel) this.app.focusPanel('terrain'); // clic en el terreno o el agua: sus parámetros
     if (ud.ref3d) { this.app.selectRef3d(true); return; } // modelo de referencia: se selecciona entero
+    if (ud.sign) { const list = this.signData ? this.signData.signs.filter((q) => q.type === ud.sign) : [], q = list[Math.floor((h[0].faceIndex || 0) / (ud.signTris || 2))]; if (this.app.focusSign) this.app.focusSign(q ? q.curve : null); return; } // cartel: la señalética (y su curva)
     if (ud.cutWall) { this.app.selectHill(null); if (ud.cutIdx != null && this.app.selectBridge) this.app.selectBridge(ud.cutIdx); else if (this.app.focusPanel) this.app.focusPanel('bridges'); return; } // paredes de un tramo socavado: su tarjeta
     if (ud.riverWall) { this.app.selectHill(null); if (ud.riverId != null && this.app.selectRiver) this.app.selectRiver(ud.riverId); else if (this.app.focusPanel) this.app.focusPanel('rivers', document.getElementById('riverWallHead')); return; } // paredes de un río: su tarjeta
     if (ud.riverId != null) { this.app.selectHill(null); if (this.app.selectRiver) this.app.selectRiver(ud.riverId); return; } // río o cascada: su tarjeta

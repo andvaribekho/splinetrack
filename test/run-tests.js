@@ -1239,7 +1239,12 @@ for (const [key, s] of Object.entries(SAMPLES)) {
       const F1 = riverField({ id: 21, kind: 'river', mode: 'carved', depth: 2, walls: 'art', strokes: sparse }), F2 = riverField({ id: 22, kind: 'river', mode: 'carved', depth: 2, walls: 'art', strokes: smooth });
       const nv = (F) => F.contours(0, 0.08, 1e9).reduce((a2, q) => a2 + q.length, 0);
       const mid = [cx, cy + 10 * Math.sin(2.5)];
-      check(nv(F2) < nv(F1) * 0.7 && F2.sd(...mid) > 3.5 && F2.shape().area > F1.shape().area * 0.8, `suavizar: contorno ${nv(F1)} → ${nv(F2)} vértices, sigue pintado (centro ${F2.sd(...mid).toFixed(2)} m, área ${Math.round(F1.shape().area)} → ${Math.round(F2.shape().area)} m²)`);
+      // 0.82: pincel grande a fuerza 100 %, tres pasadas sobre un río angosto: no se lo come
+      const narrow = []; for (let t = 0; t <= 1.0001; t += 1.8 / 150) narrow.push({ x: cx + 150 * t, y: cy + 0.8 * Math.sin(t * 90) + 0.5 * Math.sin(t * 37), r: 6, e: false });
+      const hard = [...narrow]; for (let p2 = 0; p2 < 3; p2++) for (let t = 0; t <= 1.0001; t += 3.6 / 150) hard.push({ x: cx + 150 * t, y: cy + 5, r: 12, s: 1 });
+      const Fn0 = riverField({ id: 23, kind: 'river', mode: 'carved', depth: 2, walls: 'art', strokes: narrow }), Fn1 = riverField({ id: 24, kind: 'river', mode: 'carved', depth: 2, walls: 'art', strokes: hard });
+      check(nv(Fn1) < nv(Fn0) * 0.7 && Fn1.shape().area > Fn0.shape().area * 0.9, `suavizar fuerte en un río angosto: ${nv(Fn0)} → ${nv(Fn1)} vértices, área ${Math.round(Fn0.shape().area)} → ${Math.round(Fn1.shape().area)} m² (no se angosta)`);
+      check(nv(F2) < nv(F1) * 0.7 && F2.sd(...mid) > 3.5 && F2.shape().area > F1.shape().area * 0.97, `suavizar: contorno ${nv(F1)} → ${nv(F2)} vértices, sigue pintado (centro ${F2.sd(...mid).toFixed(2)} m, área ${Math.round(F1.shape().area)} → ${Math.round(F2.shape().area)} m²)`);
     }
     // 0.79: toques en línea: dentro / fuera y extremos rectos
     check(strokesContain([{ x: 0, y: 0, x2: 10, y2: 0, r: 2 }], 5, 1.9) && !strokesContain([{ x: 0, y: 0, x2: 10, y2: 0, r: 2 }], 5, 2.1) && strokesContain([{ x: 0, y: 0, x2: 10, y2: 0, r: 2 }], 11.5, 0.5) && !strokesContain([{ x: 0, y: 0, x2: 10, y2: 0, r: 2, c1: 's' }], 10.5, 0) && !strokesContain([{ x: 0, y: 0, x2: 10, y2: 0, r: 2 }, { x: 5, y: 0, r: 1, s: 0.5 }, { x: 5, y: 0, r: 1, e: true }], 5, 0), 'toques en línea: extremos redondos o rectos; borrar resta y suavizar no pinta');
@@ -1945,9 +1950,19 @@ for (const [key, s] of Object.entries(SAMPLES)) {
   let onRoad = 0;
   for (const q of P8.signs) for (const [k, r] of F8.L.routes.entries()) { const n = nearestOnSamples(r, q.x, q.y); if (n && n.d < r.w[n.i] / 2 + 0.5) onRoad++; }
   const BS = buildSigns(A.L, A.E, { signHeight: 2.5, signSize: 1.2 });
-  const M = BS.byType.right, zs = []; for (let v = 0; v < M.sign.positions.length / 3; v++) zs.push(M.sign.positions[v * 3 + 2] - BS.signs[Math.floor(v / 4)].z);
-  check(P8.signs.length > 10 && onRoad === 0 && BS.tris === BS.signs.length * 4 && Math.abs(Math.max(...zs) - 3.1) < 1e-4 && Math.abs(Math.min(...zs) - 1.9) < 1e-4 && M.post.indices.length === M.sign.indices.length,
-    `señalética: ${P8.signs.length} carteles en la figura en 8, ${onRoad} sobre una calzada; 4 triángulos por cartel; cartel de 1,2 m centrado a 2,5 m`);
+  const M = BS.byType.right, zs = []; for (let v = 0; v < M.sign.positions.length / 3; v++) zs.push(M.sign.positions[v * 3 + 2] - BS.signs[Math.floor(v / M.vps)].z);
+  check(P8.signs.length > 10 && onRoad === 0 && BS.tris === BS.signs.length * 8 && Math.abs(Math.max(...zs) - 3.1) < 1e-4 && Math.abs(Math.min(...zs) - 1.9) < 1e-4 && M.post.indices.length === M.sign.indices.length,
+    `señalética: ${P8.signs.length} carteles en la figura en 8, ${onRoad} sobre una calzada; 8 triángulos por cartel (con la copia trasera); cartel de 1,2 m centrado a 2,5 m`);
+  // 0.82: copia trasera 1 cm atrás, con la normal hacia atrás y la u invertida (se lee igual por detrás); One sided: sin copia
+  {
+    const P = M.sign.positions, U = M.sign.uvs, I = M.sign.indices, q = BS.signs.find((x) => x.type === 'right');
+    const nrm = (t) => { const [a2, b2, c2] = [I[t], I[t + 1], I[t + 2]]; const ux = P[b2 * 3] - P[a2 * 3], uy = P[b2 * 3 + 1] - P[a2 * 3 + 1], uz = P[b2 * 3 + 2] - P[a2 * 3 + 2], vx = P[c2 * 3] - P[a2 * 3], vy = P[c2 * 3 + 1] - P[a2 * 3 + 1], vz = P[c2 * 3 + 2] - P[a2 * 3 + 2]; return [uy * vz - uz * vy, uz * vx - ux * vz]; };
+    const fN = nrm(0), bN = nrm(6), dotF = fN[0] * q.nx + fN[1] * q.ny, dotB = bN[0] * q.nx + bN[1] * q.ny;
+    const gap = (P[0] - P[12]) * q.nx + (P[1] - P[13]) * q.ny; // vértice 0 (frente) y 4 (copia)
+    const OS = buildSigns(A.L, A.E, { signOneSided: true });
+    check(dotF > 0 && dotB < 0 && Math.abs(gap - 0.01) < 1e-4 && Math.abs(U[8] - (1 - U[0])) < 1e-6 && OS.tris === OS.signs.length * 4 && OS.byType.right.vps === 4,
+      `señalética: copia trasera (normal ${dotF > 0 ? 'adelante' : '?'} / ${dotB < 0 ? 'atrás' : '?'}, ${(gap * 100).toFixed(1)} cm atrás, u invertida); One sided: ${OS.tris / OS.signs.length} triángulos por cartel`);
+  }
 }
 
 // 0.63: traducción al inglés. Cada texto de index.html tiene su traducción; los patrones conservan sus partes variables.

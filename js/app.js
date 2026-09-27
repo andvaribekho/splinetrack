@@ -190,7 +190,8 @@ function renderSignCurves(SG) {
   const nBy = (i) => (SG.signs || []).filter((q) => q.curve === i).length;
   for (const c of C) {
     const d = document.createElement('div');
-    d.className = 'item sign-curve';
+    d.className = 'item sign-curve' + (c.i === state.selSignCurve ? ' sel' : '');
+    d.dataset.i = c.i;
     const val = c.forced || 'auto';
     d.innerHTML = `<div class="head"><span><strong>Curva ${c.i + 1}</strong> <span class="muted small">${SIGN_TYPE_TXT[c.type]}</span></span><span class="small muted">${nBy(c.i)} cartel(es)</span></div>
       <div class="meta"><span>s ${c.s0.toFixed(0)}–${c.s1.toFixed(0)} m · gira ${c.turn.toFixed(0)}° · radio mín. ${c.rmin.toFixed(0)} m</span>${c.parts > 1 ? `<span> · ${c.parts} curvas</span>` : ''}</div>
@@ -2367,7 +2368,15 @@ const app = {
   /** Tras armar la señalética: la lista de curvas detectadas (con su tipo automático o forzado). */
   onSignsInfo(SG) { renderSignCurves(SG); editor.draw(); },
   /** Carteles en coordenadas del lienzo (para el mapa 2D). */
-  signMarkersL() { const L = state.layout, SG = preview.signData; if (!L || !SG || !state.scene.signs) return []; return SG.signs.map((q) => { const [x, y] = L.toLayout(q.x, q.y); return { x, y, type: q.type }; }); },
+  signMarkersL() { const L = state.layout, SG = preview.signData; if (!L || !SG || !state.scene.signs) return []; return SG.signs.map((q) => { const [x, y] = L.toLayout(q.x, q.y); return { x, y, type: q.type, curve: q.curve }; }); },
+  /** Clic en un cartel (3D o mapa): abre la señalética en Elementos de pista y resalta su curva en la lista. */
+  focusSign(curve) {
+    state.selSignCurve = curve ?? null;
+    renderSignCurves(preview.signData);
+    const row = curve != null ? document.querySelector(`#signCurveList .sign-curve[data-i="${curve}"]`) : null;
+    focusPanel('items', row || $('signsHead'));
+    editor.draw();
+  },
   wallTexCanvas(kind) { return (kind === 'fall' ? state.fallWallTex : state.riverWallTex) || null; },
   /** Textura propia de las paredes de un río (k: 'wallArt' | 'wallArtTop' | 'wallArtOut' | 'wallNat') o null. */
   riverOwnTex(id, k) { const t = id != null ? state.riverTexs[id] : null; return (t && t[k]) || null; },
@@ -5363,7 +5372,7 @@ function bindControls() {
     const tag = (e.target && e.target.tagName) || '';
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
     if (!matchAction(e, 'delete')) return;
-    // Supr borra lo que esté seleccionado: puntos (uno o varios), atajo, elemento de pista o cerro
+    // Supr borra lo que esté seleccionado: puntos (uno o varios), atajo, elemento de pista, río o cascada, o cerro
     if (state.tool === 'ref' && state.ref) {
       e.preventDefault();
       removeRefImage(); // herramienta «Referencia»: quita la imagen de referencia
@@ -5387,6 +5396,15 @@ function bindControls() {
       state.selTrigger = null;
       renderTriggerPanel(); triggersChanged();
       toast('Trigger quitado (Ctrl+Z para deshacer).');
+    } else if (state.selRiver != null && state.rivers.some((rv) => rv.id === state.selRiver)) {
+      e.preventDefault(); // río o cascada seleccionado (su tarjeta, o clic en el agua o en la pared)
+      pushUndo();
+      const rv = state.rivers.find((q) => q.id === state.selRiver);
+      state.rivers = state.rivers.filter((q) => q !== rv);
+      state.selRiver = null;
+      if (preview.setRiverSelection) preview.setRiverSelection(null);
+      riversChanged();
+      toast(`${riverLabel(rv)} borrado (Ctrl+Z para deshacer).`);
     } else if (state.selAlt != null) {
       e.preventDefault();
       const i = state.selAlt;
@@ -5504,7 +5522,7 @@ function setTool(t) {
   const pb = document.getElementById('paintBox');
   if (pb) pb.hidden = !PAINT_TOOLS.includes(t);
   const eraseLbl = document.getElementById('paintEraseLbl');
-  if (eraseLbl) eraseLbl.hidden = t === 'sculpt' || t === 'tsmooth';
+  if (eraseLbl) eraseLbl.hidden = t === 'sculpt' || t === 'tsmooth' || (t === 'river' && state.scene.riverShape === 'smooth'); // (suavizar ríos: no borra)
   const subLbl = document.getElementById('paintSubdivLbl');
   if (subLbl) subLbl.hidden = t !== 'paint';
   const subMode = document.getElementById('paintSubMode'); // «Aumentar / Disminuir subd.»: solo en «Pintar subdivisión»
@@ -6156,7 +6174,7 @@ function syncSceneControls() {
   $('startGateHeightVal').textContent = `${sc.startGateHeight} m`;
   set('riverShape', sc.riverShape || 'brush'); set('riverLineCap', sc.riverLineCap || 'round'); set('riverSmooth', sc.riverSmooth ?? 50); $('riverStab').checked = !!sc.riverStab;
   if ($('riverSmoothVal')) $('riverSmoothVal').textContent = `${Math.round(sc.riverSmooth ?? 50)} %`;
-  { const sh = sc.riverShape || 'brush'; $('riverLineCap').hidden = sh !== 'line'; $('riverSmoothBox').hidden = sh !== 'smooth'; $('riverStabBox').hidden = sh !== 'brush'; }
+  { const sh = sc.riverShape || 'brush', smo = sh === 'smooth'; $('riverLineCap').hidden = sh !== 'line'; $('riverSmoothBox').hidden = !smo; $('riverStabBox').hidden = sh !== 'brush'; for (const id of ['riverMode', 'riverCarvedBox', 'riverFallNote']) $(id).hidden = smo; if (state.tool === 'river') $('paintEraseLbl').hidden = smo; } // suavizar: solo el pincel y su fuerza
   set('riverMode', sc.riverMode); set('riverWalls', sc.riverWalls === 'art' ? 'art' : 'nat'); set('riverDepth', sc.riverDepth); set('riverWallSubdiv', sc.riverWallSubdiv);
   if ($('riverDepthVal')) $('riverDepthVal').textContent = `${(+sc.riverDepth).toFixed(1)} m`;
   if ($('riverWallSubdivVal')) $('riverWallSubdivVal').textContent = `${sc.riverWallSubdiv}`;
@@ -6179,7 +6197,7 @@ function syncSceneControls() {
   set('riverWallTile', sc.riverWallTile ?? 4); set('riverWallTileNum', sc.riverWallTile ?? 4);
   // señalética
   if ($('signs')) {
-    $('signs').checked = !!sc.signs; $('signBox').classList.toggle('disabled', !sc.signs); set('signSide', sc.signSide || 'auto');
+    $('signs').checked = !!sc.signs; $('signBox').classList.toggle('disabled', !sc.signs); set('signSide', sc.signSide || 'auto'); $('signOneSided').checked = !!sc.signOneSided;
     for (const k of SIGN_NUM_KEYS) { set(k, sc[k] ?? DEFAULT_SCENE[k]); set(k + 'Num', sc[k] ?? DEFAULT_SCENE[k]); }
     for (const [id, type] of [['signTexRight', 'right'], ['signTexLeft', 'left'], ['signTexRound', 'round'], ['signTexZigzag', 'zigzag'], ['signTexPost', 'post']]) { const img = $(id + 'Thumb'); img.src = thumbURL(app.signTexCanvas(type)); img.classList.toggle('inherited', !state[id]); $(id + 'Remove').disabled = !state[id]; }
   }
@@ -7397,6 +7415,7 @@ function bindSceneControls() {
   // señalética de curvas
   $('signs').addEventListener('change', (e) => { sc.signs = e.target.checked; syncSceneControls(); sceneChanged(); });
   $('signSide').addEventListener('change', (e) => { sc.signSide = e.target.value; sceneChanged(); });
+  $('signOneSided').addEventListener('change', (e) => { sc.signOneSided = e.target.checked; sceneChanged(); });
   for (const k of SIGN_NUM_KEYS) pair(k, k + 'Num', k, k === 'signYaw' ? -180 : 0, k === 'signCount');
   for (const [id, type] of [['signTexRight', 'right'], ['signTexLeft', 'left'], ['signTexRound', 'round'], ['signTexZigzag', 'zigzag'], ['signTexPost', 'post']]) {
     $(id + 'Btn').addEventListener('click', () => $(id + 'File').click());

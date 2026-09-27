@@ -44,7 +44,7 @@ export const DEFAULT_SCENE = {
   paintFactor: 4, // multiplicador de densidad de las pinceladas antiguas (sin valor propio)
   riverWallTile: 4, // metros por repetición de la textura de las paredes socavadas
   riverBrush: 6, riverMode: 'carved', riverDepth: 2, riverWalls: 'nat', riverWallSubdiv: 2,
-  signs: false, signRadius: 60, signMinTurn: 25, signZigGap: 60, signRoundTurn: 180, signDist: 40, signCount: 1, signSep: 10, signSide: 'auto', signOffset: 1.5, signHeight: 1.9, signSize: 0.9, signYaw: 0, signOverrides: [], // señalética de curvas (0.80)
+  signs: false, signRadius: 60, signMinTurn: 25, signZigGap: 60, signRoundTurn: 180, signDist: 40, signCount: 1, signSep: 10, signSide: 'auto', signOffset: 1.5, signHeight: 1.9, signSize: 0.9, signYaw: 0, signOneSided: false, signOverrides: [], // señalética de curvas (0.80)
   riverShape: 'brush', riverLineCap: 'round', riverSmooth: 50, riverStab: false, // ríos y cascadas nuevos
   paintSubdiv: 1, // subdivisiones extra del pincel de densidad: cada pincelada nueva guarda f = (n + 1)²
   terrainType: 'forest', // 'forest' (bosque) | 'beach' (playa: costa hacia el agua) | 'mountain' (acantilado y pared de roca)
