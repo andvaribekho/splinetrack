@@ -993,7 +993,7 @@ test('camino de tierra: transición entre tramos de distinto ancho (barra en Bor
   expect(w0[0] === 0 && w0[1] === '0' && Math.abs(w0[2] - 9) < 1e-6, `transición 0: ${w0}`);
 });
 
-test('tramo socavado: paredes con las secciones de la pista y terreno de baja densidad sin triángulos sobre la pista', async () => {
+test('tramo socavado: paredes con las secciones de la pista (en vivo), terreno de baja densidad sin triángulos sobre la pista y densidad solo en naturales', async () => {
   await reset();
   await ev(() => { const sc = window.__tsg.state.scene; sc.dirtSide = 'both'; sc.dirtWidthL = 8; sc.dirtWidthR = 8; sc.dirtWidth = 8; sc.trackMeshMode = 'optimized'; sc.trackDensity = 40; });
   await ev(() => document.querySelector('#elevMode button[data-mode=direct]').click());
@@ -1023,6 +1023,29 @@ test('tramo socavado: paredes con las secciones de la pista y terreno de baja de
     return { n, own, eown, over, guides: T.cutGuides, adaptive: T.adaptive, stations: T.cutWalls.art.stations };
   });
   expect(res.n > 10 && res.own === 0 && res.eown <= 2 && res.over === 0 && res.guides > 50 && res.adaptive, `paredes y terreno: ${JSON.stringify(res)}`);
+  // 0.69: al cambiar la densidad o el modo de la pista, las paredes lisas se rehacen con las secciones nuevas
+  const stOf = () => ev(async () => {
+    const t = window.__tsg, m = await import('/js/scene.js'), L = t.state.layout, E = t.state.result, sp = t.state.scene, T = t.preview.terrainData, r = L.routes[0];
+    const rows = new Set(m.trackRows(L, E, { ...sp, skirts: sp.terrain && sp.skirts })[0].map((q) => q % r.n));
+    let own = 0, n = 0;
+    for (const w of T.ctx.cutStations) for (const q of w.rows) { if (q.extra) continue; n++; if (!rows.has(q.i)) own++; }
+    return { n, own };
+  });
+  const a0 = await stOf();
+  await ev(() => { const el = document.getElementById('trackDensity'); el.value = '100'; el.dispatchEvent(new Event('input', { bubbles: true })); });
+  await idle();
+  const a1 = await stOf();
+  await ev(() => document.querySelector('#trackMeshMode button[data-mode=uniform]').click());
+  await ev(() => { const el = document.getElementById('trackDensity'); el.value = '10'; el.dispatchEvent(new Event('input', { bubbles: true })); });
+  await idle();
+  const a2 = await stOf();
+  expect(a1.n > a0.n && a2.n < a1.n && a1.own === 0 && a2.own === 0, `paredes en vivo con la pista: ${JSON.stringify([a0, a1, a2])}`);
+  // «Densidad de las paredes» solo para paredes naturales
+  const vis = async () => ev(() => { const b = document.querySelector('#bridgeList .bwsBox'); return b ? !b.hidden : null; });
+  const vArt = await vis();
+  await ev(() => { const s = document.querySelector('#bridgeList .bwalls'); s.value = 'nat'; s.dispatchEvent(new Event('change', { bubbles: true })); });
+  await idle();
+  expect(vArt === false && (await vis()) === true, `densidad de paredes: lisas ${vArt}, naturales ${await vis()}`);
 });
 
 test('tarjetas: la primera vez que se abre una lista desplegable no se cierra (la tarjeta no se vuelve a dibujar)', async () => {

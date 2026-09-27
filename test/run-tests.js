@@ -846,6 +846,49 @@ for (const [key, s] of Object.entries(SAMPLES)) {
     }
     check(T.adaptive && T.cutGuides > 50 && over === 0, `pared lisa, terreno de baja densidad y camino de ${dw} m: ningún triángulo sobre la pista (${over}; ${T.cutGuides} puntos guía, ${T.tris} triángulos)`);
   }
+  // 0.69: en los socavados se quita el terreno bajo la pista (lisas: entre las paredes; naturales: bajo el borde de la
+  // pista, con la roca arrancando ahí). Con densidad 1 las paredes naturales ya no pasan sobre la pista ni el camino.
+  const under = (T, walls) => {
+    const S = T.ctx.S, cnt = { inside: 0, over: 0 };
+    const lists = [[T.positions, T.baseIndices]];
+    if (T.cutWalls.nat) lists.push([T.cutWalls.nat.positions, T.cutWalls.nat.indices]);
+    for (const [PP, TI] of lists) {
+      for (let t = 0; t < TI.length; t += 3) {
+        const vs = [TI[t], TI[t + 1], TI[t + 2]];
+        for (const w of [[1 / 3, 1 / 3, 1 / 3], [0.6, 0.2, 0.2], [0.2, 0.6, 0.2], [0.2, 0.2, 0.6]]) {
+          const [px, py, pz] = [0, 1, 2].map((c) => w[0] * PP[vs[0] * 3 + c] + w[1] * PP[vs[1] * 3 + c] + w[2] * PP[vs[2] * 3 + c]);
+          const n = nearestOnSamples(r, px, py), P = S[n.i];
+          if (r.s[n.i] < s0 + 2 || r.s[n.i] > s1 - 2) continue;
+          const u = (px - P.x) * -P.ty + (py - P.y) * P.tx, e = (u >= 0 ? P.uL : P.uR) + (walls === 'nat' ? -0.1 : 0.05);
+          if (Math.abs(u) < e - 0.05) { cnt.inside++; if (pz > P.zc + P.sr * u + 0.05) cnt.over++; break; }
+        }
+      }
+    }
+    return cnt;
+  };
+  for (const walls of ['art', 'nat']) for (const dw of [0, 8]) {
+    const spU = { ...sp, terrainDensity: 1, dirtSide: 'both', dirtWidth: dw, dirtWidthL: dw, dirtWidthR: dw, cutRanges: [{ k: 0, s0, s1, walls, wallSubdiv: 0 }] };
+    const T = buildTerrain(L, E, spU), c = under(T, walls);
+    const rock = walls === 'nat' ? (T.cutWalls.nat ? T.cutWalls.nat.tris : 0) : -1;
+    check(c.inside === 0 && c.over === 0 && T.removedUnderTrack > 50 && (walls === 'art' || rock > 50), `socavado ${walls === 'art' ? 'liso' : 'natural'} con camino de ${dw} m: sin terreno bajo la pista (${c.inside} dentro, ${c.over} sobre la pista; ${T.removedUnderTrack} quitados${rock >= 0 ? `, roca ${rock}` : ''})`);
+  }
+  {
+    // paredes lisas: pie hacia la pista (tapa la rendija con la barrera) y tapas en los extremos; «Densidad de las
+    // paredes» no cambia nada (solo cuenta para las naturales)
+    const T0 = buildTerrain(L, E, { ...sp, cutRanges: [{ k: 0, s0, s1, walls: 'art', wallSubdiv: 0 }] });
+    const T4 = buildTerrain(L, E, { ...sp, cutRanges: [{ k: 0, s0, s1, walls: 'art', wallSubdiv: 4 }] });
+    const W = T0.cutWalls.art, P = W.positions;
+    let foot = 0;
+    for (let v = 0; v < P.length; v += 3) {
+      const dx = P[v] - x, dy = P[v + 1] - y;
+      if (Math.abs(dx * r.tx[i] + dy * r.ty[i]) > 3) continue;
+      const u = Math.abs(dx * lx + dy * ly), S0 = T0.ctx.S[i];
+      if (Math.abs(u - (S0.uL + 0.05 - 0.4)) < 0.05 && P[v + 2] < zt) foot++;
+    }
+    const nRows = T0.ctx.cutStations.reduce((a, w) => a + w.rows.length, 0), nSeg = T0.ctx.cutStations.reduce((a, w) => a + w.rows.length - 1, 0);
+    check(foot >= 2 && W.tris === nSeg * 8 + 2 * T0.ctx.cutStations.length * 2 && nRows > 0, `pared lisa: pie y tapas de los extremos (${foot} vértices del pie cerca; ${W.tris} triángulos)`);
+    check(T0.tris === T4.tris && T0.cutWalls.art.tris === T4.cutWalls.art.tris, `pared lisa: la densidad de las paredes no cambia nada (${T0.tris} / ${T4.tris})`);
+  }
 }
 
 // pilares: nunca sobre otra calzada, su camino de tierra o un atajo

@@ -3201,7 +3201,7 @@ function refreshBridgeList() {
       <div class="field"><label>Tipo</label><select class="btype" title="Pista: el terreno se adapta como en el resto de la pista. Puente: el terreno no se adapta (queda el relieve natural bajo el tramo) y se crean pilares si queda en altura"><option value="track"${!isBr && !isCut ? ' selected' : ''}>Pista (el terreno se adapta)</option><option value="bridge"${isBr ? ' selected' : ''}>Puente: Terreno no se adapta y se crean pilares</option><option value="cut"${isCut ? ' selected' : ''}>Socavado (zanja con paredes)</option></select></div>
       <div class="bcutBox"${isCut ? '' : ' hidden'}>
         <div class="field"><label>Paredes</label><select class="bwalls"><option value="art"${b.walls !== 'nat' ? ' selected' : ''}>Lisas (extruidas de la pista)</option><option value="nat"${b.walls === 'nat' ? ' selected' : ''}>Naturales (del terreno)</option></select></div>
-        <div class="field"><label>Densidad de las paredes <span class="val bwsV">${b.wallSubdiv ?? 2} (×${subdivFactor(b.wallSubdiv ?? 2)} pol.)</span></label><input type="range" class="bws" min="0" max="6" step="1" value="${b.wallSubdiv ?? 2}"></div>
+        <div class="field bwsBox"${b.walls === 'nat' ? '' : ' hidden'} title="Solo paredes naturales: más triángulos en la roca (las lisas siguen la densidad de la pista)"><label>Densidad de las paredes <span class="val bwsV">${b.wallSubdiv ?? 2} (×${subdivFactor(b.wallSubdiv ?? 2)} pol.)</span></label><input type="range" class="bws" min="0" max="6" step="1" value="${b.wallSubdiv ?? 2}"></div>
         <div class="meta">Baja los puntos del tramo (perfil o gizmo Z): el terreno se abre en una zanja. Texturas de las paredes: al final de esta sección.</div>
       </div>
       <label class="check small" title="El tramo toma el ancho de la pista (sin transiciones); desmárcalo para darle su propio ancho"><input type="checkbox" class="bsame"${b.sameWidth ? ' checked' : ''}> Mismo ancho que la pista</label>
@@ -3262,7 +3262,7 @@ function refreshBridgeList() {
     for (const [cls, key] of [['.bdwL', 'dirtWL'], ['.bdwR', 'dirtWR']]) d.querySelector(cls).addEventListener('change', (e) => { const v = parseFloat(e.target.value); if (!Number.isFinite(v) || v < 0) return; pushUndo(); b[key] = Math.min(40, v); scheduleBuild(); });
     d.querySelector('.bbarMode').addEventListener('change', (e) => setMode('barrier', 'barrierSide', e.target.value));
     d.querySelector('.btype').addEventListener('change', (e) => { pushUndo(); b.type = e.target.value; if (b.type === 'cut' && !b.walls) { b.walls = 'art'; b.wallSubdiv = 2; } refreshBridgeList(); scheduleBuild(); });
-    d.querySelector('.bwalls').addEventListener('change', (e) => { pushUndo(); b.walls = e.target.value; scheduleBuild(); });
+    d.querySelector('.bwalls').addEventListener('change', (e) => { pushUndo(); b.walls = e.target.value; d.querySelector('.bwsBox').hidden = b.walls !== 'nat'; scheduleBuild(); });
     d.querySelector('.bws').addEventListener('input', (e) => { b.wallSubdiv = Math.round(parseFloat(e.target.value)); d.querySelector('.bwsV').textContent = `${b.wallSubdiv} (×${subdivFactor(b.wallSubdiv)} pol.)`; });
     d.querySelector('.bws').addEventListener('change', () => { pushUndo(); scheduleBuild(); });
     d.querySelectorAll('button.btex').forEach((btn) => btn.addEventListener('click', () => pickTextureFile((cv) => app.setBridgeTexture(i, btn.dataset.kind, cv))));
@@ -6964,7 +6964,8 @@ function bindSceneControls() {
   $('btnDirtTexRemove').addEventListener('click', () => { state.dirtTex = null; syncSceneControls(); sceneChanged(); });
   // geometría de la pista (densidad del trazado)
   {
-    const trackMeshChanged = () => { syncSceneControls(); preview.update(false, true); };
+    // las paredes lisas de los socavados usan las secciones de la pista (y son parte del terreno): con alguna, se rehace todo
+    const trackMeshChanged = () => { syncSceneControls(); const art = sc.terrain && (sc.cutRanges || []).some((c) => c.walls !== 'nat'); preview.update(false, !art); };
     document.querySelectorAll('#trackMeshMode button').forEach((b) => b.addEventListener('click', () => { sc.trackMeshMode = b.dataset.mode; trackMeshChanged(); }));
     const dens = (v) => { v = Math.round(Math.max(1, Math.min(100, v))); if (!isFinite(v)) return; sc.trackDensity = v; trackMeshChanged(); };
     $('trackDensity').addEventListener('input', (e) => dens(parseFloat(e.target.value)));

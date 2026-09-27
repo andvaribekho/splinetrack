@@ -472,6 +472,7 @@ export default {
   "Densidad de geometría": "Geometry density",
   "Densidad de la malla del terreno: más alto = celdas más chicas, el terreno queda más pegado a la pista y hay más polígonos.": "Terrain mesh density: higher = smaller cells, the terrain hugs the track more closely and there are more polygons.",
   "Densidad de las paredes": "Wall density",
+  "Solo paredes naturales: más triángulos en la roca (las lisas siguen la densidad de la pista)": "Natural walls only: more triangles in the rock (smooth walls follow the track density)",
   "Densidad de polígonos": "Polygon density",
   "Densidad de rocas": "Rock density",
   "Densidad del mesh": "Mesh density",
