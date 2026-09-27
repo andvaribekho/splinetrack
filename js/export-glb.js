@@ -77,7 +77,8 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
       // paredes de las secciones socavadas
       const cw = terrain.cutWalls || {};
       const cutMat = (kind) => { const t = tex(kind === 'art' ? textures.cutArt : textures.cutNat); return new THREE.MeshStandardMaterial({ name: kind === 'art' ? 'muro_socavado' : 'roca_socavada', color: t ? 0xffffff : kind === 'art' ? 0x9c9d98 : 0x6b6158, map: t, roughness: kind === 'art' ? 0.85 : 1, metalness: 0 }); };
-      if (cw.art) root.add(mesh('terreno_muros_socavados', cw.art.positions, cw.art.indices, cw.art.uvs, cutMat('art')));
+      if (cw.art && cw.art.parts) { const am = cutMat('art'); for (const q of cw.art.parts) root.add(mesh(`socavado_${String(q.idx + 1).padStart(2, '0')}_paredes`, q.positions, q.indices, q.uvs, am)); } // paredes lisas: una por tramo, extruidas desde la pista
+      else if (cw.art) root.add(mesh('terreno_muros_socavados', cw.art.positions, cw.art.indices, cw.art.uvs, cutMat('art')));
       if (cw.nat) root.add(mesh('terreno_roca_socavada', cw.nat.positions, cw.nat.indices, cw.nat.uvs, cutMat('nat')));
       if (terrain.wall) root.add(mesh('terreno_cauces', terrain.wall.positions, terrain.wall.indices, terrain.wall.uvs, wallMat('river'))); // lecho y paredes de los ríos
       // agua (playa / montaña): plano al nivel del mar

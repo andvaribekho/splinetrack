@@ -862,7 +862,7 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
     let zone = Infinity;
     fine.query(x, y, maxW / 2 + rho, (p) => {
       if (skip && skip[p.j] >= 0) return;
-      if ((only === 1 && p.susp) || (only === 2 && !p.susp)) return;
+      if ((only === 1 && p.susp) || (only === 2 && !p.susp) || (only === 3 && (!p.susp || p.cut))) return;
       const dx = x - p.x, dy = y - p.y;
       const a = Math.abs(dx * p.tx + dy * p.ty);
       if (a > rho) return;
@@ -894,7 +894,7 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
       const d = Math.hypot(Math.max(0, Math.abs(u) - ext), Math.max(0, a - p.ds * 0.6));
       const floor = p.z - gap;
       let z;
-      if (!nat) z = floor + d * 14; // muro artificial: casi vertical
+      if (!nat) { if (d > 1e-3) return; z = floor; } // pared lisa: la pone una malla propia extruida desde la pista (0.64); el terreno solo baja dentro
       else {
         const n = cutNoise(x / 2.3, y / 2.3), n2 = cutNoise(x / 0.9 + 31, y / 0.9 - 17);
         z = floor + d * (2.2 + 1.4 * n) + (d > 0.3 ? (n2 - 0.5) * 1.2 : 0); // roca: pendiente irregular
@@ -905,7 +905,7 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
   };
   const heightAt0 = anySusp ? (x, y, rho) => {
     const zone = zoneAt(x, y, rho, null, 1);
-    const zs = zoneAt(x, y, rho, null, 2);
+    const zs = zoneAt(x, y, rho, null, 3); // puentes y tramos suspendidos (en los socavados manda la zanja: cutInfo)
     if (zone < Infinity) return Math.min(zone, zs) - gap; // junto al extremo de un puente: tampoco sobre su tablero
     let z = heightNat(x, y, rho);
     if (zs < Infinity) z = Math.min(z, zs - gap);
@@ -962,12 +962,29 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
   out.rivers = RF.length;
   // cauces socavados (ríos) y paredes de las secciones socavadas: sus triángulos van aparte, con su propio material
   const carvedRivers = RF.some((F) => F.river.mode === 'carved');
+  // paredes lisas de los tramos socavados: malla propia que sube desde el borde exterior de la pista (después del camino de
+  // tierra y la barrera) hasta el suelo natural, con una tapa arriba y una cara exterior que baja bajo el suelo. En su
+  // franja el terreno se abre (esos triángulos se quitan), así no hay escalones ni rampas contra la pared.
+  const anyArt = S.some((p) => p.cut && p.cut.walls !== 'nat');
+  const hcW = Math.max(0.3, out.cellFine || out.cell || 2), capW = Math.max(0.8, 2 * hcW);
+  const artBand = anyArt ? (x, y) => {
+    let hit = false;
+    fine.query(x, y, maxW / 2 + capW + 2, (p) => {
+      if (hit || !p.cut || p.cut.walls === 'nat') return;
+      const dx = x - p.x, dy = y - p.y;
+      if (Math.abs(dx * p.tx + dy * p.ty) > p.ds * 0.6) return;
+      const u = dx * -p.ty + dy * p.tx, ext = (u >= 0 ? p.uL : p.uR) + 0.05;
+      const dd = Math.abs(u) - ext;
+      if (dd > -hcW && dd < capW - hcW * 0.5 && heightNat(x, y, 0.5) - (p.z - gap) > 0.15) hit = true;
+    });
+    return hit;
+  } : null;
   if (carvedRivers || anyCut) {
-    const cutCarve = (x, y) => { const ci = cutInfo(x, y); if (!ci.kind) return null; const zn = heightNat(x, y, 0.5); return zn - ci.z > 0.3 ? ci.kind : null; };
-    const classify = (x, y) => (carvedRivers && riverCarveAt(x, y) > 0.05 ? 'river' : anyCut ? cutCarve(x, y) : null);
+    const cutCarve = (x, y) => { const ci = cutInfo(x, y); if (!ci.kind || ci.kind === 'cutArt') return null; const zn = heightNat(x, y, 0.5); return zn - ci.z > 0.3 ? ci.kind : null; };
+    const classify = (x, y) => (carvedRivers && riverCarveAt(x, y) > 0.05 ? 'river' : artBand && artBand(x, y) ? 'cutArtHole' : anyCut ? cutCarve(x, y) : null);
     splitParts(out, classify, { river: Math.max(0.5, sp.riverWallTile ?? 4), cutArt: Math.max(0.5, sp.cutWallTile ?? 4), cutNat: Math.max(0.5, sp.cutWallTile ?? 4) });
     out.wall = out.parts.river || null; // compatibilidad: cauces de los ríos
-    out.cutWalls = { art: out.parts.cutArt || null, nat: out.parts.cutNat || null };
+    out.cutWalls = { art: anyArt ? cutArtWalls(S, (x, y) => heightNat(x, y, 0.5), gap, capW, Math.max(0.5, sp.cutWallTile ?? 4)) : null, nat: out.parts.cutNat || null };
   }
   const groundAt = (x, y) => heightNat(x, y, 0.5); // nivel natural del suelo (sin las zanjas de las secciones socavadas)
   Object.defineProperty(out, 'ctx', { value: { S, fine, maxW, gap, zoneAt, heightAt, sp, origAt, riverCarveAt, inRiver, groundAt }, enumerable: false });
@@ -1354,6 +1371,68 @@ export function buildHills(layout, elev, spIn, T, hills) {
  * Separa triángulos de la malla por tipo: classify(x, y) → clave (o null = se queda en la malla base). Deja
  * mesh.baseIndices y mesh.parts = {clave: malla compacta con UV oblicuas (ver splitWalls)}. tiles: {clave: metros}.
  */
+/**
+ * Paredes lisas de los tramos socavados, extruidas desde el borde exterior de la pista (calzada + camino de tierra +
+ * barrera): cara interior vertical (desde un poco bajo la calzada hasta el suelo natural), tapa de ancho capW y cara
+ * exterior que baja 1 m bajo el suelo. S = muestras de la pista (trackSamples); nat(x, y) = suelo natural.
+ */
+export function cutArtWalls(S, nat, gap, capW, tile = 4) {
+  const parts = new Map(); // por tramo socavado (idx): {pos, uv, idx}
+  let pos, uv, idx;
+  const byRoute = new Map();
+  for (const p of S) { if (!byRoute.has(p.k)) byRoute.set(p.k, []); byRoute.get(p.k).push(p); }
+  const isArt = (p) => p && p.cut && p.cut.walls !== 'nat';
+  for (const list of byRoute.values()) {
+    const n = list.length;
+    // tramos seguidos de muestras «lisas» (en un circuito, un tramo puede pasar por el inicio)
+    let start = list.findIndex((p) => !isArt(p));
+    if (start < 0) start = 0;
+    const runs = [];
+    let cur = null;
+    for (let q = 0; q < n; q++) {
+      const p = list[(start + q) % n];
+      if (isArt(p)) { if (!cur) runs.push((cur = [])); cur.push(p); } else cur = null;
+    }
+    for (const run of runs) {
+      if (run.length < 2) continue;
+      const key = run[0].cut.idx ?? 0;
+      if (!parts.has(key)) parts.set(key, { pos: [], uv: [], idx: [] });
+      ({ pos, uv, idx } = parts.get(key));
+      for (const sg of [1, -1]) {
+        const rows = run.map((p) => {
+          const ext = (sg > 0 ? p.uL : p.uR) + 0.05, lx = -p.ty * sg, ly = p.tx * sg;
+          const ix = p.x + lx * ext, iy = p.y + ly * ext, ox = p.x + lx * (ext + capW), oy = p.y + ly * (ext + capW);
+          const zb = p.zc + p.sr * sg * ext - Math.max(0.35, gap + 0.05);
+          const top = Math.max(zb + 0.35, Math.max(nat(ix, iy), nat(ox, oy)) + 0.05);
+          return { ix, iy, ox, oy, zb, top, zo: Math.min(top, nat(ox, oy)) - 1, s: p.s };
+        });
+        // tres tiras: cara interior, tapa y cara exterior; el orden de los vértices deja las normales hacia afuera
+        const strip = (A, B, vA, vB) => {
+          const base = pos.length / 3;
+          rows.forEach((r, q) => { const a = A(r), b = B(r); pos.push(...a, ...b); uv.push(r.s / tile, vA(r) / tile, r.s / tile, vB(r) / tile); void q; });
+          for (let q = 0; q < rows.length - 1; q++) {
+            const a0 = base + q * 2, b0 = a0 + 1, a1 = a0 + 2, b1 = a0 + 3;
+            if (sg > 0) idx.push(a0, a1, b0, b0, a1, b1); else idx.push(a0, b0, a1, b0, b1, a1);
+          }
+        };
+        strip((r) => [r.ix, r.iy, r.zb], (r) => [r.ix, r.iy, r.top], (r) => r.zb, (r) => r.top); // interior (mira a la pista)
+        strip((r) => [r.ix, r.iy, r.top], (r) => [r.ox, r.oy, r.top], () => 0, () => capW); // tapa
+        strip((r) => [r.ox, r.oy, r.top], (r) => [r.ox, r.oy, r.zo], (r) => r.top, (r) => r.zo); // exterior
+      }
+    }
+  }
+  // una malla por tramo (exportación) y todas juntas (vista)
+  const P = [], U = [], I = [], list = [];
+  for (const [k, q] of parts) {
+    if (!q.idx.length) continue;
+    const base = P.length / 3;
+    P.push(...q.pos); U.push(...q.uv); for (const v of q.idx) I.push(base + v);
+    list.push({ idx: k, positions: new Float32Array(q.pos), uvs: new Float32Array(q.uv), indices: new Uint32Array(q.idx), tris: q.idx.length / 3 });
+  }
+  if (!I.length) return null;
+  return { positions: new Float32Array(P), uvs: new Float32Array(U), indices: new Uint32Array(I), tris: I.length / 3, extruded: true, parts: list };
+}
+
 export function splitParts(mesh, classify, tiles = {}) {
   const P = mesh.positions, I = mesh.indices;
   const base = [], groups = {};

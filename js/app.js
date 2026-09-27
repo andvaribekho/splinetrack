@@ -125,6 +125,7 @@ function undo() {
   if (o.elevMode && o.elevMode !== (state.elev.mode || 'auto')) { state.elev.mode = o.elevMode; if (typeof syncElevMode === 'function') syncElevMode(); }
   if (o.cutZones) state.cutZones = o.cutZones;
   state.overrides = o.overrides;
+  if (o.refCanvas && !state.ref && state.lastRemovedRef) { state.ref = state.lastRemovedRef; state.lastRemovedRef = null; } // imagen de referencia quitada
   if (o.ref && state.ref) Object.assign(state.ref, o.ref);
   if (o.items) { state.items = o.items; if (typeof itemsChanged === 'function') { renderItemsPanel(); itemsChanged(); } }
   if (o.hills) { state.hills = o.hills; state.selHill = state.hills.some((h) => h.id === o.selHill) ? o.selHill : null; if (typeof refreshHillPanel === 'function') refreshHillPanel(); }
@@ -1371,10 +1372,52 @@ const app = {
     if (S.has(hit.idx)) S.delete(hit.idx); else S.add(hit.idx);
     if (!S.size) state.selSet = null;
     state.sel = null;
+    state.selAnchor = { key: hit.key, idx: hit.idx };
     refreshArcBox();
-    editor.draw();
+    editor.draw(); profile.draw(); preview.updateHandles(); // antes solo el mapa: en 3D no se veían en amarillo
   },
-  clearMultiSel() { endArc(); state.selSet = null; refreshArcBox(); editor.draw(); },
+  clearMultiSel() { endArc(); state.selSet = null; refreshArcBox(); editor.draw(); profile.draw(); preview.updateHandles(); },
+  /** Punto desde el que se mide un rango con Shift (el último elegido, si sigue seleccionado). */
+  selAnchor() {
+    const a = state.selAnchor;
+    if (a && ((state.sel && state.sel.key === a.key && state.sel.idx === a.idx) || (state.selSet && state.selSet.key === a.key && state.selSet.idxs.has(a.idx)))) return a;
+    return state.sel || null;
+  },
+  /** Índices de a hasta b por la ruta; en un circuito cerrado, por el camino más corto (en metros). */
+  rangeIdxs(key, a, b) {
+    const arr = ctrlArray(key) || [], n = arr.length;
+    const closed = key === 'main' && state.project.main && state.project.main.closed !== false;
+    const d = (i, j) => Math.hypot(arr[i][0] - arr[j][0], arr[i][1] - arr[j][1]);
+    if (!closed) { const out = []; for (let i = Math.min(a, b); i <= Math.max(a, b); i++) out.push(i); return out; }
+    let Lf = 0, Lt = 0;
+    for (let i = 0; i < n; i++) Lt += d(i, (i + 1) % n);
+    for (let i = a; i !== b; i = (i + 1) % n) Lf += d(i, (i + 1) % n);
+    const out = [], step = Lf <= Lt - Lf ? 1 : n - 1;
+    for (let i = a; ; i = (i + step) % n) { out.push(i); if (i === b) break; }
+    return out;
+  },
+  /** Clic con modificador sobre un punto: Shift = todos los puntos entre el último elegido y este (Ctrl+Shift los suma a lo que ya había); Ctrl = suma o quita uno. */
+  clickMultiSel(hit, mods) {
+    const a = app.selAnchor();
+    if (mods && mods.shiftKey && a && a.key === hit.key && a.idx !== hit.idx) {
+      const idxs = app.rangeIdxs(hit.key, a.idx, hit.idx);
+      app.setMultiSel({ key: hit.key, idxs }, !!mods.ctrlKey);
+      state.selAnchor = { key: a.key, idx: a.idx }; // el ancla queda: otro Shift+clic cambia el rango
+      return;
+    }
+    app.toggleMultiSel(hit);
+  },
+  /** Igual para segmentos (nivel Segmento). */
+  clickSegSel(hit, mods) {
+    const a = state.segAnchor, cur = app.segSelEffective();
+    if (mods && mods.shiftKey && a && a.key === hit.key && a.seg !== hit.seg && cur && cur.key === hit.key && cur.segs.includes(a.seg)) {
+      const segs = app.rangeIdxs(hit.key, a.seg, hit.seg);
+      app.segSelectMany({ key: hit.key, segs }, !!mods.ctrlKey);
+      state.segAnchor = a;
+      return;
+    }
+    app.selectSegment(hit, true);
+  },
   // ---- nivel Segmento y transformaciones (mover / rotar / escalar) ----
   /** Arcos en s de cada segmento de una ruta: [{i, j, s0, len}] (el segmento i va del vértice i al j = siguiente). */
   segmentArcs(k) {
@@ -1458,6 +1501,7 @@ const app = {
     let segs = additive && cur && cur.key === hit.key ? new Set(cur.segs) : new Set();
     if (additive && segs.has(hit.seg)) segs.delete(hit.seg); else segs.add(hit.seg);
     state.segSel = { key: hit.key, segs };
+    state.segAnchor = { key: hit.key, seg: hit.seg };
     app.syncSegSel();
   },
   /** Caja en el lienzo: segmentos con sus dos vértices dentro. mode: false = reemplaza, true = suma, 'sub' = quita. */
@@ -3068,7 +3112,7 @@ function refreshBridgeList() {
       <div class="bbody">
       <div class="field"><label>Tipo</label><select class="btype" title="Pista: el terreno se adapta como en el resto de la pista. Puente: el terreno no se adapta (queda el relieve natural bajo el tramo) y se crean pilares si queda en altura"><option value="track"${!isBr && !isCut ? ' selected' : ''}>Pista (el terreno se adapta)</option><option value="bridge"${isBr ? ' selected' : ''}>Puente: Terreno no se adapta y se crean pilares</option><option value="cut"${isCut ? ' selected' : ''}>Socavado (zanja con paredes)</option></select></div>
       <div class="bcutBox"${isCut ? '' : ' hidden'}>
-        <div class="field"><label>Paredes</label><select class="bwalls"><option value="art"${b.walls !== 'nat' ? ' selected' : ''}>Artificiales (lisas)</option><option value="nat"${b.walls === 'nat' ? ' selected' : ''}>Naturales (roca)</option></select></div>
+        <div class="field"><label>Paredes</label><select class="bwalls"><option value="art"${b.walls !== 'nat' ? ' selected' : ''}>Lisas (extruidas de la pista)</option><option value="nat"${b.walls === 'nat' ? ' selected' : ''}>Naturales (del terreno)</option></select></div>
         <div class="field"><label>Densidad de las paredes <span class="val bwsV">${b.wallSubdiv ?? 2} (×${subdivFactor(b.wallSubdiv ?? 2)} pol.)</span></label><input type="range" class="bws" min="0" max="6" step="1" value="${b.wallSubdiv ?? 2}"></div>
         <div class="meta">Baja los puntos del tramo (perfil o gizmo Z): el terreno se abre en una zanja. Texturas de las paredes: al final de esta sección.</div>
       </div>
@@ -3389,6 +3433,18 @@ function applyArc(Rm) {
 // ---------- imagen de referencia ----------
 let refUndoPushed = false;
 function pushUndoRef() { pushUndo(); refUndoPushed = true; }
+/** Quita la imagen de referencia (botón «Quitar» o Supr con la herramienta «Referencia»); Ctrl+Z la devuelve. */
+function removeRefImage() {
+  if (!state.ref) return false;
+  pushUndoRef();
+  state.lastRemovedRef = state.ref; // Ctrl+Z la recupera (el lienzo no va en el historial)
+  state.ref = null;
+  syncRefControls();
+  if (state.tool === 'ref') setTool('pan');
+  editor.draw();
+  toast('Imagen de referencia quitada (Ctrl+Z la recupera).');
+  return true;
+}
 function syncRefControls() {
   const r = state.ref;
   $('refBox').hidden = !r;
@@ -4766,7 +4822,7 @@ function bindControls() {
   $('refScale').addEventListener('change', (e) => { if (!state.ref) return; pushUndoRef(); app.refScaleTo(parseFloat(e.target.value) / 100); });
   $('refVisible').addEventListener('change', (e) => { if (!state.ref) return; state.ref.visible = e.target.checked; editor.draw(); });
   $('refAbove').addEventListener('change', (e) => { if (!state.ref) return; state.ref.above = e.target.checked; editor.draw(); });
-  $('btnRefRemove').addEventListener('click', () => { pushUndoRef(); state.ref = null; syncRefControls(); if (state.tool === 'ref') setTool('pan'); editor.draw(); });
+  $('btnRefRemove').addEventListener('click', () => removeRefImage());
   $('btnCtrlLess').addEventListener('click', () => respaceAll(1.5));
   $('btnCtrlMore').addEventListener('click', () => respaceAll(1 / 1.5));
   $('btnCtrlReset').addEventListener('click', resetCtrl);
@@ -4786,7 +4842,14 @@ function bindControls() {
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
     if (!matchAction(e, 'delete')) return;
     // Supr borra lo que esté seleccionado: puntos (uno o varios), atajo, elemento de pista o cerro
-    if (state.tool === 'edit' && state.selSet && state.selSet.idxs.size) {
+    if (state.tool === 'ref' && state.ref) {
+      e.preventDefault();
+      removeRefImage(); // herramienta «Referencia»: quita la imagen de referencia
+    } else if (state.ref3d && state.ref3d.sel && !state.ref3d.locked) {
+      e.preventDefault();
+      $('btnRef3dRemove').click(); // modelo 3D de referencia seleccionado
+      toast('Modelo de referencia quitado.');
+    } else if (state.tool === 'edit' && state.selSet && state.selSet.idxs.size) {
       e.preventDefault();
       app.deleteCtrlMany(state.selSet.key, [...state.selSet.idxs]);
     } else if (state.tool === 'edit' && state.sel) {

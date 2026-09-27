@@ -859,6 +859,54 @@ test('cerros: puntos de control (clic en el cerro, subir con la barra, mover en 
 });
 async function setModeOff() { await ev(() => { if (document.getElementById('btnHillCtrl').classList.contains('active')) document.getElementById('btnHillCtrl').click(); }); }
 
+test('selección: Ctrl+clic en 3D queda en amarillo; Shift+clic toma todos los puntos entre dos (mapa y 3D); Supr quita la imagen de referencia', async () => {
+  await reset();
+  await tool('edit');
+  const scr3d = (idx) => ev((idx) => { const t = window.__tsg, m = t.preview.handleGroup.children.find((q) => q.userData.key === 'main' && q.userData.idx === idx); const v = m.position.clone().project(t.preview.camera), r = t.preview.renderer.domElement.getBoundingClientRect(); return [r.left + (v.x + 1) / 2 * r.width, r.top + (1 - v.y) / 2 * r.height]; }, idx);
+  const yellow = () => ev(() => window.__tsg.preview.handleGroup.children.filter((m) => m.userData.key === 'main' && m.material.color.getHex() === 0xffe066).map((m) => m.userData.idx).sort((a, b) => a - b));
+  await selPts([]); await ev(() => { const t = window.__tsg; t.state.sel = { key: 'main', idx: 10 }; t.preview.updateHandles(); });
+  // Ctrl+clic en 3D en otros dos puntos
+  for (const i of [22, 30]) { const [x, y] = await scr3d(i); await page.keyboard.down('Control'); await page.mouse.click(x, y); await page.keyboard.up('Control'); } // lejos del gizmo del punto elegido
+  let yl = await yellow();
+  expect(JSON.stringify(yl) === '[10,22,30]', `Ctrl+clic en 3D: en amarillo ${yl}`);
+  // Shift+clic en 3D: rango desde el último elegido (30) hasta 34
+  { const [x, y] = await scr3d(34); await page.keyboard.down('Shift'); await page.mouse.click(x, y); await page.keyboard.up('Shift'); }
+  yl = await yellow();
+  expect(JSON.stringify(yl) === '[30,31,32,33,34]', `Shift+clic en 3D: ${yl}`);
+  // en el mapa, en un circuito cerrado toma el camino corto (pasando por el inicio)
+  const n = await ev(() => { const m = window.__tsg.state.project.main; return (m.ctrl || m.pts).length; });
+  await ev((n) => { const t = window.__tsg; t.app.clearMultiSel(); t.state.sel = { key: 'main', idx: n - 2 }; t.editor.draw(); t.preview.updateHandles(); }, n);
+  const [mx, my] = await ev(() => { const t = window.__tsg, P = t.state.project.main.ctrl || t.state.project.main.pts, [a, b] = t.editor.toScreen(P[2][0], P[2][1]), r = document.getElementById('canvas2d').getBoundingClientRect(); return [a + r.left, b + r.top]; });
+  await page.keyboard.down('Shift'); await page.mouse.click(mx, my); await page.keyboard.up('Shift');
+  const sel = await ev(() => [...(window.__tsg.state.selSet ? window.__tsg.state.selSet.idxs : [])].sort((a, b) => a - b));
+  expect(sel.length === 5 && sel.includes(0) && sel.includes(n - 1) && sel.includes(2), `Shift+clic en el mapa (camino corto): ${sel} de ${n}`);
+  // Supr con la herramienta «Referencia» quita la imagen; Ctrl+Z la devuelve
+  await ev(() => { const t = window.__tsg, c = document.createElement('canvas'); c.width = c.height = 32; t.state.ref = { canvas: c, w: 32, h: 32, x: 0, y: 0, scale: 1, opacity: 0.5, visible: true }; });
+  await tool('ref');
+  await ev(() => document.activeElement && document.activeElement.blur());
+  await page.keyboard.press('Delete');
+  expect(await ev(() => window.__tsg.state.ref === null), 'Supr no quitó la imagen de referencia');
+  await page.keyboard.press('Control+z');
+  await idle();
+  expect(await ev(() => !!(window.__tsg.state.ref && window.__tsg.state.ref.canvas)), 'Ctrl+Z no devolvió la imagen de referencia');
+});
+
+test('tramo socavado: paredes lisas extruidas desde la pista (malla y objeto propios) y nombres de los tipos', async () => {
+  await reset();
+  await ev(() => document.querySelector('#elevMode button[data-mode=direct]').click());
+  await idle();
+  await makeTramo('cut', [4, 5, 6, 7, 8, 9, 10, 11, 12]);
+  await ev(() => { const t = window.__tsg, zs = t.state.project.main.ctrlZ; for (const i of [6, 7, 8, 9, 10]) zs[i] = -7; zs[5] = -3.5; zs[11] = -3.5; t.scheduleBuild(); });
+  await page.click('#btnGenTerrain');
+  await idle();
+  const w = await ev(() => { const T = window.__tsg.preview.terrainData; return [!!(T.cutWalls.art && T.cutWalls.art.extruded), T.cutWalls.art ? T.cutWalls.art.parts.length : 0]; });
+  expect(w[0] && w[1] === 1, `paredes lisas extruidas: ${w}`);
+  const names = Object.values(await exportNames()).flat();
+  expect(names.includes('socavado_01_paredes'), `exportación: ${names.filter((q) => /socav|muro/.test(q))}`);
+  const opts = await ev(() => [...document.querySelectorAll('#bridgeList .bwalls option')].map((o) => o.textContent));
+  expect(opts.includes('Lisas (extruidas de la pista)') && opts.includes('Naturales (del terreno)'), `tipos de pared: ${opts}`);
+});
+
 // ---------------------------------------------------------------------------------------------------------------
 /** Corre las pruebas elegidas en un navegador propio (un proceso). Devuelve {pass, fails, total}. */
 async function runTests(run, port) {

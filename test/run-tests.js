@@ -745,6 +745,32 @@ for (const [key, s] of Object.entries(SAMPLES)) {
   check(TA.cutWalls && TA.cutWalls.art && TA.cutWalls.art.tris > 20 && !TA.cutWalls.nat, `sección socavada: paredes artificiales aparte (${TA.cutWalls && TA.cutWalls.art && TA.cutWalls.art.tris})`);
   check(TR.cutWalls && TR.cutWalls.nat && TR.cutWalls.nat.tris > 20, 'sección socavada: paredes naturales (roca) aparte');
   check(Number.isFinite(g) && g > zt + 4, `sección socavada: nivel natural del suelo sobre la pista (${(g - zt).toFixed(1)} m)`);
+  // 0.65: la pared lisa es una malla extruida desde el borde de la pista (no el terreno): su pie queda bajo el borde de la
+  // pista y su tapa a la altura del suelo natural; en su franja el terreno se abre (sin triángulos del terreno)
+  {
+    const W = TA.cutWalls.art;
+    const P = W.positions;
+    let nearEdge = 0, topOk = 0, cnt = 0;
+    for (let v = 0; v < P.length; v += 3) {
+      const dx = P[v] - x, dy = P[v + 1] - y;
+      if (Math.abs(dx * r.tx[i] + dy * r.ty[i]) > 1.2) continue;
+      const u = Math.abs(dx * lx + dy * ly);
+      cnt++;
+      if (Math.abs(u - hw) < 0.4 && P[v + 2] < zt) nearEdge++;
+      if (P[v + 2] > zt + 4 && Math.abs(P[v + 2] - TA.ctx.groundAt(P[v], P[v + 1])) < 1.2) topOk++;
+    }
+    check(W.extruded && nearEdge >= 2 && topOk >= 2, `pared lisa extruida desde la pista (pie junto al borde ${nearEdge}, tapa a nivel del suelo ${topOk} de ${cnt})`);
+    const TP = TA.positions, TI = TA.baseIndices;
+    let inBand = 0;
+    for (let t = 0; t < TI.length; t += 3) {
+      const cx = (TP[TI[t] * 3] + TP[TI[t + 1] * 3] + TP[TI[t + 2] * 3]) / 3, cy = (TP[TI[t] * 3 + 1] + TP[TI[t + 1] * 3 + 1] + TP[TI[t + 2] * 3 + 1]) / 3;
+      const dx = cx - x, dy = cy - y;
+      if (Math.abs(dx * r.tx[i] + dy * r.ty[i]) > 3) continue;
+      const u = Math.abs(dx * lx + dy * ly);
+      if (u > hw + 0.3 && u < hw + 0.6) inBand++;
+    }
+    check(inBand === 0, `el terreno se abre en la franja de la pared (${inBand} triángulos)`);
+  }
 }
 
 // pilares: nunca sobre otra calzada, su camino de tierra o un atajo

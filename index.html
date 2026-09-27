@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Track Spline Generator v0.64</title>
+  <title>Track Spline Generator v0.65</title>
   <link rel="stylesheet" href="styles.css">
   <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.64</span></div>
+    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.65</span></div>
     <label class="proj-name-wrap" title="Nombre del proyecto: se usa al guardar (<nombre>.tsg.json) y en los autoguardados (<nombre>_auto_…)"><input id="projectName" class="proj-name" value="pista" spellcheck="false" maxlength="80"><span class="small muted" id="autosaveState"></span></label>
     <div class="top-actions">
       <button id="btnNew" title="Empezar de cero">Nuevo</button>
@@ -64,7 +64,7 @@
         <h2>Imagen de referencia</h2>
         <div class="row gap">
           <button id="btnRefLoad" title="Agrega una imagen solo de referencia: se puede mover, escalar y transparentar; no se traza. También puedes elegir la herramienta «Referencia» y pegarla con Ctrl+V.">Cargar imagen de referencia…</button>
-          <button id="btnRefRemove" title="Quitar la imagen de referencia" disabled>Quitar</button>
+          <button id="btnRefRemove" title="Quitar la imagen de referencia (también con Supr, con la herramienta «Referencia»; Ctrl+Z la recupera)" disabled>Quitar</button>
         </div>
         <input id="fileRef" type="file" accept="image/*" hidden>
         <div id="refBox" hidden>
@@ -117,10 +117,10 @@
             <button id="btnCtrlReset" title="Descarta los cambios y regenera los puntos desde el trazo original">Descartar cambios</button>
           </div>
           <div class="meta" id="ctrlInfo"></div>
-          <div class="meta" data-instr>Mapa: arrastra un punto para moverlo · doble clic sobre la pista agrega uno · clic derecho, Alt+clic o Supr lo borran · Shift+arrastrar selecciona varios (Shift+clic suma o quita uno) para darles un radio fijo.</div>
+          <div class="meta" data-instr>Mapa: arrastra un punto para moverlo · doble clic sobre la pista agrega uno · clic derecho, Alt+clic o Supr lo borran · Shift+arrastrar selecciona varios (Ctrl+clic suma o quita uno; Shift+clic toma todos los puntos hasta el último elegido) para darles un radio fijo.</div>
           <div class="meta" data-instr>Perfil: arrastra un punto en vertical para fijar su altura (◆) · doble clic agrega un punto con esa altura · clic derecho o Alt+clic la vuelve automática.</div>
           <div class="meta" data-instr>3D: clic en una esfera para seleccionarla y muévela con el gizmo (Libre, Plano XY o Solo Z).</div>
-          <div class="meta" data-instr>Varios puntos: Shift+clic suma o quita uno y Shift+arrastrar dibuja un cuadro, en el mapa, el perfil o la vista 3D. Al arrastrar uno de los seleccionados se mueven todos juntos.</div>
+          <div class="meta" data-instr>Varios puntos: Ctrl+clic suma o quita uno; Shift+clic selecciona todos los puntos entre el último elegido y ese (Ctrl+Shift+clic los suma a lo que ya había); Shift+arrastrar dibuja un cuadro. Vale en el mapa, el perfil y la vista 3D, y con segmentos en el nivel Segmento. Al arrastrar uno de los seleccionados se mueven todos juntos.</div>
         </div>
         <h3 class="subhead">Curva de radio fijo</h3>
         <div class="meta" id="arcInfo"></div>
@@ -148,7 +148,7 @@
       <section class="panel" data-panel="bridges">
         <h2>Tramos</h2>
         <p class="hint">Un tramo es una parte de la ruta principal con parámetros propios. Para crearlo (con «Editar puntos»): selecciona con Shift varios puntos seguidos y aprieta «Tramo» (barra) o «Crear tramo»: esa parte se vuelve tramo, con la misma forma. O abre el circuito borrando un punto con «Abrir» activado, selecciona los dos extremos y crea el tramo: los une y cierra el circuito.</p>
-        <p class="hint">Tipo <b>Pista</b>: el terreno se adapta como en el resto de la pista; por defecto toma todo de la pista principal (ancho, textura, camino de tierra y barrera) y puedes cambiar el ancho, el desplazamiento lateral y asignarle texturas propias. Tipo <b>Puente</b>: el terreno no se adapta (bajo el tramo queda el relieve natural) y se crean pilares si queda en altura. Tipo <b>Socavado</b>: como Pista, pero si bajas sus puntos el terreno se abre en una zanja con paredes artificiales (lisas) o naturales (roca), con más polígonos en la zanja. En cada tarjeta (▾ la colapsa), cada elemento puede quedar «Como la pista» o tener lo suyo; la barrera del tramo se une con la de la pista en los extremos. Se exportan como <code>tramos/tramo_NN</code> y <code>puentes/puente_NN</code> (con sus pilares), y sus bordes en <code>bordes</code>, cada uno con materiales únicos.</p>
+        <p class="hint">Tipo <b>Pista</b>: el terreno se adapta como en el resto de la pista; por defecto toma todo de la pista principal (ancho, textura, camino de tierra y barrera) y puedes cambiar el ancho, el desplazamiento lateral y asignarle texturas propias. Tipo <b>Puente</b>: el terreno no se adapta (bajo el tramo queda el relieve natural) y se crean pilares si queda en altura. Tipo <b>Socavado</b>: como Pista, pero si bajas sus puntos el terreno se abre en una zanja con paredes lisas (una malla que sube vertical desde el borde exterior de la pista hasta el suelo, con tapa arriba) o naturales (el mismo terreno en roca, con talud), con más polígonos en la zanja. En cada tarjeta (▾ la colapsa), cada elemento puede quedar «Como la pista» o tener lo suyo; la barrera del tramo se une con la de la pista en los extremos. Se exportan como <code>tramos/tramo_NN</code> y <code>puentes/puente_NN</code> (con sus pilares), y sus bordes en <code>bordes</code>, cada uno con materiales únicos.</p>
         <div id="bridgeControls">
           <div class="field"><label>Tipo del tramo nuevo</label><select id="tramoType"><option value="track">Pista (el terreno se adapta)</option><option value="bridge">Puente: Terreno no se adapta y se crean pilares</option><option value="cut">Socavado (zanja con paredes)</option></select></div>
           <div class="field" id="tramoWidthBox" hidden><label>Ancho del puente nuevo <span class="val"><input type="number" id="bridgeWidthNum" min="2" max="80" step="0.5" style="width:60px"> m</span></label><input type="range" id="bridgeWidth" min="3" max="40" step="0.5"></div>
@@ -157,7 +157,7 @@
         <div class="meta" id="bridgeInfo"></div>
         <div id="bridgeList" class="list"></div>
         <h3 class="subhead">Paredes de los tramos socavados</h3>
-        <div class="row gap"><span class="small" style="min-width:74px">Artificiales</span><button id="cutArtTexBtn">Cargar textura…</button><button id="cutArtTexRemove" disabled>Por defecto</button><img id="cutArtTexThumb" class="thumb" hidden alt=""></div>
+        <div class="row gap"><span class="small" style="min-width:74px">Lisas</span><button id="cutArtTexBtn">Cargar textura…</button><button id="cutArtTexRemove" disabled>Por defecto</button><img id="cutArtTexThumb" class="thumb" hidden alt=""></div>
         <input id="cutArtTexFile" type="file" accept="image/*" hidden>
         <div class="row gap" style="margin-top:6px"><span class="small" style="min-width:74px">Naturales</span><button id="cutNatTexBtn">Cargar textura…</button><button id="cutNatTexRemove" disabled>Por defecto</button><img id="cutNatTexThumb" class="thumb" hidden alt=""></div>
         <input id="cutNatTexFile" type="file" accept="image/*" hidden>

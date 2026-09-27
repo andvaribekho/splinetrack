@@ -257,12 +257,12 @@ export class Preview3D {
         const segMode = this.app.state.subObj === 'segment';
         if (segMode && Math.abs(b.x1 - b.x0) + Math.abs(b.y1 - b.y0) < 5) {
           const sh = this.pickSegment(ev);
-          if (sh && b.sub) this.app.segSelectMany({ key: sh.key, segs: [sh.seg] }, 'sub'); else if (sh) this.app.selectSegment(sh, true);
+          if (sh && b.sub) this.app.segSelectMany({ key: sh.key, segs: [sh.seg] }, 'sub'); else if (sh) this.app.clickSegSel(sh, b.ev);
           return;
         }
         if (Math.abs(b.x1 - b.x0) + Math.abs(b.y1 - b.y0) < 5) {
           const hit = this.pickHandle(ev);
-          if (hit && !b.sub) this.app.toggleMultiSel(hit);
+          if (hit && !b.sub) this.app.clickMultiSel(hit, b.ev);
           else if (hit && b.sub) this.app.subtractMultiSel({ key: hit.key, idxs: [hit.idx] });
           return;
         }

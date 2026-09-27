@@ -68,7 +68,7 @@ export class ProfileView {
           const [ax, bx] = [Math.min(b.x0, b.x1), Math.max(b.x0, b.x1)], [ay, by] = [Math.min(b.y0, b.y1), Math.max(b.y0, b.y1)];
           const inside = this.handles.filter((q) => q.x >= ax && q.x <= bx && q.y >= ay && q.y <= by);
           if (b.sub) this.app.subtractMultiSel(this.app.pickBest(inside)); else this.app.setMultiSel(this.app.pickBest(inside), b.add);
-        } else if (b.hit) { if (b.sub) this.app.unpin(b.hit.key, b.hit.idx); else this.app.toggleMultiSel(b.hit); }
+        } else if (b.hit) { if (b.sub) this.app.unpin(b.hit.key, b.hit.idx); else this.app.clickMultiSel(b.hit, b.mods); }
         this.draw();
         return;
       }
@@ -182,7 +182,7 @@ export class ProfileView {
     if (e.button === 0 && (e.shiftKey || e.ctrlKey || e.metaKey)) {
       // Shift: clic = sumar/quitar punto, arrastrar = caja de selección
       this.cv.setPointerCapture(e.pointerId);
-      this.box = { x0: x, y0: y, x1: x, y1: y, hit: h, add: e.ctrlKey || e.metaKey };
+      this.box = { x0: x, y0: y, x1: x, y1: y, hit: h, add: e.ctrlKey || e.metaKey, mods: { shiftKey: e.shiftKey, ctrlKey: e.ctrlKey || e.metaKey } };
       return;
     }
     // clic derecho con varios puntos seleccionados (sobre uno de ellos o en el vacío): todos vuelven a altura automática

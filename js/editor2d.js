@@ -136,7 +136,7 @@ export class Editor2D {
           // nivel Segmento: clic sobre la pista selecciona el tramo entre dos puntos; Shift / Ctrl suman (o caja), Alt quita
           const p0 = this.toLayout(sx, sy);
           const sh = this.app.segmentAt(p0, 10 / this.view.zoom);
-          if (e.button === 0 && (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey)) { this.box = { x0: sx, y0: sy, x1: sx, y1: sy, seg: true, segHit: sh, sub: e.altKey }; this.draw(); return; }
+          if (e.button === 0 && (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey)) { this.box = { x0: sx, y0: sy, x1: sx, y1: sy, seg: true, segHit: sh, sub: e.altKey, mods: { shiftKey: e.shiftKey, ctrlKey: e.ctrlKey || e.metaKey } }; this.draw(); return; }
           if (e.button === 0 && sh) {
             const eff = this.app.segSelEffective();
             const selected = !!(eff && eff.key === sh.key && eff.segs.includes(sh.seg));
@@ -167,7 +167,7 @@ export class Editor2D {
         }
         if (e.button === 0 && (e.shiftKey || e.ctrlKey || e.metaKey)) {
           // Shift: arrastrar = caja de selección; clic sin mover sobre un punto = sumar/quitar ese punto
-          this.box = { x0: sx, y0: sy, x1: sx, y1: sy, hit };
+          this.box = { x0: sx, y0: sy, x1: sx, y1: sy, hit, mods: { shiftKey: e.shiftKey, ctrlKey: e.ctrlKey || e.metaKey } };
           this.draw();
           return;
         }
@@ -379,13 +379,13 @@ export class Editor2D {
         const moved = Math.abs(b.x1 - b.x0) + Math.abs(b.y1 - b.y0) > 4;
         if (b.seg) {
           if (moved) this.app.segBoxSelect(ax, ay, bx, by, b.sub ? 'sub' : !!(e && (e.ctrlKey || e.metaKey)));
-          else if (b.segHit) { if (b.sub) this.app.segSelectMany({ key: b.segHit.key, segs: [b.segHit.seg] }, 'sub'); else this.app.selectSegment(b.segHit, true); }
+          else if (b.segHit) { if (b.sub) this.app.segSelectMany({ key: b.segHit.key, segs: [b.segHit.seg] }, 'sub'); else this.app.clickSegSel(b.segHit, b.mods); }
           this.draw();
           return;
         }
         if (b.sub) { if (moved) this.app.boxSelect(ax, ay, bx, by, 'sub'); else if (b.hit) this.app.deleteCtrl(b.hit.key, b.hit.idx); }
         else if (moved) this.app.boxSelect(ax, ay, bx, by, e && e.ctrlKey);
-        else if (b.hit) this.app.toggleMultiSel(b.hit);
+        else if (b.hit) this.app.clickMultiSel(b.hit, b.mods); // Shift: rango desde el último punto; Ctrl: suma o quita uno
         this.draw();
         return;
       }
