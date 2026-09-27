@@ -258,6 +258,39 @@ export function tramoAtS(r, sv) {
  */
 export function dirtWidthAt(sp, r, k, sv, side, P = null) {
   P = P || edgeParams(sp, r);
+  const w = dirtWidthRaw(sp, r, k, sv, side, P);
+  // 0.67: transición entre tramos con caminos de distinto ancho: el más ancho se angosta hasta el otro dentro de su propio
+  // tramo (curva suave, tangente en ambos extremos), así el tramo angosto nunca se ensancha
+  const Lt = Math.max(0, sp.dirtTransition ?? 12);
+  if (!Lt || !r.bridges || !r.bridges.length) return w;
+  const B = [];
+  for (const b of r.bridges) for (const x of [b.s0, b.s1]) { const xx = r.closed ? ((x % r.L) + r.L) % r.L : x; if (!B.some((y) => Math.abs(y - xx) < 0.3)) B.push(xx); }
+  B.sort((a, b) => a - b);
+  const sd = (from, to) => { let d = to - from; if (r.closed) { d = ((d % r.L) + r.L) % r.L; if (d > r.L / 2) d -= r.L; } return d; };
+  let out = w;
+  B.forEach((b, i) => {
+    const d = sd(b, sv); // > 0: después de la división
+    if (Math.abs(d) > Lt) return;
+    const wb = dirtWidthRaw(sp, r, k, b - 0.05, side, P), wa = dirtWidthRaw(sp, r, k, b + 0.05, side, P);
+    if (Math.abs(wa - wb) < 1e-3) return;
+    const widerAfter = wa > wb;
+    if ((d > 0) !== widerAfter || d === 0) { if (d === 0) out = Math.min(out, Math.min(wa, wb)); return; }
+    // cabe en la mitad del tramo del lado ancho (hasta la división siguiente en esa dirección)
+    const nb = B.length > 1 ? B[(i + (widerAfter ? 1 : -1) + B.length) % B.length] : null;
+    let room = Infinity;
+    if (nb != null && nb !== b) { room = Math.abs(sd(b, nb)); if (!r.closed && ((widerAfter && nb < b) || (!widerAfter && nb > b))) room = Infinity; }
+    const Lx = Math.max(0.5, Math.min(Lt, room / 2));
+    const t = Math.abs(d) / Lx;
+    if (t >= 1) return;
+    const lo = Math.min(wa, wb), hi = Math.max(wa, wb);
+    out = Math.min(out, lo + (hi - lo) * t * t * (3 - 2 * t));
+  });
+  return out;
+}
+
+/** Ancho del camino de tierra sin transiciones (el de la ruta o el propio del tramo en sv). */
+export function dirtWidthRaw(sp, r, k, sv, side, P = null) {
+  P = P || edgeParams(sp, r);
   const key = side > 0 ? 'left' : 'right';
   const hasS = (v) => v === 'both' || v === key;
   const routeOn = P.dirtSide !== 'none' && hasS(P.dirtSide);

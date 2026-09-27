@@ -5742,6 +5742,7 @@ function syncSceneControls() {
       : tt === 'mountain' ? `Del lado del acantilado queda una franja de tierra de unos ${sc.coastLand} m y luego un corte de ${sc.cliffHeight} m hasta el agua; al otro lado se levanta una pared de roca de ${sc.wallHeight} m. Izquierda y derecha, según el sentido de marcha.` : '';
   }
   for (const k of ['dirtTile', 'barrierHeight', 'barrierThick', 'barrierTile']) { set(k, sc[k]); set(k + 'Num', sc[k]); }
+  set('dirtTransition', Math.min(60, sc.dirtTransition ?? 12)); set('dirtTransitionNum', sc.dirtTransition ?? 12);
   { const h = Math.max((sc.terrainGap ?? 0.3) + 0.1, Number.isFinite(sc.skirtHeight) ? sc.skirtHeight : (sc.terrainGap ?? 0.3) + 0.8); set('skirtHeight', h); set('skirtHeightNum', h); $('skirtBox').classList.toggle('disabled', !sc.skirts); }
   for (const k of ['dirtWidthL', 'dirtWidthR']) { const v = Number.isFinite(sc[k]) ? sc[k] : sc.dirtWidth; set(k, v); set(k + 'Num', v); } // ancho a cada lado (si no, el general)
   $('dirtBox').classList.toggle('disabled', !sc.dirtSide || sc.dirtSide === 'none');
@@ -6941,6 +6942,7 @@ function bindSceneControls() {
   pair('dirtWidthL', 'dirtWidthLNum', 'dirtWidthL', 0, false);
   pair('dirtWidthR', 'dirtWidthRNum', 'dirtWidthR', 0, false);
   pair('dirtTile', 'dirtTileNum', 'dirtTile', 0.5, false);
+  pair('dirtTransition', 'dirtTransitionNum', 'dirtTransition', 0, false); // transición del camino de tierra entre tramos
   pair('barrierHeight', 'barrierHeightNum', 'barrierHeight', 0.1, false);
   pair('barrierThick', 'barrierThickNum', 'barrierThick', 0, false); // 0 = plano de una cara
   pair('barrierTile', 'barrierTileNum', 'barrierTile', 0.5, false);

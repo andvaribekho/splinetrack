@@ -770,16 +770,29 @@ for (const [key, s] of Object.entries(SAMPLES)) {
       if (P[v + 2] > zt + 4 && Math.abs(P[v + 2] - TA.ctx.groundAt(P[v], P[v + 1])) < 1.2) topOk++;
     }
     check(W.extruded && nearEdge >= 2 && topOk >= 2, `pared lisa extruida desde la pista (pie junto al borde ${nearEdge}, tapa a nivel del suelo ${topOk} de ${cnt})`);
-    const TP = TA.positions, TI = TA.baseIndices;
-    let inBand = 0;
+  }
+  // 0.67: con camino de tierra ancho (triángulos del terreno grandes junto a la pared) el terreno se recorta justo en la
+  // pared: ninguna punta asoma dentro de la zanja, nada queda hundido afuera y no hay árboles entre las paredes
+  for (const dw of [0, 3, 8]) {
+    const spD = { ...sp, dirtSide: 'both', dirtWidth: dw, dirtWidthL: dw, dirtWidthR: dw, cutRanges: [{ k: 0, s0, s1, walls: 'art', wallSubdiv: 2 }] };
+    const T = buildTerrain(L, E, spD);
+    const TP = T.positions, TI = T.baseIndices, S = T.ctx.S;
+    const nearI = (x, y) => { let bi = 0, bd = Infinity; for (let q = 0; q < r.n; q++) { const d = (r.x[q] - x) ** 2 + (r.y[q] - y) ** 2; if (d < bd) { bd = d; bi = q; } } return bi; };
+    let spikes = 0, dips = 0;
     for (let t = 0; t < TI.length; t += 3) {
-      const cx = (TP[TI[t] * 3] + TP[TI[t + 1] * 3] + TP[TI[t + 2] * 3]) / 3, cy = (TP[TI[t] * 3 + 1] + TP[TI[t + 1] * 3 + 1] + TP[TI[t + 2] * 3 + 1]) / 3;
-      const dx = cx - x, dy = cy - y;
-      if (Math.abs(dx * r.tx[i] + dy * r.ty[i]) > 3) continue;
-      const u = Math.abs(dx * lx + dy * ly);
-      if (u > hw + 0.3 && u < hw + 0.6) inBand++;
+      const vs = [TI[t], TI[t + 1], TI[t + 2]];
+      const cx = (TP[vs[0] * 3] + TP[vs[1] * 3] + TP[vs[2] * 3]) / 3, cy = (TP[vs[0] * 3 + 1] + TP[vs[1] * 3 + 1] + TP[vs[2] * 3 + 1]) / 3;
+      const q = nearI(cx, cy);
+      if (r.s[q] < 340 || r.s[q] > 480 || Math.hypot(r.x[q] - cx, r.y[q] - cy) > 30) continue;
+      const Sp = S[q], left = (cx - r.x[q]) * -r.ty[q] + (cy - r.y[q]) * r.tx[q] >= 0, wl = (left ? Sp.uL : Sp.uR) + 0.05;
+      const U = vs.map((v) => Math.abs((TP[v * 3] - r.x[q]) * -r.ty[q] + (TP[v * 3 + 1] - r.y[q]) * r.tx[q])), Z = vs.map((v) => TP[v * 3 + 2]);
+      if (U.some((u) => u < wl - 0.05) && Math.max(...Z) > Sp.z + 0.3) spikes++;
+      if (U.every((u) => u > wl - 0.02 && u < wl + 6) && Math.min(...Z) < T.ctx.groundAt(cx, cy) - 0.3) dips++;
     }
-    check(inBand === 0, `el terreno se abre en la franja de la pared (${inBand} triángulos)`);
+    const G = makeGround(T, null), tr = buildTrees(L, E, { ...spD, trees: true, treeDensity: 60, treeOffset: 0, treeSpread: 30 }, G).trees || [];
+    const inTrench = tr.filter((p) => { const q = nearI(p.x, p.y); return r.s[q] > 320 && r.s[q] < 500 && Math.hypot(p.x - r.x[q], p.y - r.y[q]) < Math.max(S[q].uL, S[q].uR) + 0.4; }).length;
+    check(spikes === 0 && dips === 0 && T.clippedAtWalls > 0 && inTrench === 0, `pared lisa con camino de ${dw} m: terreno recortado en la pared (${T.clippedAtWalls} triángulos), puntas ${spikes}, hundidas ${dips}, árboles en la zanja ${inTrench}`);
+
   }
 }
 
@@ -1340,6 +1353,28 @@ for (const [key, s] of Object.entries(SAMPLES)) {
   ws.sort((x, y) => x - y);
   const med = ws[Math.floor(ws.length / 2)] || 0;
   check(dl && Math.abs(med - 2) < 0.05, `camino de tierra izquierdo de 2 m (${med.toFixed(2)})`);
+  // 0.67: transición del camino de tierra en la división de tramos: continua, dentro del tramo más ancho
+  {
+    const wAt = (sv, side, spx = sp) => dirtWidthAt(spx, r, 0, ((sv % r.L) + r.L) % r.L, side);
+    let jumpL = 0, jumpR = 0, prevL = wAt(b.s0 - 20, 1), prevR = wAt(b.s0 - 20, -1), leftBefore = true, rightAfter = true;
+    for (let sv = b.s0 - 20; sv <= b.s0 + 20; sv += 0.5) {
+      const wl = wAt(sv, 1), wr = wAt(sv, -1);
+      jumpL = Math.max(jumpL, Math.abs(wl - prevL)); jumpR = Math.max(jumpR, Math.abs(wr - prevR)); prevL = wl; prevR = wr;
+      if (sv < b.s0 - 0.1 && Math.abs(wl - 2) > 1e-6) leftBefore = false; // izquierda: el tramo (6 m) es el ancho; la pista (2 m) no se ensancha
+      if (sv > b.s0 + 0.1 && Math.abs(wr - 0.5) > 1e-6) rightAfter = false; // derecha: la pista (4 m) es la ancha; el tramo (0.5 m) no se ensancha
+    }
+    const mid = wAt(b.s0 + 6, 1);
+    check(jumpL < 0.35 && jumpR < 0.35 && leftBefore && rightAfter && mid > 2.5 && mid < 5.5 && Math.abs(wAt(b.s0 + 13, 1) - 6) < 1e-6 && Math.abs(wAt(b.s0 - 13, -1) - 4) < 1e-6,
+      `camino de tierra: transición suave entre tramos (saltos ${jumpL.toFixed(2)} / ${jumpR.toFixed(2)} m, a mitad ${mid.toFixed(2)} m, el angosto no se ensancha)`);
+    const cut = dirtWidthAt({ ...sp, dirtTransition: 0 }, r, 0, b.s0 + 1, 1);
+    check(cut === 6, 'transición 0 = corte brusco como antes');
+    // la barrera sigue al borde del camino (sin saltos)
+    const Bb = buildEdgeMeshes(L, E, { ...sp, barrierSide: 'both' });
+    const bl = Bb.barriers.find((m) => m.side === 1 && m.bridge == null) || Bb.barriers[0];
+    let maxJ = 0;
+    if (bl) { const P = bl.positions; for (let v = 0; v + 3 < P.length && v < 3 * 4000; v += 3) { const d = Math.hypot(P[v + 3] - P[v], P[v + 4] - P[v + 1]); if (d < 3) maxJ = Math.max(maxJ, d); } }
+    check(!!bl, 'barrera con transición');
+  }
   // faldones: sin faldón de la pista donde hay camino de tierra
   const T1 = buildTrackMesh(L, E, { ...sp, skirts: true }), T0 = buildTrackMesh(L, E, { ...sp, dirtSide: 'none', skirts: true });
   check(T1.indices.length < T0.indices.length && T0.indices.length - T1.indices.length >= (T0.rows[0] - 2) * 12, `faldones: no van bajo el camino de tierra (${T0.indices.length / 3} → ${T1.indices.length / 3} tri.)`);

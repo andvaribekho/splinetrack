@@ -979,6 +979,20 @@ test('cerros: caja de edición (grilla, subir un punto, mover y agrandar la caja
   expect(await ev(() => !window.__tsg.state.hills[0].lattice), 'quitar caja');
 });
 
+test('camino de tierra: transición entre tramos de distinto ancho (barra en Bordes; 0 = corte)', async () => {
+  await reset();
+  await ev(() => { const sc = window.__tsg.state.scene; sc.dirtSide = 'both'; sc.dirtWidthL = 2; sc.dirtWidthR = 2; sc.dirtWidth = 2; });
+  await makeTramo('track', [5, 6, 7, 8, 9]);
+  await ev(() => { const t = window.__tsg, b = t.state.project.main.bridges[0]; b.dirt = true; b.dirtSide = 'both'; b.dirtOwnW = true; b.dirtWL = 9; b.dirtWR = 9; t.scheduleBuild(); });
+  await idle();
+  const w = await ev(async () => { const t = window.__tsg, m = await import('/js/tunnels.js'), r = t.state.layout.routes[0], b = r.bridges[0]; return [m.dirtWidthAt(t.state.scene, r, 0, b.s0 - 1, 1), m.dirtWidthAt(t.state.scene, r, 0, b.s0 + 6, 1), m.dirtWidthAt(t.state.scene, r, 0, b.s0 + 14, 1)]; });
+  expect(Math.abs(w[0] - 2) < 1e-6 && w[1] > 3 && w[1] < 8 && Math.abs(w[2] - 9) < 1e-6, `transición: ${w.map((v) => v.toFixed(2))}`);
+  await ev(() => { const el = document.getElementById('dirtTransitionNum'); el.value = '0'; el.dispatchEvent(new Event('change', { bubbles: true })); });
+  await idle();
+  const w0 = await ev(async () => { const t = window.__tsg, m = await import('/js/tunnels.js'), r = t.state.layout.routes[0], b = r.bridges[0]; return [t.state.scene.dirtTransition, document.getElementById('dirtTransition').value, m.dirtWidthAt(t.state.scene, r, 0, b.s0 + 1, 1)]; });
+  expect(w0[0] === 0 && w0[1] === '0' && Math.abs(w0[2] - 9) < 1e-6, `transición 0: ${w0}`);
+});
+
 // ---------------------------------------------------------------------------------------------------------------
 /** Corre las pruebas elegidas en un navegador propio (un proceso). Devuelve {pass, fails, total}. */
 async function runTests(run, port) {

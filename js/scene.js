@@ -116,6 +116,7 @@ export const DEFAULT_SCENE = {
   dirtSide: 'none', // camino de tierra: 'none' | 'left' | 'right' | 'both'
   dirtWidth: 3, // m
   dirtTile: 4, // m de pista por repetición de la textura
+  dirtTransition: 12, // m: transición del camino de tierra entre tramos de distinto ancho (0 = corte)
   barrierSide: 'none', // barrera de contención: 'none' | 'left' | 'right' | 'both'
   barrierHeight: 0.8, // m
   barrierThick: 0.25, // m
@@ -305,6 +306,12 @@ export function trackRows(layout, elev, spIn = {}) {
     } else {
       // cuánto cambia la pista en cada segmento (0..1), ensanchado para que la densidad llegue antes de la curva
       const c = new Float64Array(nq);
+      let dirtW = null; // ancho de los caminos de tierra (con transiciones): donde cambia, más secciones
+      if (r.bridges && r.bridges.length && (sp.dirtTransition ?? 12) > 0) {
+        const P = edgeParams(sp, r);
+        dirtW = new Float64Array(n);
+        for (let i = 0; i < n; i++) dirtW[i] = dirtWidthAt(sp, r, k, r.s[i], 1, P) + dirtWidthAt(sp, r, k, r.s[i], -1, P);
+      }
       const ds = r.ds;
       for (let q = 0; q < nq; q++) {
         const i = at(q), ip = r.closed ? at(q - 1) : Math.max(0, q - 1), inx = r.closed ? at(q + 1) : Math.min(n - 1, q + 1);
@@ -312,7 +319,8 @@ export function trackRows(layout, elev, spIn = {}) {
         const zpp = e && e.z ? Math.abs(e.z[inx] - 2 * e.z[i] + e.z[ip]) / (ds * ds) * 50 : 0; // curvatura vertical (radio 50 m = máximo)
         const roll = e && e.roll ? Math.abs(e.roll[inx] - e.roll[ip]) / (2 * ds) * 60 : 0; // cambio de peralte
         const dw = Math.abs(r.w[inx] - r.w[ip]) / (2 * ds) * 6; // cambio de ancho
-        c[q] = Math.min(1, Math.max(kPlan, zpp, roll, dw));
+        const ddw = dirtW ? Math.abs(dirtW[inx] - dirtW[ip]) / (2 * ds) * 6 : 0; // transición del camino de tierra
+        c[q] = Math.min(1, Math.max(kPlan, zpp, roll, dw, ddw));
       }
       const half = Math.max(1, Math.round(6 / ds));
       const cm = new Float64Array(nq);
@@ -889,9 +897,10 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
       const dx = x - p.x, dy = y - p.y;
       const a = Math.abs(dx * p.tx + dy * p.ty);
       const u = dx * -p.ty + dy * p.tx;
-      const ext = (u >= 0 ? p.uL : p.uR) + 0.4; // calzada + camino de tierra + barrera
       const nat = p.cut.walls === 'nat';
-      const d = Math.hypot(Math.max(0, Math.abs(u) - ext), Math.max(0, a - p.ds * 0.6));
+      const ext = (u >= 0 ? p.uL : p.uR) + (nat ? 0.4 : 0.05); // calzada + camino de tierra + barrera (pared lisa: justo en su línea)
+      // (en el lado de afuera de una curva las muestras se separan con la distancia lateral: la tolerancia a lo largo crece)
+      const d = Math.hypot(Math.max(0, Math.abs(u) - ext), Math.max(0, a - p.ds * (0.6 + Math.abs(u) / 20)));
       const floor = p.z - gap;
       let z;
       if (!nat) { if (d > 1e-3) return; z = floor; } // pared lisa: la pone una malla propia extruida desde la pista (0.64); el terreno solo baja dentro
@@ -966,25 +975,25 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
   // tierra y la barrera) hasta el suelo natural, con una tapa arriba y una cara exterior que baja bajo el suelo. En su
   // franja el terreno se abre (esos triángulos se quitan), así no hay escalones ni rampas contra la pared.
   const anyArt = S.some((p) => p.cut && p.cut.walls !== 'nat');
-  const hcW = Math.max(0.3, out.cellFine || out.cell || 2), capW = Math.max(0.8, 2 * hcW);
-  const artBand = anyArt ? (x, y) => {
-    let hit = false;
-    fine.query(x, y, maxW / 2 + capW + 2, (p) => {
-      if (hit || !p.cut || p.cut.walls === 'nat') return;
-      const dx = x - p.x, dy = y - p.y;
-      if (Math.abs(dx * p.tx + dy * p.ty) > p.ds * 0.6) return;
-      const u = dx * -p.ty + dy * p.tx, ext = (u >= 0 ? p.uL : p.uR) + 0.05;
-      const dd = Math.abs(u) - ext;
-      if (dd > -hcW && dd < capW - hcW * 0.5 && heightNat(x, y, 0.5) - (p.z - gap) > 0.15) hit = true;
-    });
-    return hit;
-  } : null;
+  const capW = 0.3; // tapa angosta: el terreno se recorta justo en la pared (0.67), la tapa solo remata el borde
   if (carvedRivers || anyCut) {
     const cutCarve = (x, y) => { const ci = cutInfo(x, y); if (!ci.kind || ci.kind === 'cutArt') return null; const zn = heightNat(x, y, 0.5); return zn - ci.z > 0.3 ? ci.kind : null; };
-    const classify = (x, y) => (carvedRivers && riverCarveAt(x, y) > 0.05 ? 'river' : artBand && artBand(x, y) ? 'cutArtHole' : anyCut ? cutCarve(x, y) : null);
+    const classify = (x, y) => (carvedRivers && riverCarveAt(x, y) > 0.05 ? 'river' : anyCut ? cutCarve(x, y) : null);
     splitParts(out, classify, { river: Math.max(0.5, sp.riverWallTile ?? 4), cutArt: Math.max(0.5, sp.cutWallTile ?? 4), cutNat: Math.max(0.5, sp.cutWallTile ?? 4) });
     out.wall = out.parts.river || null; // compatibilidad: cauces de los ríos
     out.cutWalls = { art: anyArt ? cutArtWalls(S, (x, y) => heightNat(x, y, 0.5), gap, capW, Math.max(0.5, sp.cutWallTile ?? 4)) : null, nat: out.parts.cutNat || null };
+    // paredes lisas: los triángulos del terreno que cruzan la línea de la pared se recortan ahí; queda la parte de afuera,
+    // con su borde nuevo a la altura del suelo natural (bajo la tapa), sin importar el tamaño de los triángulos
+    if (anyArt) clipTerrainAtArtWalls(out, (x, y) => {
+      let best = null, ba = Infinity;
+      fine.query(x, y, maxW / 2 + 4, (p) => {
+        if (!p.cut || p.cut.walls === 'nat') return;
+        const dx = x - p.x, dy = y - p.y, a = Math.abs(dx * p.tx + dy * p.ty), u = dx * -p.ty + dy * p.tx;
+        if (a > p.ds * (0.75 + Math.abs(u) / 20) || a >= ba) return;
+        ba = a; best = { dd: Math.abs(u) - ((u >= 0 ? p.uL : p.uR) + 0.05), deep: heightNat(x, y, 0.5) - (p.z - gap) > 0.15 };
+      });
+      return best;
+    }, (x, y) => heightNat(x, y, 0.5));
   }
   const groundAt = (x, y) => heightNat(x, y, 0.5); // nivel natural del suelo (sin las zanjas de las secciones socavadas)
   Object.defineProperty(out, 'ctx', { value: { S, fine, maxW, gap, zoneAt, heightAt, sp, origAt, riverCarveAt, inRiver, groundAt }, enumerable: false });
@@ -1433,16 +1442,74 @@ export function cutArtWalls(S, nat, gap, capW, tile = 4) {
   return { positions: new Float32Array(P), uvs: new Float32Array(U), indices: new Uint32Array(I), tris: I.length / 3, extruded: true, parts: list };
 }
 
+/**
+ * Recorta el terreno contra las paredes lisas: wallAt(x, y) = {dd (distancia firmada a la línea de la pared; > 0 afuera),
+ * deep} o null; nat(x, y) = suelo natural. Los triángulos que cruzan la pared (con zanja) pierden la parte de adentro
+ * (queda bajo la pista); los vértices nuevos del corte toman la altura del suelo natural. Agrega pocos vértices.
+ */
+export function clipTerrainAtArtWalls(T, wallAt, nat) {
+  const P0 = T.positions, U0 = T.uvs, C0 = T.colors, B = T.baseIndices || T.indices;
+  const nv0 = P0.length / 3;
+  const info = new Array(nv0);
+  const ddOf = (v) => { if (info[v] === undefined) info[v] = wallAt(P0[v * 3], P0[v * 3 + 1]) || null; return info[v]; };
+  const P = Array.from(P0), U = U0 ? Array.from(U0) : null, C = C0 ? Array.from(C0) : null;
+  const edgeV = new Map();
+  const cutVertex = (a, b, da, db) => {
+    const key = a < b ? a * nv0 + b : b * nv0 + a;
+    let v = edgeV.get(key);
+    if (v !== undefined) return v;
+    const t = da / (da - db);
+    const x = P[a * 3] + (P[b * 3] - P[a * 3]) * t, y = P[a * 3 + 1] + (P[b * 3 + 1] - P[a * 3 + 1]) * t;
+    v = P.length / 3;
+    P.push(x, y, nat(x, y));
+    if (U) U.push(U[a * 2] + (U[b * 2] - U[a * 2]) * t, U[a * 2 + 1] + (U[b * 2 + 1] - U[a * 2 + 1]) * t);
+    if (C) for (let k = 0; k < 3; k++) C.push(C[a * 3 + k] + (C[b * 3 + k] - C[a * 3 + k]) * t);
+    edgeV.set(key, v);
+    return v;
+  };
+  const out = [];
+  let clipped = 0;
+  for (let q = 0; q < B.length; q += 3) {
+    const vs = [B[q], B[q + 1], B[q + 2]];
+    const W = vs.map(ddOf);
+    if (!W.every((w) => w) || !W.some((w) => w.deep) || W.every((w) => w.dd >= 0) || W.every((w) => w.dd <= 0)) {
+      // sin pared cerca (o sin zanja): igual; todo adentro: bajo la pista, se quita si toca la pared
+      if (W.every((w) => w && w.dd <= 0) && W.some((w) => w.deep) && W.some((w) => w.dd > -0.01)) continue;
+      out.push(vs[0], vs[1], vs[2]);
+      continue;
+    }
+    // polígono de la parte de afuera (dd >= 0), en el orden original (conserva el sentido de las caras)
+    const poly = [];
+    for (let k = 0; k < 3; k++) {
+      const a = vs[k], b = vs[(k + 1) % 3], da = W[k].dd, db = W[(k + 1) % 3].dd;
+      if (da >= 0) poly.push(a);
+      if ((da >= 0) !== (db >= 0)) poly.push(cutVertex(a, b, da, db));
+    }
+    for (let k = 1; k < poly.length - 1; k++) out.push(poly[0], poly[k], poly[k + 1]);
+    clipped++;
+  }
+  const others = T.otherIndices || new Uint32Array(0);
+  T.positions = new Float32Array(P);
+  if (U) T.uvs = new Float32Array(U);
+  if (C) T.colors = new Float32Array(C);
+  T.baseIndices = new Uint32Array(out);
+  const all = new Uint32Array(out.length + others.length); all.set(out); all.set(others, out.length);
+  T.indices = all;
+  T.clippedAtWalls = clipped;
+  return T;
+}
+
 export function splitParts(mesh, classify, tiles = {}) {
   const P = mesh.positions, I = mesh.indices;
-  const base = [], groups = {};
+  const base = [], groups = {}, others = [];
   for (let t = 0; t < I.length; t += 3) {
     const a = I[t], b = I[t + 1], c = I[t + 2];
     const x = (P[a * 3] + P[b * 3] + P[c * 3]) / 3, y = (P[a * 3 + 1] + P[b * 3 + 1] + P[c * 3 + 1]) / 3;
     const key = classify(x, y);
-    if (key) (groups[key] || (groups[key] = [])).push(a, b, c); else base.push(a, b, c);
+    if (key) { (groups[key] || (groups[key] = [])).push(a, b, c); others.push(a, b, c); } else base.push(a, b, c);
   }
   mesh.baseIndices = new Uint32Array(base);
+  mesh.otherIndices = new Uint32Array(others);
   mesh.parts = {};
   for (const [key, list] of Object.entries(groups)) {
     const tile = tiles[key] || 4;
@@ -1678,6 +1745,14 @@ function scatter(layout, elev, sp, ground, o) {
   const tryPlace = (x, y, zFallback) => {
     let ok = true;
     g.query(x, y, maxW / 2 + o.clear, (p) => { if (ok && Math.hypot(p.x - x, p.y - y) < p.ew / 2 + o.clear) ok = false; });
+    // ni dentro de una zanja con paredes lisas (entre las paredes y sobre su tapa)
+    if (ok) g.query(x, y, maxW / 2 + 2, (p) => {
+      if (!ok || !p.cut || p.cut.walls === 'nat') return;
+      const dx = x - p.x, dy = y - p.y;
+      const u = dx * -p.ty + dy * p.tx;
+      if (Math.abs(dx * p.tx + dy * p.ty) > p.ds * (0.75 + Math.abs(u) / 20)) return;
+      if (Math.abs(u) < (u >= 0 ? p.uL : p.uR) + 0.5) ok = false;
+    });
     if (!ok) return;
     placed.query(x, y, o.minSpace, (t) => { if (ok && Math.hypot(t.x - x, t.y - y) < o.minSpace) ok = false; });
     if (!ok) return;

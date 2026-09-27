@@ -133,17 +133,19 @@ export function buildEdgeMeshes(layout, elev, spIn = {}, opts = {}) {
       const tyOf = (bi) => { const b = (r.bridges || []).find((q) => q.idx === bi); return b && b.type === 'track' ? 'tramo' : b && b.type === 'cut' ? 'socavado' : 'puente'; };
       if (dAt.some((w) => w > 0)) {
         const pos = [], uv = [], G = {};
+        // U a lo ancho en metros respecto del ancho de la ruta (así una transición no comprime la textura)
+        const wRef = (side > 0 ? P.dirtWidthL : P.dirtWidthR) > 0 && has(P.dirtSide, sideKey) ? (side > 0 ? P.dirtWidthL : P.dirtWidthR) : Math.max(...dAt);
         frames.forEach((F, a) => {
           const w = dAt[a];
           const p0 = at(F, side * F.hw), p1 = at(F, side * (F.hw + w));
-          const v = F.s / dTile;
+          const v = F.s / dTile, u1 = w / Math.max(0.1, wRef);
           pos.push(p0[0], p0[1], p0[2] + 0.005, p1[0], p1[1], p1[2] + 0.005);
-          uv.push(0, v, 1, v);
-          if (skirt) { pos.push(p1[0] + F.lx * side * 0.2, p1[1] + F.ly * side * 0.2, p1[2] - skirt); uv.push(1.05, v); }
+          uv.push(0, v, u1, v);
+          if (skirt) { pos.push(p1[0] + F.lx * side * 0.2, p1[1] + F.ly * side * 0.2, p1[2] - skirt); uv.push(u1 + 0.05, v); }
         });
         const per = skirt ? 3 : 2;
         for (let a = 0; a < frames.length - 1; a++) {
-          if (dAt[a] <= 0 || dAt[a + 1] <= 0 || !segOk(a, a + 1, (dAt[a] + dAt[a + 1]) / 2)) continue;
+          if ((dAt[a] <= 0 && dAt[a + 1] <= 0) || !segOk(a, a + 1, (dAt[a] + dAt[a + 1]) / 2)) continue; // (una punta de la transición puede terminar en 0)
           const gk = groupOf(a), sus = gk !== 'n'; // (sin faldón en tramos suspendidos ni en puentes)
           const grp = G[gk] || (G[gk] = { idx: [], segs: [] }), idx = grp.idx;
           grp.segs.push(a);

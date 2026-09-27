@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Track Spline Generator v0.66</title>
+  <title>Track Spline Generator v0.67</title>
   <link rel="stylesheet" href="styles.css">
   <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.66</span></div>
+    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.67</span></div>
     <label class="proj-name-wrap" title="Nombre del proyecto: se usa al guardar (<nombre>.tsg.json) y en los autoguardados (<nombre>_auto_…)"><input id="projectName" class="proj-name" value="pista" spellcheck="false" maxlength="80"><span class="small muted" id="autosaveState"></span></label>
     <div class="top-actions">
       <button id="btnNew" title="Empezar de cero">Nuevo</button>
@@ -289,6 +289,7 @@
           <div class="field"><label>Ancho izquierdo <span class="val"><input type="number" id="dirtWidthLNum" min="0" step="0.1" style="width:60px"> m</span></label><input type="range" id="dirtWidthL" min="0.5" max="15" step="0.1"></div>
           <div class="field"><label>Ancho derecho <span class="val"><input type="number" id="dirtWidthRNum" min="0" step="0.1" style="width:60px"> m</span></label><input type="range" id="dirtWidthR" min="0.5" max="15" step="0.1"></div>
           <div class="field"><label>Repetición de la textura (a lo largo) <span class="val"><input type="number" id="dirtTileNum" min="0.5" step="0.5" style="width:56px"> m</span></label><input type="range" id="dirtTile" min="0.5" max="30" step="0.5"></div>
+          <div class="field"><label>Transición entre tramos <span class="val"><input type="number" id="dirtTransitionNum" min="0" step="1" style="width:56px"> m</span></label><input type="range" id="dirtTransition" min="0" max="60" step="1" title="Donde dos tramos tienen caminos de tierra de distinto ancho (o uno no tiene), el más ancho se angosta hasta el otro en este largo, dentro de su propio tramo. 0 = corte brusco"></div>
           <div class="row gap"><button id="btnDirtTex">Cargar textura…</button><button id="btnDirtTexRemove" disabled>Por defecto</button><img id="dirtTexThumb" class="thumb" hidden alt=""></div>
           <input id="fileDirtTex" type="file" accept="image/*" hidden>
         </div>
