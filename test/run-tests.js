@@ -1014,6 +1014,21 @@ for (const [key, s] of Object.entries(SAMPLES)) {
     };
     const m45 = rockDens(45), m85 = rockDens(85);
     check([...m45, ...m85].every((v) => v > 0.7 && v < 1.35) && Math.abs(m45[1] - 1) < 0.08 && Math.abs(m85[1] - 1) < 0.08, `roca natural: textura sin estirarse a 45° (${m45.map((v) => v.toFixed(2)).join(' / ')}) y a 85° (${m85.map((v) => v.toFixed(2)).join(' / ')}; 1 = sin deformación)`);
+    // 0.74: en la pared natural todo es roca: ningún triángulo de pasto baja por la cara (se clasifica por vértices)
+    for (const dens of [1, 20, 50]) {
+      const T = buildTerrain(L, E, { ...spU, terrainDensity: dens, cutRanges: [{ k: 0, s0, s1, walls: 'nat', wallSubdiv: 0, idx: 0 }] });
+      const P = T.positions, I = T.baseIndices, g = T.ctx.groundAt, S4 = T.ctx.S;
+      let wedge = 0;
+      for (let t = 0; t < I.length; t += 3) {
+        const vs = [I[t], I[t + 1], I[t + 2]];
+        // vértice en la zanja: ahí la superficie de la roca queda bajo el suelo natural
+        if (!vs.some((v) => { const ci = T.ctx.cutInfo(P[v * 3], P[v * 3 + 1]); return ci.kind === 'cutNat' && g(P[v * 3], P[v * 3 + 1]) - ci.z > 0.15; })) continue;
+        const cx = (P[vs[0] * 3] + P[vs[1] * 3] + P[vs[2] * 3]) / 3, cy = (P[vs[0] * 3 + 1] + P[vs[1] * 3 + 1] + P[vs[2] * 3 + 1]) / 3;
+        const n = nearestOnSamples(r, cx, cy), Q = S4[n.i], u = Math.abs((cx - Q.x) * -Q.ty + (cy - Q.y) * Q.tx);
+        if (r.s[n.i] > s0 + 1 && r.s[n.i] < s1 - 1 && u < Q.uL + 6) wedge++;
+      }
+      check(wedge === 0 && T.cutWalls.nat.tris > 100, `pared natural con terreno de densidad ${dens}: ningún triángulo de pasto en la cara (${wedge}; roca ${T.cutWalls.nat.tris})`);
+    }
   }
 }
 

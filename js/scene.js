@@ -1051,7 +1051,29 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
       clipTerrainAtCuts(out, wallAt, (x, y) => { const w = wallAt(x, y) || wallAtLoose(x, y); return w && w.nat ? Math.min(w.floor, heightNat(x, y, 0.5)) : heightNat(x, y, 0.5); }, wallAtLoose);
     }
     const cutCarve = (x, y) => { const ci = cutInfo(x, y); if (!ci.kind || ci.kind === 'cutArt') return null; const zn = heightNat(x, y, 0.5); return zn - ci.z > 0.3 ? `cutNat:${ci.idx}` : null; }; // roca: una parte por tramo
-    const classify = (x, y) => (carvedRivers && riverCarveAt(x, y) > 0.05 ? 'river' : anyCut ? cutCarve(x, y) : null);
+    // paredes naturales: un triángulo es roca si cualquiera de sus vértices quedó bajo el suelo natural (> 0,15 m) dentro
+    // de un socavado natural (antes se miraba solo el centro: los triángulos grandes que bajan del borde al pie quedaban
+    // de pasto, como cuñas verdes en la pared). Solo es pasto lo que queda entero sobre el suelo natural.
+    const PV = out.positions, natV = new Map();
+    const natOfV = (v) => {
+      let k = natV.get(v);
+      if (k !== undefined) return k;
+      const x = PV[v * 3], y = PV[v * 3 + 1];
+      k = null;
+      // dentro de la zanja: la superficie de la roca ahí queda bajo el suelo natural (no se mira la altura del vértice,
+      // que en triángulos grandes se suaviza)
+      const ci = cutInfo(x, y);
+      if (ci.kind === 'cutNat' && heightNat(x, y, 0.5) - ci.z > 0.15) k = `cutNat:${ci.idx}`;
+      natV.set(v, k);
+      return k;
+    };
+    const classify = (x, y, a, b, c) => {
+      if (carvedRivers && riverCarveAt(x, y) > 0.05) return 'river';
+      if (!anyCut) return null;
+      const byCentroid = cutCarve(x, y);
+      if (byCentroid || a == null) return byCentroid;
+      return natOfV(a) || natOfV(b) || natOfV(c);
+    };
     splitParts(out, classify, { river: Math.max(0.5, sp.riverWallTile ?? 4), cutArt: Math.max(0.5, sp.cutWallTile ?? 4), cutNat: Math.max(0.5, sp.cutWallTile ?? 4) });
     out.wall = out.parts.river || null; // compatibilidad: cauces de los ríos
     // roca de las paredes naturales: todas juntas (vista) y una parte por tramo (textura propia / exportación)
@@ -1112,7 +1134,7 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
     out.cutWalls = { art: anyArt ? cutArtWalls(artSt, capW, Math.max(0.5, sp.cutWallTile ?? 4), sp) : null, nat };
   }
   const groundAt = (x, y) => heightNat(x, y, 0.5); // nivel natural del suelo (sin las zanjas de las secciones socavadas)
-  Object.defineProperty(out, 'ctx', { value: { S, fine, maxW, gap, zoneAt, heightAt, sp, origAt, riverCarveAt, inRiver, groundAt, cutStations: artSt }, enumerable: false });
+  Object.defineProperty(out, 'ctx', { value: { S, fine, maxW, gap, zoneAt, heightAt, sp, origAt, riverCarveAt, inRiver, groundAt, cutStations: artSt, cutInfo }, enumerable: false });
   return out;
 }
 
@@ -1757,6 +1779,7 @@ export function cutGuidePoints(stations, S, capW, layout, step = 2.5, natAt = nu
         d = Math.max(0, natAt(...at(d)) - floor) / slope;
         if (d < 0.5) continue;
         push(...at(d));
+        push(...at(d + 0.3)); // justo afuera del borde: el límite entre roca y pasto queda en una línea limpia
         if (d > 3) push(...at(d / 2));
         // con relieve: una grilla de puntos sobre la roca (según el tamaño de las rocas y la densidad de las paredes), así
         // el relieve se ve aunque el terreno tenga triángulos grandes
@@ -1845,7 +1868,7 @@ export function splitParts(mesh, classify, tiles = {}) {
   for (let t = 0; t < I.length; t += 3) {
     const a = I[t], b = I[t + 1], c = I[t + 2];
     const x = (P[a * 3] + P[b * 3] + P[c * 3]) / 3, y = (P[a * 3 + 1] + P[b * 3 + 1] + P[c * 3 + 1]) / 3;
-    const key = classify(x, y);
+    const key = classify(x, y, a, b, c);
     if (key) { (groups[key] || (groups[key] = [])).push(a, b, c); others.push(a, b, c); } else base.push(a, b, c);
   }
   mesh.baseIndices = new Uint32Array(base);
