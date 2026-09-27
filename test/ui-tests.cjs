@@ -1104,6 +1104,9 @@ test('colisión: camino de tierra y costados (vista 3D, alto y grosor, exportaci
   await ev(() => { const el = document.getElementById('collHeightNum'); el.value = '9'; el.dispatchEvent(new Event('change', { bubbles: true })); });
   const a = await ev(() => { const P = window.__tsg.preview; return [P.collGroup.children.map((m) => m.name), P.collGroup.visible, document.getElementById('collInfo').textContent]; });
   expect(a[0].includes('colision_camino_tierra_ruta_principal') && a[0].filter((n) => /costados/.test(n)).length === 2 && a[1] && /quedan más bajas|are lower/.test(a[2]), `colisión en 3D: ${JSON.stringify(a)}`);
+  // contador: la colisión en otra línea, en celeste; «Colisiones» junto a «Triggers» en la barra de la vista 3D
+  const st = await ev(() => { const el = document.querySelector('.tri-stats .coll'), cb = document.getElementById('showCollision'); return [el ? el.textContent : null, el ? getComputedStyle(el).color : null, !cb.closest('.sidebar'), cb.closest('label').parentElement === document.getElementById('trigOn3d').closest('label').parentElement, cb.closest('label').textContent.trim()]; });
+  expect(st[0] && /Colisión|Collision/.test(st[0]) && st[1] === 'rgb(64, 224, 255)' && st[2] && st[3] && /^(Colisiones|Collisions)$/.test(st[4]), `contador y check: ${JSON.stringify(st)}`);
   const tris = () => ev(() => window.__tsg.preview.collData.tris);
   const t1 = await tris();
   await ev(() => { const el = document.getElementById('collThickNum'); el.value = '0'; el.dispatchEvent(new Event('change', { bubbles: true })); });
@@ -1176,6 +1179,18 @@ test('paredes del socavado: repetición X / Y y ajustes (generales y del tramo),
   await idle();
   const rn = await ev((s) => [...document.querySelectorAll(s)].map((b) => b.dataset.kind), q('.bcutBox button.btex'));
   expect(JSON.stringify(rn) === JSON.stringify(['wallNat']) && (await ev((s) => document.querySelector(s).hidden, q('.bArtBox'))), `naturales: ${rn}`);
+});
+
+test('perfil de elevación: atajo Automático / Directo sincronizado con el panel Elevación', async () => {
+  await reset();
+  const on = () => ev(() => [...document.querySelectorAll('#elevModeProf button.on, #elevMode button.on')].map((b) => b.dataset.mode).join(','));
+  expect((await on()) === 'auto,auto' || (await on()) === 'auto,auto', `automático por defecto: ${await on()}`);
+  await ev(() => document.querySelector('#elevModeProf button[data-mode=direct]').click());
+  await idle();
+  expect((await ev(() => window.__tsg.state.elev.mode)) === 'direct' && (await on()) === 'direct,direct', `directo desde el perfil: ${await on()}`);
+  await ev(() => document.querySelector('#elevMode button[data-mode=auto]').click());
+  await idle();
+  expect((await on()) === 'auto,auto', `vuelta a automático desde el panel: ${await on()}`);
 });
 
 test('tarjetas: la primera vez que se abre una lista desplegable no se cierra (la tarjeta no se vuelve a dibujar)', async () => {

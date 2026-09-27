@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Track Spline Generator v0.72</title>
+  <title>Track Spline Generator v0.73</title>
   <link rel="stylesheet" href="styles.css">
   <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.72</span></div>
+    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.73</span></div>
     <label class="proj-name-wrap" title="Nombre del proyecto: se usa al guardar (<nombre>.tsg.json) y en los autoguardados (<nombre>_auto_…)"><input id="projectName" class="proj-name" value="pista" spellcheck="false" maxlength="80"><span class="small muted" id="autosaveState"></span></label>
     <div class="top-actions">
       <button id="btnNew" title="Empezar de cero">Nuevo</button>
@@ -313,11 +313,10 @@
         <h3 class="subhead" id="collHead">Colisión</h3>
         <label class="check small"><input type="checkbox" id="collision"> Incluir geometría de colisión</label>
         <div id="collBox">
-          <label class="check small"><input type="checkbox" id="collDirt"> Camino de tierra (plano de una cara)</label>
-          <label class="check small"><input type="checkbox" id="collSides"> Costados (paredes invisibles en el borde)</label>
+          <label class="check small"><input type="checkbox" id="collDirt"> Camino de tierra</label>
+          <label class="check small"><input type="checkbox" id="collSides"> Paredes</label>
           <div class="field"><label>Alto de los costados <span class="val"><input type="number" id="collHeightNum" min="0.2" step="0.1" style="width:60px"> m</span></label><input type="range" id="collHeight" min="0.5" max="10" step="0.1"></div>
           <div class="field"><label>Grosor de los costados (0 = plano de una cara) <span class="val"><input type="number" id="collThickNum" min="0" step="0.1" style="width:60px"> m</span></label><input type="range" id="collThick" min="0" max="3" step="0.1"></div>
-          <label class="check small"><input type="checkbox" id="showCollision"> Mostrar en la vista 3D</label>
           <p class="hint" id="collInfo"></p>
         </div>
         <p class="hint">Los atajos tienen sus propios bordes: en su tarjeta de <b>Rutas alternativas</b>.</p>
@@ -791,6 +790,7 @@
           <input type="color" id="wireColor" value="#ffffff" class="color-in">
           <input type="range" id="wireOpacity" min="0.05" max="1" step="0.05" value="0.35" style="width:70px">
           <label class="check small" title="Muestra u oculta los triggers (bocas de túneles y propios) en la vista 3D. Es la misma opción que «Mostrar los triggers en la vista 3D» del panel Triggers; se siguen exportando igual"><input type="checkbox" id="trigOn3d"> Triggers</label>
+          <label class="check small" title="Muestra u oculta la geometría de colisión (semitransparente: celeste el camino de tierra, rosa las paredes) en la vista 3D; se exporta igual"><input type="checkbox" id="showCollision"> Colisiones</label>
           <button id="btnGenTerrain" class="gen">Generar terreno</button>
           <button id="btnGenTrees" class="gen">Generar árboles y decoración</button>
           <button id="btnGame" class="primary" title="Un auto recorre la pista solo, con cámara en tercera o primera persona. Arrastrar con clic izquierdo orbita alrededor del auto; clic derecho vuelve a la cámara normal">Cámara de juego</button>
@@ -842,6 +842,7 @@
       <div class="view viewProfile">
         <div class="toolbar">
           <span class="label">Perfil de elevación z(s)</span>
+          <span class="seg mini" id="elevModeProf" role="group" aria-label="Modo de elevación" title="Atajo del modo de elevación del panel «Elevación»"><button data-mode="auto" data-noicon title="El optimizador arma la elevación (colinas, rampas en los cruces, pendiente y radios); las alturas fijadas son pedidos">Automático</button><button data-mode="direct" data-noicon title="Cada punto naranjo es un fotograma clave: la curva pasa exactamente por él">Directo</button></span>
           <button id="btnProfileFit" title="Encuadra el perfil: vuelve a ver toda la pista y todos los puntos. En el gráfico: rueda = zoom horizontal, Shift + rueda = zoom vertical, botón medio = desplazar">Encuadrar</button>
           <button id="btnFlatten" title="Aplana los puntos seleccionados (Editar puntos) a su elevación promedio: plano estricto entre el primero y el último. Es una sola vez: después puedes volver a editarlos">Aplanar</button>
           <span class="zsmooth" title="Suaviza las alturas de los puntos seleccionados (Editar puntos, 3 o más): los extremos quedan fijos para empalmar con el resto. 0 = sin cambio, 100 = rampa lisa entre los extremos. Se ve mientras mueves la barra; Ctrl+Z lo deshace de una vez"><label class="small" for="profSmooth">Suavizar alturas</label><input type="range" id="profSmooth" min="0" max="100" step="1" value="0"><span class="val small" id="profSmoothVal">0</span></span>

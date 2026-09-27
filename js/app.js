@@ -2152,8 +2152,8 @@ const app = {
     const el = $('collInfo');
     if (!el) return;
     el.textContent = !C ? 'Desactivada.' : C.dirt.length || C.sides.length
-      ? `${C.tris.toLocaleString('es')} triángulos. Se exportan en el grupo «colision» con el material invisible «colision» (extras: collision = dirt / sides).${C.clamped ? ` ${C.clamped} secciones de los costados quedan más bajas para no tocar una calzada que pasa por arriba.` : ''}`
-      : 'Sin camino de tierra ni costados que generar.';
+      ? `${C.tris.toLocaleString('es')} triángulos. Se exportan en el grupo «colision» con el material invisible «colision» (extras: collision = dirt / sides).${C.clamped ? ` ${C.clamped} secciones de las paredes quedan más bajas para no tocar una calzada que pasa por arriba.` : ''}`
+      : 'Sin camino de tierra ni paredes que generar.';
   },
   onEdgesInfo(B) {
     state.edgeMeshes = B;
@@ -4645,7 +4645,7 @@ const PARAMS = [
 /** Barra del modo de elevación (Automático / Directo) y lo que depende de él. */
 function syncElevMode() {
   const direct = state.elev.mode === 'direct';
-  document.querySelectorAll('#elevMode button').forEach((b) => b.classList.toggle('on', b.dataset.mode === (direct ? 'direct' : 'auto')));
+  document.querySelectorAll('#elevMode button, #elevModeProf button').forEach((b) => b.classList.toggle('on', b.dataset.mode === (direct ? 'direct' : 'auto'))); // (y el atajo del perfil)
   $('directTools').hidden = !direct;
   $('genOpts').hidden = !direct;
   $('autoElevBox').classList.toggle('dimmed', direct);
@@ -4861,7 +4861,7 @@ function bindControls() {
       else refreshPanels();
     });
   }
-  document.querySelectorAll('#elevMode button').forEach((b) => b.addEventListener('click', () => setElevMode(b.dataset.mode)));
+  document.querySelectorAll('#elevMode button, #elevModeProf button').forEach((b) => b.addEventListener('click', () => setElevMode(b.dataset.mode)));
   $('btnElevAuto').addEventListener('click', generateAutoHeights);
   $('btnFixCross').addEventListener('click', fixCrossings);
   $('useImageWidth').addEventListener('change', (e) => { state.geom.useImageWidth = e.target.checked; scheduleBuild(); });
@@ -7358,7 +7358,6 @@ const HINTS = {
   collSides: 'Paredes invisibles en el borde del camino de tierra (o de la pista si no hay); donde hay barrera, en su cara interior. Se abren donde entra o sale un atajo.',
   collHeight: 'Alto de los costados. Bajo otra calzada que pase por arriba (cruces) se recortan solos para no tocarla, con una rampa suave.',
   collThick: 'Grosor hacia afuera (la cara interior no se mueve). Con grosor, un volumen cerrado: ayuda a que un auto muy rápido no los atraviese con pocos FPS (conviene además colisión continua en el motor). 0 = plano de una cara que mira a la pista.',
-  showCollision: 'Muestra la colisión semitransparente en la vista 3D (celeste: camino de tierra; rosa: costados). En la cámara de juego no se ve.',
   wireColor: 'Color del wireframe.',
   wireOpacity: 'Opacidad del wireframe.',
   btnGame: 'Un auto recorre la pista solo. Tercera o primera persona, velocidad ajustable; la cámara sigue curvas, pendientes y peralte.',

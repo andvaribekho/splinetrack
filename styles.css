@@ -240,6 +240,7 @@ button .hk { display: inline-block; margin-left: 6px; padding: 0 4px; border: 1p
 .panel.focus-ring { outline: 1px solid rgba(255, 213, 79, 0.55); outline-offset: -1px; border-radius: 6px; background-image: linear-gradient(rgba(255, 213, 79, 0.055), rgba(255, 213, 79, 0.055)); }
 .panel.focus-ring.floating h2 { background-image: linear-gradient(rgba(255, 213, 79, 0.08), rgba(255, 213, 79, 0.08)); }
 .tri-stats .sel { margin-top: 3px; color: #ffe082; }
+.tri-stats .coll { margin-top: 3px; color: #40e0ff; }
 .tun-link { color: var(--accent2); cursor: pointer; text-decoration: underline dotted; }
 .tun-link.on { color: #ffd54f; font-weight: 600; }
 
@@ -483,3 +484,5 @@ button.km-keys:hover { border-color: var(--accent); background: rgba(242,169,59,
 .sr-head, .sr-empty { padding: 6px 8px; font-size: calc(11.5px * var(--fs, 1)); color: var(--muted, #8b95a8); }
 @keyframes searchFlash { 0%, 100% { box-shadow: 0 0 0 0 rgba(242,169,59,0); } 15%, 55% { box-shadow: 0 0 0 3px rgba(242,169,59,0.95); background-color: rgba(242,169,59,0.18); } }
 .search-flash { animation: searchFlash 2.2s ease-in-out; border-radius: 4px; }
+.seg.mini button { padding: 2px 8px; font-size: calc(11.5px * var(--fs, 1)); }
+.seg.mini { margin: 0; vertical-align: middle; }

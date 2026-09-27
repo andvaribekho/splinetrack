@@ -1,6 +1,14 @@
 // Traducción al inglés de la interfaz. Clave = texto en español tal como aparece en la página (espacios colapsados);
 // {0}, {1}… son partes variables (números, nombres). Lo que no está aquí se muestra en español.
 export default {
+  "Colisiones": "Collisions",
+  "Muestra u oculta la geometría de colisión (semitransparente: celeste el camino de tierra, rosa las paredes) en la vista 3D; se exporta igual": "Shows or hides the collision geometry (semi-transparent: light blue the dirt road, pink the walls) in the 3D view; it is exported the same way",
+  "Atajo del modo de elevación del panel «Elevación»": "Shortcut for the elevation mode in the «Elevation» panel",
+  "El optimizador arma la elevación (colinas, rampas en los cruces, pendiente y radios); las alturas fijadas son pedidos": "The optimizer builds the elevation (hills, ramps at crossings, grade and radii); pinned heights are requests",
+  "Cada punto naranjo es un fotograma clave: la curva pasa exactamente por él": "Each orange point is a keyframe: the curve passes exactly through it",
+  "<b>Colisión</b> · {0} triángulos": "<b>Collision</b> · {0} triangles",
+  "Muestra la colisión semitransparente en la vista 3D (celeste: camino de tierra; rosa: paredes). En la cámara de juego no se ve.": "Shows the collision semi-transparent in the 3D view (light blue: dirt road; pink: walls). Not visible in the game camera.",
+  "{0} triángulos": "{0} triangles",
   "Texturas generales: cada tramo socavado puede tener las suyas en su tarjeta.": "General textures: each trench section can have its own in its card.",
   "Lisas: tapa": "Smooth: top",
   "Como la cara interior": "Like the inner face",
@@ -34,10 +42,10 @@ export default {
   "Grosor de los costados (0 = plano de una cara)": "Side thickness (0 = single-sided plane)",
   "Mostrar en la vista 3D": "Show in the 3D view",
   "Desactivada.": "Off.",
-  "Sin camino de tierra ni costados que generar.": "No dirt road or sides to generate.",
+  "Sin camino de tierra ni paredes que generar.": "No dirt road or walls to generate.",
   "{0} triángulos. Se exportan en el grupo «colision» con el material invisible «colision» (extras: collision = dirt / sides).{1}": "{0} triangles. Exported in the «colision» group with the invisible «colision» material (extras: collision = dirt / sides).{1}",
-  " {0} secciones de los costados quedan más bajas para no tocar una calzada que pasa por arriba.": " {0} side cross-sections are lower so they don't touch a roadway passing above.",
-  "{0} secciones de los costados quedan más bajas para no tocar una calzada que pasa por arriba.": "{0} side cross-sections are lower so they don't touch a roadway passing above.",
+  " {0} secciones de las paredes quedan más bajas para no tocar una calzada que pasa por arriba.": " {0} wall cross-sections are lower so they don't touch a roadway passing above.",
+  "{0} secciones de las paredes quedan más bajas para no tocar una calzada que pasa por arriba.": "{0} wall cross-sections are lower so they don't touch a roadway passing above.",
   "Agrega a la exportación mallas invisibles para la física del juego: el camino de tierra y paredes en los costados. No cambian lo que se ve.": "Adds invisible meshes for the game's physics to the export: the dirt road and walls along the sides. They don't change what you see.",
   "Plano de una cara sobre el camino de tierra (solo sus bordes: pocos triángulos).": "Single-sided plane over the dirt road (only its edges: few triangles).",
   "Paredes invisibles en el borde del camino de tierra (o de la pista si no hay); donde hay barrera, en su cara interior. Se abren donde entra o sale un atajo.": "Invisible walls at the edge of the dirt road (or of the track if there is none); where there is a barrier, at its inner face. They open where a shortcut joins or leaves.",

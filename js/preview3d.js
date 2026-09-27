@@ -383,7 +383,9 @@ export class Preview3D {
     const selIt = st.selItem ? this.findItem(st.selItem) : null;
     const selObj = selIt ? { name: selIt.name, tris: selIt.indices.length / 3 } : st.selHill != null ? ot.hills.get(st.selHill) : st.selTunnel != null ? ot.tunnels.get(st.selTunnel) : null;
     const selTxt = selObj ? `<div class="sel"><b>Seleccionado</b> · ${selObj.name}: ${f(selObj.tris)} triángulos</div>` : '';
-    this.statsDiv.innerHTML = `<b>Triángulos</b> · pista ${f(t.track)}${edges ? ` · bordes ${f(edges)}` : ''}${sp.terrain ? ` · terreno ${f(t.terrain)}` : ''}${hills || tun ? ` · cerros + túneles ${f(hills + tun)} (${[hills ? `${nH} cerro${nH === 1 ? '' : 's'}: ${f(hills)}` : '', tun ? `${nT} túnel${nT === 1 ? '' : 'es'}: ${f(tun)}` : ''].filter(Boolean).join(' · ')})` : ''}${rivers ? ` · ríos y cascadas ${f(rivers)}` : ''}${sp.trees ? ` · árboles ${f(t.trees)}` : ''}${grass ? ` · hierba ${f(grass)}` : ''}${gate ? ` · pórtico ${f(gate)}` : ''}${t.items ? ` · elementos ${f(t.items)} (${this.itemCount})` : ''}${deco ? ` · decoración ${f(deco)}` : ''}${shadows ? ` · sombras ${f(shadows)}` : ''} · <b>total ${f(total + (t.items || 0))}</b>${selTxt}`;
+    const cT = this.collData && this.app.state.scene.collision ? this.collData.tris : 0; // colisión: otra línea, en celeste
+    const collTxt = cT ? `<div class="coll"><b>Colisión</b> · ${f(cT)} triángulos</div>` : '';
+    this.statsDiv.innerHTML = `<b>Triángulos</b> · pista ${f(t.track)}${edges ? ` · bordes ${f(edges)}` : ''}${sp.terrain ? ` · terreno ${f(t.terrain)}` : ''}${hills || tun ? ` · cerros + túneles ${f(hills + tun)} (${[hills ? `${nH} cerro${nH === 1 ? '' : 's'}: ${f(hills)}` : '', tun ? `${nT} túnel${nT === 1 ? '' : 'es'}: ${f(tun)}` : ''].filter(Boolean).join(' · ')})` : ''}${rivers ? ` · ríos y cascadas ${f(rivers)}` : ''}${sp.trees ? ` · árboles ${f(t.trees)}` : ''}${grass ? ` · hierba ${f(grass)}` : ''}${gate ? ` · pórtico ${f(gate)}` : ''}${t.items ? ` · elementos ${f(t.items)} (${this.itemCount})` : ''}${deco ? ` · decoración ${f(deco)}` : ''}${shadows ? ` · sombras ${f(shadows)}` : ''} · <b>total ${f(total + (t.items || 0))}</b>${selTxt}${collTxt}`;
   }
 
   /** Wireframe superpuesto (color y opacidad elegibles) sobre pista, terreno y árboles. */
@@ -1452,6 +1454,7 @@ export class Preview3D {
     }
     this.collGroup.visible = sp.showCollision !== false && !(this.game && this.game.active);
     if (this.app.onCollisionInfo) this.app.onCollisionInfo(C);
+    this.updateStats();
     this.needsFrame = true;
   }
 
