@@ -58,7 +58,7 @@ async function drag(x0, y0, x1, y1, steps = 3) { await page.mouse.move(x0, y0); 
 /** Nombres de los objetos de la escena exportada, agrupados por su padre. */
 const exportNames = () => ev(async () => {
   const t = window.__tsg, m = await import('/js/export-glb.js');
-  const { root } = await m.buildExportScene(t.state.layout, t.state.result, t.state.scene, { deco: { assetById: (id) => t.app.assetById(id), sets: t.state.decoSets, paintFor: (s) => t.app.decoPaintWorld(s) }, triggers: t.app.triggersWorld(), tunnelTex: (uid, k) => t.app.tunnelTexCanvas(uid, k), assetById: (id) => t.app.assetById(id), cutWallFor: (i, k, p) => t.app.cutWallOwnTex(i, k, p), cutArtTop: t.state.cutArtTopTex, cutArtOut: t.state.cutArtOutTex, riverArt: t.state.riverArtTex, riverArtTop: t.state.riverArtTopTex, riverArtOut: t.state.riverArtOutTex, riverWallFor: (id, k, p) => t.app.riverWallOwnTex(id, k, p), signTex: (ty) => t.app.signTexCanvas(ty) }, t.app.terrainPaintWorld ? t.app.terrainPaintWorld() : null, t.app.hillsWorld(), null);
+  const { root } = await m.buildExportScene(t.state.layout, t.state.result, t.state.scene, { deco: { assetById: (id) => t.app.assetById(id), sets: t.state.decoSets, paintFor: (s) => t.app.decoPaintWorld(s) }, triggers: t.app.triggersWorld(), tunnelTex: (uid, k) => t.app.tunnelTexCanvas(uid, k), assetById: (id) => t.app.assetById(id), cutWallFor: (i, k, p) => t.app.cutWallOwnTex(i, k, p), cutArtTop: t.state.cutArtTopTex, cutArtOut: t.state.cutArtOutTex, riverArt: t.state.riverArtTex, riverArtTop: t.state.riverArtTopTex, riverArtOut: t.state.riverArtOutTex, riverWallFor: (id, k, p) => t.app.riverWallOwnTex(id, k, p), signTex: (ty) => t.app.signTexCanvas(ty), waterTex: (c, i, l) => t.app.waterTexCanvas(c, i, l), waterOwn: (i, l) => t.app.waterOwnTex(i, l) }, t.app.terrainPaintWorld ? t.app.terrainPaintWorld() : null, t.app.hillsWorld(), null);
   const out = {};
   root.traverse((o) => { if (o !== root && o.name && o.parent) (out[o.parent.name || '?'] = out[o.parent.name || '?'] || []).push(o.name); });
   return out;
@@ -1435,6 +1435,68 @@ test('señalética de curvas (en Elementos de pista): carteles por fuera de la c
   expect(names.includes('senaletica') || names.includes('senal_curva_der'), `exportación: ${names.filter((n) => /senal/.test(n))}`);
   const ex = await exportNames();
   expect(ex.senaletica && ex.senaletica.includes('senal_curva_der') && ex.senaletica.includes('senal_curva_der_postes'), `grupo senaletica: ${JSON.stringify(ex.senaletica)}`);
+});
+
+test('agua: textura a lo largo de la corriente, lagos aparte, textura propia, invertir corriente, segunda capa y cascada al pintar sobre un cerro', async () => {
+  await reset();
+  await page.click('#btnGenTerrain');
+  await idle();
+  await ev(async () => {
+    const t = window.__tsg, L = t.state.layout, r = L.routes[0];
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (let i = 0; i < r.n; i++) { x0 = Math.min(x0, r.x[i]); x1 = Math.max(x1, r.x[i]); y0 = Math.min(y0, r.y[i]); y1 = Math.max(y1, r.y[i]); }
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, P = (x, y, rr) => { const [a, b] = L.toLayout(x, y); return { x: a, y: b, r: rr / L.scale, e: false }; };
+    const riv = []; for (let q = 0; q <= 1; q += 0.02) riv.push(P(cx - 80 + 160 * q, cy + 15 * Math.sin(q * 6), 5));
+    const lake = []; for (let a = 0; a < 6.28; a += 0.3) for (const rr of [0, 8, 16]) lake.push(P(cx + Math.cos(a) * rr, cy + 60 + Math.sin(a) * rr, 8));
+    t.state.rivers = [{ id: 1, kind: 'river', mode: 'carved', depth: 2, walls: 'nat', wallSubdiv: 2, strokes: riv }, { id: 2, kind: 'river', mode: 'carved', depth: 3, walls: 'nat', wallSubdiv: 2, strokes: lake }];
+    t.app.riversChanged(); await t.idle();
+  });
+  await idle();
+  const q = (id, sel) => `#riverList .item[data-id="${id}"] ${sel}`;
+  const st = () => ev(() => window.__tsg.preview.riverMeshes.filter((m) => m.userData.waterLayer).map((m) => ({ id: m.userData.riverId, layer: m.userData.waterLayer, name: m.name, map: !!m.material.map })));
+  const w0 = await st(), cats = await ev(() => window.__tsg.preview.riverData.map((w) => w.cat).join());
+  const flipVis = await ev(([a, b]) => [!document.querySelector(a).hidden, !document.querySelector(b).hidden], [q(1, '.rflipBox'), q(2, '.rflipBox')]);
+  expect(cats === 'river,lake' && w0.length === 2 && w0.every((m) => m.map) && flipVis[0] && !flipVis[1], `agua con textura: ${cats}, ${JSON.stringify(w0)}; «Invertir corriente» solo en el río: ${flipVis}`);
+  // invertir corriente: la v cambia de signo
+  const v0 = await ev(() => window.__tsg.preview.riverData[0].uvs[1]);
+  await ev((s) => { const el = document.querySelector(s); el.checked = true; el.dispatchEvent(new Event('change', { bubbles: true })); }, q(1, '.rflip'));
+  await idle();
+  const v1 = await ev(() => [window.__tsg.state.rivers[0].flipFlow, window.__tsg.preview.riverData[0].uvs[1]]);
+  expect(v1[0] === true && Math.abs(v1[1] + v0) < 1e-4, `invertir corriente: v ${v0.toFixed(3)} → ${v1[1].toFixed(3)}`);
+  // segunda capa general de los ríos: el río la tiene, el lago no; se exporta aparte
+  await ev(() => { const el = document.getElementById('riverWaterL2'); el.checked = true; el.dispatchEvent(new Event('change', { bubbles: true })); });
+  await idle();
+  const w2 = await st();
+  const ex = await exportNames();
+  expect(w2.some((m) => m.id === 1 && m.layer === 2) && !w2.some((m) => m.id === 2 && m.layer === 2) && ex.rios && ex.rios.includes('rio_01_capa2') && !ex.rios.includes('rio_02_capa2'), `segunda capa: ${JSON.stringify(w2)}; exportación ${JSON.stringify(ex.rios)}`);
+  // textura propia del río: su malla la usa
+  const own = await ev(async () => {
+    const t = window.__tsg, c = document.createElement('canvas'); c.width = c.height = 8; c.getContext('2d').fillRect(0, 0, 8, 8);
+    t.app.setRiverTexture(1, 'water', c); await t.idle();
+    const m = t.preview.riverMeshes.find((o) => o.userData.riverId === 1 && o.userData.waterLayer === 1);
+    return !!(m && m.material.map && m.material.map.image === c) && !document.querySelector('#riverList .item[data-id="1"] .rwtexRm[data-kind="water"]').disabled;
+  });
+  expect(own, 'textura propia del agua del río');
+  // pintar un río que empieza sobre un cerro (sin seleccionarlo): cascada de ese cerro
+  await addHill(0.3);
+  await idle();
+  await ev(() => { const t = window.__tsg; t.state.rivers = []; t.app.selectHill(null); t.app.riversChanged(); });
+  await tool('river');
+  await ev(() => { const el = document.getElementById('riverShape'); el.value = 'brush'; el.dispatchEvent(new Event('change', { bubbles: true })); });
+  const hc = await ev(() => { const h = window.__tsg.state.hills[0].strokes[0]; return [h.x, h.y]; });
+  const A = await ev(([x, y]) => { const t = window.__tsg, [sx, sy] = t.editor.toScreen(x, y), r = document.getElementById('canvas2d').getBoundingClientRect(); return [sx + r.left, sy + r.top]; }, hc);
+  await drag(A[0], A[1], A[0] + 25, A[1] + 10, 5);
+  await idle();
+  const f = await ev(() => { const t = window.__tsg, rv = t.state.rivers[0]; return rv ? [rv.kind, rv.hill, document.querySelector('#riverList .item strong').textContent] : null; });
+  expect(f && f[0] === 'fall' && f[1] === 1 && /^cascada_/.test(f[2]), `río que empieza sobre un cerro: ${f}`);
+  // proyecto anterior con un río pintado sobre el cerro: al abrirlo pasa a ser cascada
+  const mig = await ev(async () => {
+    const t = window.__tsg, d = JSON.parse(JSON.stringify(t.projectData()));
+    d.rivers = d.rivers.map((rv) => ({ ...rv, kind: 'river', hill: null, walls: 'nat' }));
+    await t.openProject(d); await t.idle();
+    return t.state.rivers.map((rv) => `${rv.kind}:${rv.hill}`).join();
+  });
+  expect(mig === 'fall:1', `al abrir: río sobre el cerro → ${mig}`);
 });
 
 test('tarjetas: la primera vez que se abre una lista desplegable no se cierra (la tarjeta no se vuelve a dibujar)', async () => {

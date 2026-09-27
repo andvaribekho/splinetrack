@@ -166,7 +166,7 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
     }
     // ríos y cascadas: un objeto por cada uno (rio_NN / cascada_NN), con materiales distintos
     if (riverList.length) {
-      const RW = buildRivers(terrain, HS, riverList);
+      const RW = buildRivers(terrain, HS, riverList, sp);
       if (RW.length) {
         const rg = new THREE.Group();
         rg.name = 'rios';
@@ -174,8 +174,21 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
         const riverMat = new THREE.MeshStandardMaterial({ name: 'rio', color: 0x2f86d6, roughness: 0.12, metalness: 0.05, transparent: true, opacity: 0.85 });
         const fallMat = new THREE.MeshStandardMaterial({ name: 'cascada', color: 0xbfe8ff, roughness: 0.25, metalness: 0, transparent: true, opacity: 0.9 });
         let bedMat = null;
+        // 0.83: agua con textura (la propia del río o la general de su tipo) y segunda capa (objeto aparte, para animarla)
+        const wMats = {};
+        const waterMat = (w, layer) => {
+          const own = textures.waterOwn ? textures.waterOwn(w.id, layer) : null, cv = own || (textures.waterTex ? textures.waterTex(w.cat, null, layer) : null);
+          const nm = own ? `agua_${w.name}${layer === 2 ? '_capa2' : ''}` : { river: 'rio', lake: 'lago', fall: 'cascada' }[w.cat] + (layer === 2 ? '_capa2' : '');
+          if (wMats[nm]) return wMats[nm];
+          const base = w.kind === 'fall' ? fallMat : riverMat, t = tex(cv);
+          if (!t) return (wMats[nm] = layer === 1 && !own && w.cat !== 'lake' ? base : Object.assign(base.clone(), { name: nm }));
+          t.wrapS = t.wrapT = THREE.RepeatWrapping;
+          const m = base.clone(); m.name = nm; m.map = t; m.color.set(0xffffff); if (layer === 2) m.opacity = 1;
+          return (wMats[nm] = m);
+        };
         for (const w of RW) {
-          rg.add(mesh(w.name, w.positions, w.indices, w.uvs, w.kind === 'fall' ? fallMat : riverMat));
+          rg.add(mesh(w.name, w.positions, w.indices, w.uvs, waterMat(w, 1)));
+          if (w.layer2) rg.add(mesh(w.layer2.name, w.layer2.positions, w.layer2.indices, w.layer2.uvs, waterMat(w, 2)));
           if (w.bed) { // lecho de un río socavado (opcional): rio_NN_lecho
             if (!bedMat) { const t = tex(textures.riverBed); bedMat = new THREE.MeshStandardMaterial({ name: 'lecho_rio', color: t ? 0xffffff : 0x6b5a45, map: t, roughness: 1, metalness: 0 }); }
             rg.add(mesh(w.bed.name, w.bed.positions, w.bed.indices, w.bed.uvs, bedMat));

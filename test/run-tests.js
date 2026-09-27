@@ -12,7 +12,7 @@ import { nearestOnSamples } from '../js/geometry.js';
 import { buildEdgeMeshes } from '../js/edges.js';
 import { buildCollisionMeshes } from '../js/collision.js';
 import { edgeExtents, dirtWidthAt, edgeParams, convexHull2, frameAt, hillFieldOne } from '../js/tunnels.js';
-import { buildRivers, riverField, riverWallsOf, strokesContain } from '../js/rivers.js';
+import { buildRivers, riverField, riverWallsOf, strokesContain, riverFlow } from '../js/rivers.js';
 import { detectCurves, placeSigns, buildSigns } from '../js/signs.js';
 import { buildTriggers, sculptField, bakeTreeList, bakeDecoList, moveTree, treeConeVerts, vegPlace } from '../js/scene.js';
 import { treeModelItems, decoSetItems } from '../js/deco.js';
@@ -662,6 +662,13 @@ for (const [key, s] of Object.entries(SAMPLES)) {
   check(HF.hills[0].wall && HF.hills[0].wall.tris > 10, 'cascada socavada: cauce con material propio');
   const FW = buildRivers(T, HF, [fall]);
   check(FW.length === 1 && FW[0].kind === 'fall' && FW[0].name === 'cascada_01', 'cascada: malla de agua propia');
+  if (FW.length) { // 0.83: la corriente de la cascada baja: en los extremos de su eje, v es mayor en el más bajo
+    const P = FW[0].positions, U = FW[0].uvs, n = P.length / 3;
+    const vAt = (x, y) => { let b = 0, bd = Infinity; for (let v = 0; v < n; v++) { const d = Math.hypot(P[v * 3] - x, P[v * 3 + 1] - y); if (d < bd) { bd = d; b = v; } } return [U[b * 2 + 1], P[b * 3 + 2]]; };
+    const [va, za] = vAt(cx + 20, cy + 5), [vb, zb] = vAt(cx + 30, cy + 5);
+    check(FW[0].cat === 'fall' && Math.abs(za - zb) > 0.2 && (za < zb ? va > vb : vb > va), `cascada: la corriente baja (extremos a ${za.toFixed(1)} y ${zb.toFixed(1)} m: v ${va.toFixed(2)} / ${vb.toFixed(2)})`);
+  }
+
 }
 
 // perfil dibujado en un tramo: la elevación sigue la forma dibujada, y fuera del tramo casi no cambia
@@ -1248,6 +1255,34 @@ for (const [key, s] of Object.entries(SAMPLES)) {
     }
     // 0.79: toques en línea: dentro / fuera y extremos rectos
     check(strokesContain([{ x: 0, y: 0, x2: 10, y2: 0, r: 2 }], 5, 1.9) && !strokesContain([{ x: 0, y: 0, x2: 10, y2: 0, r: 2 }], 5, 2.1) && strokesContain([{ x: 0, y: 0, x2: 10, y2: 0, r: 2 }], 11.5, 0.5) && !strokesContain([{ x: 0, y: 0, x2: 10, y2: 0, r: 2, c1: 's' }], 10.5, 0) && !strokesContain([{ x: 0, y: 0, x2: 10, y2: 0, r: 2 }, { x: 5, y: 0, r: 1, s: 0.5 }, { x: 5, y: 0, r: 1, e: true }], 5, 0), 'toques en línea: extremos redondos o rectos; borrar resta y suavizar no pinta');
+    // 0.83: agua con UV a lo largo de la corriente (baja según el relieve; «Invertir corriente»), lagos en planta, tiling
+    // general o propio y segunda capa (misma malla 3 cm más arriba con su tiling)
+    {
+      const rvW = { id: 31, kind: 'river', mode: 'carved', depth: 2, walls: 'nat', strokes: riverS };
+      const Tw = buildTerrain(L, E, sp, { rivers: [rvW] });
+      const spW = { riverWaterU: 5, riverWaterV: 10, riverWaterL2: true, riverWaterU2: 7, riverWaterV2: 25 };
+      const [w] = buildRivers(Tw, null, [rvW], spW);
+      const oa = Tw.ctx.origAt;
+      // a lo largo del eje pintado: v crece aguas abajo (hacia donde baja el suelo), a razón de 1 / V por metro
+      const zA = oa(riverS[0].x, riverS[0].y), zB = oa(riverS[riverS.length - 1].x, riverS[riverS.length - 1].y);
+      const fl = riverFlow(riverField(rvW), oa, false), f0 = fl(riverS[5].x, riverS[5].y), f1 = fl(riverS[40].x, riverS[40].y);
+      const downIsEnd = zB <= zA, dv = f1[1] - f0[1];
+      let path = 0; for (let k = 6; k <= 40; k++) path += Math.hypot(riverS[k].x - riverS[k - 1].x, riverS[k].y - riverS[k - 1].y);
+      const fli = riverFlow(riverField(rvW), oa, true)(riverS[40].x, riverS[40].y);
+      // en la malla: la v de cada vértice = a lo largo / V (y la u = lateral / U + 0,5)
+      let bad = 0; for (let v = 0; v < w.positions.length / 3; v += 7) { const [lat, al] = fl(w.positions[v * 3], w.positions[v * 3 + 1]); if (Math.abs(w.uvs[v * 2 + 1] - al / 10) > 1e-4 || Math.abs(w.uvs[v * 2] - (lat / 5 + 0.5)) > 1e-4) bad++; }
+      check(w.cat === 'river' && (downIsEnd ? dv > 0 : dv < 0) && Math.abs(Math.abs(dv) - path) < path * 0.15 && Math.abs(fli[1] + f1[1]) < 1e-6 && bad === 0,
+        `agua del río: v a lo largo de la corriente (${dv.toFixed(1)} m en ${path.toFixed(1)} m de eje, aguas abajo ${downIsEnd ? 'hacia el final' : 'hacia el comienzo'} del trazo), invertida con «Invertir corriente», UV con el tiling (${bad} mal)`);
+      const P2 = w.layer2 && w.layer2.positions;
+      check(w.layer2 && w.layer2.tris === w.tris && Math.abs(P2[2] - w.positions[2] - 0.03) < 1e-5 && Math.abs(w.layer2.uvs[1] * 25 - w.uvs[1] * 10) < 1e-3 && w.layer2.name === `${w.name}_capa2`, `segunda capa: ${w.layer2 && w.layer2.tris} triángulos, 3 cm más arriba, con su tiling`);
+      // propio del río: tiling y sin segunda capa
+      const [wo] = buildRivers(Tw, null, [{ ...rvW, waterUvOwn: true, waterU: 2, waterV: 4, water2: false }], spW);
+      check(!wo.layer2 && Math.abs(wo.uvs[1] * 4 - w.uvs[1] * 10) < 1e-3, 'agua: tiling propio del río y segunda capa apagada solo en él');
+      // lago: en planta
+      const rvL = { id: 32, kind: 'river', mode: 'carved', depth: 3, walls: 'nat', strokes: lakeS };
+      const Tl = buildTerrain(L, E, sp, { rivers: [rvL] }), [wl] = buildRivers(Tl, null, [rvL], { lakeWaterU: 12, lakeWaterV: 8 });
+      check(wl.cat === 'lake' && Math.abs(wl.uvs[0] - wl.positions[0] / 12) < 1e-5 && Math.abs(wl.uvs[1] - wl.positions[1] / 8) < 1e-5, 'lago: sin corriente (UV en planta, con su tiling)');
+    }
     // proyectos anteriores: «suaves» y «de roca» pasan a naturales; las cascadas no cambian
     check(riverWallsOf({ walls: 'smooth' }).type === 'nat' && riverWallsOf({ walls: 'rock' }).type === 'nat' && riverWallsOf({}).type === 'nat' && riverField({ id: 7, kind: 'fall', mode: 'carved', depth: 2, walls: 'rock', strokes: riverS }).walls == null, 'ríos anteriores: paredes suaves o de roca → naturales (las cascadas siguen igual)');
   }

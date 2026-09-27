@@ -172,3 +172,45 @@ export function makeSandCanvas() {
   }
   return cv;
 }
+
+/**
+ * Texturas de fábrica del agua (0.83), 256×256 y sin costuras: ríos y cascadas = azul con líneas blancas de corriente a lo
+ * largo de v (el eje vertical de la imagen); lagos = azul con ondas suaves. layer 2 = segunda capa, con transparencia
+ * (espuma y brillos) para ver la de abajo.
+ */
+export function makeWaterCanvas(cat = 'river', layer = 1) {
+  const N = 256, cv = document.createElement('canvas');
+  cv.width = cv.height = N;
+  const g = cv.getContext('2d');
+  let seed = (cat === 'lake' ? 11 : cat === 'fall' ? 23 : 7) + layer * 101;
+  const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  const wrap = (fn) => { for (const dx of [-N, 0, N]) for (const dy of [-N, 0, N]) fn(dx, dy); }; // se dibuja repetido: sin costuras
+  if (layer === 1) {
+    const base = cat === 'fall' ? ['#3f9ad8', '#5cb3e6'] : cat === 'lake' ? ['#236fae', '#2f82c2'] : ['#2a78c0', '#3589cf'];
+    const gr = g.createLinearGradient(0, 0, N, 0);
+    gr.addColorStop(0, base[0]); gr.addColorStop(0.5, base[1]); gr.addColorStop(1, base[0]);
+    g.fillStyle = gr; g.fillRect(0, 0, N, N);
+  }
+  g.lineCap = 'round';
+  if (cat === 'lake') { // ondas: arcos cortos y claros
+    const n = layer === 1 ? 70 : 45;
+    for (let k = 0; k < n; k++) {
+      const x = rnd() * N, y = rnd() * N, r = 6 + rnd() * 16, a = rnd() * 0.5 + (layer === 1 ? 0.12 : 0.35);
+      g.strokeStyle = `rgba(255,255,255,${a.toFixed(3)})`; g.lineWidth = layer === 1 ? 1.5 : 2;
+      wrap((dx, dy) => { g.beginPath(); g.arc(x + dx, y + dy, r, Math.PI * 1.15, Math.PI * 1.85); g.stroke(); });
+    }
+    return cv;
+  }
+  // corriente: trazos a lo largo de v, con un leve vaivén
+  const n = layer === 1 ? (cat === 'fall' ? 70 : 55) : 35;
+  for (let k = 0; k < n; k++) {
+    const x = rnd() * N, y = rnd() * N, len = (cat === 'fall' ? 40 : 25) + rnd() * 70, w = (layer === 1 ? 1.2 : 2) + rnd() * 2.2;
+    const a = layer === 1 ? 0.25 + rnd() * 0.5 : 0.35 + rnd() * 0.45, amp = 2 + rnd() * 4;
+    g.strokeStyle = `rgba(255,255,255,${a.toFixed(3)})`; g.lineWidth = w;
+    wrap((dx, dy) => { g.beginPath(); g.moveTo(x + dx, y + dy); g.bezierCurveTo(x + dx + amp, y + dy + len * 0.33, x + dx - amp, y + dy + len * 0.66, x + dx, y + dy + len); g.stroke(); });
+  }
+  if (layer === 2) { // espuma: puntos sueltos
+    for (let k = 0; k < 90; k++) { const x = rnd() * N, y = rnd() * N, r = 0.8 + rnd() * 2; g.fillStyle = `rgba(255,255,255,${(0.3 + rnd() * 0.5).toFixed(3)})`; wrap((dx, dy) => { g.beginPath(); g.arc(x + dx, y + dy, r, 0, Math.PI * 2); g.fill(); }); }
+  }
+  return cv;
+}

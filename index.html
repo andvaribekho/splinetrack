@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Track Spline Generator v0.82</title>
+  <title>Track Spline Generator v0.83</title>
   <link rel="stylesheet" href="styles.css">
   <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.82</span></div>
+    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.83</span></div>
     <label class="proj-name-wrap" title="Nombre del proyecto: se usa al guardar (<nombre>.tsg.json) y en los autoguardados (<nombre>_auto_…)"><input id="projectName" class="proj-name" value="pista" spellcheck="false" maxlength="80"><span class="small muted" id="autosaveState"></span></label>
     <div class="top-actions">
       <button id="btnNew" title="Empezar de cero">Nuevo</button>
@@ -549,7 +549,7 @@
 
       <section class="panel" data-panel="rivers">
         <h2>Ríos y cascadas <span class="badge" id="riverCount">0</span></h2>
-        <p class="hint">Con <b>Ríos y cascadas</b> (barra superior) pintas ríos sobre el terreno; con un cerro seleccionado, lo que pintes sobre él es una cascada de ese cerro. Si empiezas sobre un río, lo extiendes, y si el trazo se abre, se bifurca. <b>Posado</b>: solo el agua sobre la superficie. <b>Socavado</b>: la superficie se hunde (profundidad y paredes lisas o naturales, como los tramos socavados; las cascadas, suaves o de roca) y el agua queda dentro del cauce. Alt o clic derecho borra; Supr borra el río o la cascada seleccionados.</p>
+        <p class="hint">Con <b>Ríos y cascadas</b> (barra superior) pintas ríos sobre el terreno; lo que empieces a pintar sobre un cerro es una cascada de ese cerro (esté o no seleccionado). Si empiezas sobre un río, lo extiendes, y si el trazo se abre, se bifurca. <b>Posado</b>: solo el agua sobre la superficie. <b>Socavado</b>: la superficie se hunde (profundidad y paredes lisas o naturales, como los tramos socavados; las cascadas, suaves o de roca) y el agua queda dentro del cauce. Alt o clic derecho borra; Supr borra el río o la cascada seleccionados.</p>
         <div class="row gap"><button id="btnRiverTool">Pintar ríos…</button><button id="btnRiverClear">Borrar todos</button></div>
         <div id="riverList" class="list"></div>
         <p class="hint" id="riverInfo"></p>
@@ -572,6 +572,32 @@
         <div class="row gap"><span class="small" style="min-width:74px">Cascadas</span><button id="fallWallBtn">Cargar textura…</button><button id="fallWallRemove" disabled>Por defecto</button><img id="fallWallThumb" class="thumb" hidden alt=""></div>
         <input id="fallWallFile" type="file" accept="image/*" hidden>
         <div class="field"><label>Repetición de la textura <span class="val"><input type="number" id="riverWallTileNum" min="0.5" step="0.5" style="width:56px"> m</span></label><input type="range" id="riverWallTile" min="0.5" max="30" step="0.5"></div>
+        <h3 class="subhead" id="waterHead">Agua de ríos, lagos y cascadas</h3>
+        <p class="hint">Ríos y cascadas: la textura sigue la corriente (V a lo largo, aguas abajo según el relieve; cada río puede invertirla) y U va a lo ancho; los lagos no tienen corriente (en planta). Repetición U y V en metros. La <b>segunda capa</b> es la misma superficie 3 cm más arriba, con su textura y su repetición (para animarla aparte y darle profundidad al agua); se exporta como <code>rio_NN_capa2</code>. Cada río, lago o cascada puede tener lo suyo en su tarjeta.</p>
+        <h4 class="mini">Ríos</h4>
+        <div class="row gap" style="margin-top:4px"><span class="small" style="min-width:70px">Superficie</span><button id="waterTexRiverBtn">Cargar textura…</button><button id="waterTexRiverRemove" disabled>Por defecto</button><img id="waterTexRiverThumb" class="thumb checker" alt=""></div>
+        <input id="waterTexRiverFile" type="file" accept="image/*" hidden>
+        <div class="row gap"><label class="small" title="Metros por repetición a lo ancho">U <input type="number" id="riverWaterU" min="0.1" step="0.5" style="width:56px"> m</label><label class="small" title="Metros por repetición a lo largo (en la corriente)">V <input type="number" id="riverWaterV" min="0.1" step="0.5" style="width:56px"> m</label></div>
+        <label class="check small"><input type="checkbox" id="riverWaterL2"> Segunda capa</label>
+        <div class="row gap" style="margin-top:4px"><span class="small" style="min-width:70px">Capa 2</span><button id="water2TexRiverBtn">Cargar textura…</button><button id="water2TexRiverRemove" disabled>Por defecto</button><img id="water2TexRiverThumb" class="thumb checker" alt=""></div>
+        <input id="water2TexRiverFile" type="file" accept="image/*" hidden>
+        <div class="row gap"><label class="small" title="Metros por repetición a lo ancho">U <input type="number" id="riverWaterU2" min="0.1" step="0.5" style="width:56px"> m</label><label class="small" title="Metros por repetición a lo largo (en la corriente)">V <input type="number" id="riverWaterV2" min="0.1" step="0.5" style="width:56px"> m</label></div>
+        <h4 class="mini">Lagos</h4>
+        <div class="row gap" style="margin-top:4px"><span class="small" style="min-width:70px">Superficie</span><button id="waterTexLakeBtn">Cargar textura…</button><button id="waterTexLakeRemove" disabled>Por defecto</button><img id="waterTexLakeThumb" class="thumb checker" alt=""></div>
+        <input id="waterTexLakeFile" type="file" accept="image/*" hidden>
+        <div class="row gap"><label class="small" title="Metros por repetición a lo ancho">U <input type="number" id="lakeWaterU" min="0.1" step="0.5" style="width:56px"> m</label><label class="small" title="Metros por repetición en planta">V <input type="number" id="lakeWaterV" min="0.1" step="0.5" style="width:56px"> m</label></div>
+        <label class="check small"><input type="checkbox" id="lakeWaterL2"> Segunda capa</label>
+        <div class="row gap" style="margin-top:4px"><span class="small" style="min-width:70px">Capa 2</span><button id="water2TexLakeBtn">Cargar textura…</button><button id="water2TexLakeRemove" disabled>Por defecto</button><img id="water2TexLakeThumb" class="thumb checker" alt=""></div>
+        <input id="water2TexLakeFile" type="file" accept="image/*" hidden>
+        <div class="row gap"><label class="small" title="Metros por repetición a lo ancho">U <input type="number" id="lakeWaterU2" min="0.1" step="0.5" style="width:56px"> m</label><label class="small" title="Metros por repetición en planta">V <input type="number" id="lakeWaterV2" min="0.1" step="0.5" style="width:56px"> m</label></div>
+        <h4 class="mini">Cascadas</h4>
+        <div class="row gap" style="margin-top:4px"><span class="small" style="min-width:70px">Superficie</span><button id="waterTexFallBtn">Cargar textura…</button><button id="waterTexFallRemove" disabled>Por defecto</button><img id="waterTexFallThumb" class="thumb checker" alt=""></div>
+        <input id="waterTexFallFile" type="file" accept="image/*" hidden>
+        <div class="row gap"><label class="small" title="Metros por repetición a lo ancho">U <input type="number" id="fallWaterU" min="0.1" step="0.5" style="width:56px"> m</label><label class="small" title="Metros por repetición a lo largo (en la corriente)">V <input type="number" id="fallWaterV" min="0.1" step="0.5" style="width:56px"> m</label></div>
+        <label class="check small"><input type="checkbox" id="fallWaterL2"> Segunda capa</label>
+        <div class="row gap" style="margin-top:4px"><span class="small" style="min-width:70px">Capa 2</span><button id="water2TexFallBtn">Cargar textura…</button><button id="water2TexFallRemove" disabled>Por defecto</button><img id="water2TexFallThumb" class="thumb checker" alt=""></div>
+        <input id="water2TexFallFile" type="file" accept="image/*" hidden>
+        <div class="row gap"><label class="small" title="Metros por repetición a lo ancho">U <input type="number" id="fallWaterU2" min="0.1" step="0.5" style="width:56px"> m</label><label class="small" title="Metros por repetición a lo largo (en la corriente)">V <input type="number" id="fallWaterV2" min="0.1" step="0.5" style="width:56px"> m</label></div>
         <h3 class="subhead">Lecho de los ríos socavados</h3>
         <p class="hint">El terreno del lecho de los ríos socavados se corta (ahorra triángulos). Con <b>Lecho</b> (en la tarjeta de cada río) lo cubre un plano simple (<code>rio_NN_lecho</code>, material <code>lecho_rio</code>).</p>
         <div class="row gap"><span class="small" style="min-width:62px">Lecho</span><button id="riverBedBtn">Cargar textura…</button><button id="riverBedRemove" disabled>Por defecto</button><img id="riverBedThumb" class="thumb" hidden alt=""></div>
@@ -708,7 +734,7 @@
           <button data-tool="paint" title="Pinta zonas del terreno (o del cerro seleccionado) que tendrán más polígonos (Alt o clic derecho borra)">Pintar subdivisión</button>
           <button data-tool="sculpt" title="Esculpe el terreno: clic izquierdo eleva, clic derecho hunde (en el mapa o en la vista 3D). [ y ] cambian el pincel">Esculpir relieve</button>
           <button data-tool="tsmooth" title="Pincel para suavizar la pista: pinta sobre ella (mapa o vista 3D) y los puntos bajo el pincel se suavizan, sin entrar a «Editar puntos» ni seleccionar nada. Cada pasada suaviza más; Ctrl+Z deshace el trazo. [ y ] cambian el pincel">Suavizar pista</button>
-          <button data-tool="river" title="Pinta ríos sobre el terreno; con un cerro seleccionado, lo que pintes sobre él es una cascada. Empezar sobre un río lo extiende (y se bifurca). Alt o clic derecho borra">Ríos y cascadas</button>
+          <button data-tool="river" title="Pinta ríos sobre el terreno; lo que empieces a pintar sobre un cerro es una cascada de ese cerro. Empezar sobre un río lo extiende (y se bifurca). Alt o clic derecho borra">Ríos y cascadas</button>
           <div class="menu-wrap" id="itemsMenuWrap">
             <button id="btnItemsMenu" title="Agregar elementos de pista (nitro strips, turbo pads, charcos, señalética de curvas)">Elementos de pista ▾</button>
             <div class="menu menu-left" id="itemsMenu" hidden>
@@ -797,7 +823,7 @@
               <select id="riverWalls" style="font-size:calc(12px * var(--fs, 1))" title="Paredes del cauce de los ríos nuevos (las cascadas empiezan con paredes suaves)"><option value="nat">Paredes naturales</option><option value="art">Paredes lisas</option></select>
               <label class="small" title="Subdivisiones extra de las paredes socavadas">Dens. paredes <input type="range" id="riverWallSubdiv" min="0" max="6" step="1" style="width:56px"> <span class="val" id="riverWallSubdivVal"></span></label>
             </span>
-            <span class="small muted" id="riverFallNote">cerro seleccionado = cascada</span>
+            <span class="small muted" id="riverFallNote">sobre un cerro = cascada</span>
           </span>
           <span id="editBox" class="row" hidden>
             <span id="xformBox" class="row">

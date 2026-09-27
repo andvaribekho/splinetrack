@@ -272,29 +272,132 @@ export function riverNames(rivers) {
  * Mallas de agua de todos los ríos y cascadas. T = terreno (buildTerrain), HS = cerros (buildHills).
  * Devuelve [{id, name, kind, positions, uvs, indices, tris}].
  */
-export function buildRivers(T, HS, rivers) {
+export function buildRivers(T, HS, rivers, sp = {}) {
   const out = [];
   if (!T || !rivers || !rivers.length) return out;
   const names = riverNames(rivers);
   const zoneAt = T.ctx && T.ctx.zoneAt;
   // sin agua donde la pista la tapa; bajo un puente (tablero con holgura sobre el agua) el agua sigue
   const skip = zoneAt ? (x, y, z) => zoneAt(x, y, 0.6) < z + 1.2 : null;
+  const origAt = T.ctx && T.ctx.origAt ? T.ctx.origAt : (x, y) => T.sample(x, y);
   for (const rv of rivers) {
     const F = riverField(rv);
     if (!F) continue;
-    let geo = null;
+    let w = null;
     if (rv.kind === 'fall') {
       if (!HS || !HS.hillSample || (HS.hiddenHills && HS.hiddenHills.includes(rv.hill))) continue; // cascada de un cerro quitado
-      geo = buildRiverWater(F, (x, y) => HS.hillSample(rv.hill, x, y), (x, y) => HS.hillOrig(rv.hill, x, y), skip);
+      const geo = buildRiverWater(F, (x, y) => HS.hillSample(rv.hill, x, y), (x, y) => HS.hillOrig(rv.hill, x, y), skip);
+      if (geo) w = { id: rv.id, name: names.get(rv.id), kind: rv.kind, ...geo };
     } else {
       // ríos y lagos (0.76): agua con los triángulos justos (plano con cortes, o copia del terreno si va posado) y lecho
       const M = riverMeshes(T, F, skip, T.ctx && T.ctx.riverLevels ? T.ctx.riverLevels.get(rv.id) : null);
-      if (M.water) out.push({ id: rv.id, name: names.get(rv.id), kind: rv.kind, ...M.water, lake: M.lake, flat: M.flat, lakeSlope: M.lakeSlope, rect: M.rect, bed: M.bed ? { ...M.bed, name: `${names.get(rv.id)}_lecho` } : null });
-      continue;
+      if (M.water) w = { id: rv.id, name: names.get(rv.id), kind: rv.kind, ...M.water, lake: M.lake, flat: M.flat, lakeSlope: M.lakeSlope, rect: M.rect, bed: M.bed ? { ...M.bed, name: `${names.get(rv.id)}_lecho` } : null };
     }
-    if (geo) out.push({ id: rv.id, name: names.get(rv.id), kind: rv.kind, ...geo });
+    if (!w) continue;
+    // 0.83: UV del agua: ríos y cascadas a lo largo de la corriente (v) y a lo ancho (u); lagos, planas
+    const cat = rv.kind === 'fall' ? 'fall' : w.lake ? 'lake' : 'river', C = waterUVOf(rv, cat, sp);
+    const flow = cat === 'lake' ? null : riverFlow(F, rv.kind === 'fall' ? (x, y) => HS.hillOrig(rv.hill, x, y) : origAt, !!rv.flipFlow);
+    const uvs = (U, V) => {
+      const P = w.positions, n = P.length / 3, uv = new Float32Array(n * 2);
+      for (let v = 0; v < n; v++) {
+        const x = P[v * 3], y = P[v * 3 + 1];
+        if (flow) { const [lat, al] = flow(x, y); uv[v * 2] = lat / U + 0.5; uv[v * 2 + 1] = al / V; } else { uv[v * 2] = x / U; uv[v * 2 + 1] = y / V; }
+      }
+      return uv;
+    };
+    w.cat = cat;
+    w.uvs = uvs(C.u, C.v);
+    if (C.l2) { // segunda capa: la misma malla 3 cm más arriba, con su tiling (para animarla aparte)
+      const P2 = Float32Array.from(w.positions);
+      for (let v = 2; v < P2.length; v += 3) P2[v] += 0.03;
+      w.layer2 = { name: `${w.name}_capa2`, positions: P2, uvs: uvs(C.u2, C.v2), indices: w.indices, tris: w.tris };
+    }
+    out.push(w);
   }
   return out;
+}
+
+/** Tiling del agua (metros por repetición, U a lo ancho y V a lo largo) y segunda capa: los propios del río o los generales de su tipo. */
+export const WATER_DEFAULTS = {
+  river: { u: 6, v: 12, l2: false, u2: 8, v2: 20 },
+  lake: { u: 12, v: 12, l2: false, u2: 18, v2: 18 },
+  fall: { u: 4, v: 8, l2: false, u2: 6, v2: 14 },
+};
+export function waterUVOf(rv, cat, sp = {}) {
+  const D = WATER_DEFAULTS[cat], g = (k, d) => (Number.isFinite(sp[`${cat}Water${k}`]) ? sp[`${cat}Water${k}`] : d);
+  const G = { u: g('U', D.u), v: g('V', D.v), l2: sp[`${cat}WaterL2`] != null ? !!sp[`${cat}WaterL2`] : D.l2, u2: g('U2', D.u2), v2: g('V2', D.v2) };
+  const own = rv && rv.waterUvOwn, o = (k, d) => (own && Number.isFinite(rv[k]) ? rv[k] : d);
+  const l2 = rv && rv.water2 != null ? !!rv.water2 : G.l2; // segunda capa: la del río (sí / no) o la general
+  return { u: Math.max(0.1, o('waterU', G.u)), v: Math.max(0.1, o('waterV', G.v)), l2, u2: Math.max(0.1, o('water2U', G.u2)), v2: Math.max(0.1, o('water2V', G.v2)) };
+}
+
+/**
+ * Corriente de un río o cascada: el eje sale de lo pintado (los toques seguidos forman una cadena; las líneas, exactas),
+ * cada cadena baja según zAt (la más larga primero; las demás siguen desde donde se juntan) y invert la da vuelta.
+ * Devuelve (x, y) → [lateral (m, con signo), a lo largo (m, crece aguas abajo)].
+ */
+export function riverFlow(F, zAt, invert = false) {
+  const chains = [];
+  let cur = null, last = null;
+  for (const q of F.river.strokes || []) {
+    if (q.e || q.s) continue;
+    if (isLine(q)) {
+      const a = [q.x, q.y], b = [q.x2, q.y2];
+      if (cur && last && Math.hypot(a[0] - last[0], a[1] - last[1]) < 0.5 * q.r) cur.pts.push(b); else { cur = { pts: [a, b], r: q.r }; chains.push(cur); }
+      last = b; continue;
+    }
+    const p = [q.x, q.y];
+    if (cur && last && Math.hypot(p[0] - last[0], p[1] - last[1]) < 2.05 * Math.max(q.r, cur.r)) { if (Math.hypot(p[0] - last[0], p[1] - last[1]) > 1e-3) cur.pts.push(p); }
+    else { cur = { pts: [p], r: q.r }; chains.push(cur); }
+    last = p;
+  }
+  // cada cadena: remuestreada cada ~1 m y suavizada (sin el temblor de la mano), con su largo
+  const C = [];
+  for (const ch of chains) {
+    const P = ch.pts;
+    if (P.length < 2) continue;
+    const R = [P[0]];
+    for (let i = 1; i < P.length; i++) { const A = P[i - 1], B = P[i], d = Math.hypot(B[0] - A[0], B[1] - A[1]), k = Math.max(1, Math.round(d)); for (let j = 1; j <= k; j++) R.push([A[0] + ((B[0] - A[0]) * j) / k, A[1] + ((B[1] - A[1]) * j) / k]); }
+    const wv = Math.max(1, Math.round(ch.r * 0.8)), S = R.map((p, i) => { if (i === 0 || i === R.length - 1) return p; let x = 0, y = 0, c = 0; for (let d = -wv; d <= wv; d++) { const q = R[clamp(i + d, 0, R.length - 1)]; x += q[0]; y += q[1]; c++; } return [x / c, y / c]; });
+    let L = 0; for (let i = 1; i < S.length; i++) L += Math.hypot(S[i][0] - S[i - 1][0], S[i][1] - S[i - 1][1]);
+    if (L < 0.5) continue;
+    // aguas abajo según el relieve (plano: en el sentido en que se pintó)
+    if (zAt) { const z0 = zAt(S[0][0], S[0][1]), z1 = zAt(S[S.length - 1][0], S[S.length - 1][1]); if (Number.isFinite(z0) && Number.isFinite(z1) && z1 > z0 + 0.01) S.reverse(); }
+    C.push({ pts: S, L, r: ch.r });
+  }
+  if (!C.length) { // sin eje (un solo toque): plano
+    return (x, y) => [invert ? -x : x, invert ? -y : y];
+  }
+  C.sort((a, b) => b.L - a.L);
+  const segs = [], G = new Map(), cg = 8;
+  const addSeg = (sg) => { segs.push(sg); const i0 = Math.floor(Math.min(sg.ax, sg.bx) / cg), i1 = Math.floor(Math.max(sg.ax, sg.bx) / cg), j0 = Math.floor(Math.min(sg.ay, sg.by) / cg), j1 = Math.floor(Math.max(sg.ay, sg.by) / cg); for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) { const k = i + ',' + j; (G.get(k) || G.set(k, []).get(k)).push(sg); } };
+  const nearest = (x, y, maxR = 60) => {
+    let best = null, bd = Infinity;
+    const ci = Math.floor(x / cg), cj = Math.floor(y / cg);
+    for (let r = 0; r <= Math.ceil(maxR / cg) && (!best || bd > (r - 1) * cg); r++) {
+      for (let j = cj - r; j <= cj + r; j++) for (let i = ci - r; i <= ci + r; i++) {
+        if (Math.max(Math.abs(i - ci), Math.abs(j - cj)) !== r) continue;
+        for (const g of G.get(i + ',' + j) || []) {
+          const dx = g.bx - g.ax, dy = g.by - g.ay, l2 = dx * dx + dy * dy || 1e-9, t = clamp(((x - g.ax) * dx + (y - g.ay) * dy) / l2, 0, 1);
+          const d = Math.hypot(g.ax + dx * t - x, g.ay + dy * t - y);
+          if (d < bd) { const tu = ((x - g.ax) * dx + (y - g.ay) * dy) / l2; bd = d; best = { g, t: (tu < 0 && g.first) || (tu > 1 && g.last) ? tu : t, d, side: Math.sign(dx * (y - g.ay) - dy * (x - g.ax)) || 1 }; } // pasado el extremo del eje: sigue contando
+        }
+      }
+    }
+    return best;
+  };
+  const alongOf = (h) => h.g.s0 + (h.g.s1 - h.g.s0) * h.t;
+  for (const ch of C) {
+    let s0 = 0;
+    if (segs.length) { // sigue desde donde se junta con lo anterior (una rama que entra o que sale)
+      const P = ch.pts, hs = nearest(P[0][0], P[0][1]), he = nearest(P[P.length - 1][0], P[P.length - 1][1]), lim = 2.5 * ch.r;
+      if (he && he.d < lim && (!hs || he.d <= hs.d)) s0 = alongOf(he) - ch.L; else if (hs && hs.d < lim) s0 = alongOf(hs);
+    }
+    let acc = s0;
+    for (let i = 1; i < ch.pts.length; i++) { const A = ch.pts[i - 1], B = ch.pts[i], d = Math.hypot(B[0] - A[0], B[1] - A[1]); addSeg({ ax: A[0], ay: A[1], bx: B[0], by: B[1], s0: acc, s1: acc + d, first: i === 1, last: i === ch.pts.length - 1 }); acc += d; }
+  }
+  const sg = invert ? -1 : 1;
+  return (x, y) => { const h = nearest(x, y, 200); if (!h) return [0, 0]; return [-h.side * h.d * sg, alongOf(h) * sg]; };
 }
 
 

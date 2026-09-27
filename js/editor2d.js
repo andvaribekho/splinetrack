@@ -930,6 +930,16 @@ export class Editor2D {
       if (ol) this.drawLoopsLayer(ol, col, al); else this.drawStrokeLayer(rv.strokes, col, al);
     }
     { const pl = tool === 'river' && this.app.pendingRiverLine ? this.app.pendingRiverLine() : null; if (pl) this.drawStrokeLayer([{ ...pl, e: false }], pl.e ? '#ff8a80' : '#3fa7ff', 0.5); } // la línea que se traza
+    // nombres (rio_NN / cascada_NN): con la herramienta de ríos o del río seleccionado
+    if (this.app.riverLabelL) for (const rv of st.rivers || []) {
+      if (tool !== 'river' && rv.id !== st.selRiver) continue;
+      const L = this.app.riverLabelL(rv);
+      if (!L) continue;
+      const [x, y] = this.toScreen(L.x, L.y), ctx = this.ctx;
+      ctx.save(); ctx.font = '600 11px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(10,14,20,0.85)'; ctx.strokeText(L.name, x, y);
+      ctx.fillStyle = rv.kind === 'fall' ? '#bfe8ff' : '#8fd0ff'; ctx.fillText(L.name, x, y); ctx.restore();
+    }
     if (st.terrainSculpt && st.terrainSculpt.length && (tool === 'sculpt' || st.scene.terrain)) this.drawStrokeLayer(st.terrainSculpt, null, tool === 'sculpt' ? 0.4 : 0.14, (q) => (q.h > 0 ? 'rgb(255,160,70)' : 'rgb(80,160,255)'));
     if (tool === 'itemPaint') this.drawStrokeLayer(this.app.itemPaintStrokes(), this.app.itemPaintColor(), 0.4);
     // cursor del pincel

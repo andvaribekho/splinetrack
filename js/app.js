@@ -15,7 +15,8 @@ import { VERSION } from './version.js';
 import { ACTIONS, FIXED, bindingOf, isDefault, setBinding, resetAll as resetKeymap, matchAction, comboLabel } from './keymap.js';
 import { DEFAULT_SCENE, terrainCell, buildTrees, buildDecoInstances, bakeTreeList, bakeDecoList, CUT_ANGLES, rockOf, wallOf, wallUVOf, riverUVOf } from './scene.js';
 import { makeSignCanvas } from './signs.js';
-import { RIVER_ANGLES, riverWallsOf, riverField, strokesContain, strokeCircles, strokeValue, isLine } from './rivers.js';
+import { makeWaterCanvas } from './gatetex.js';
+import { RIVER_ANGLES, riverWallsOf, waterUVOf, riverField, strokesContain, strokeCircles, strokeValue, isLine } from './rivers.js';
 import { makeShadowCanvas, sunShadowDir } from './shadows.js';
 import { SCULPT_PRESETS, DEFAULT_SCULPT_CURVE, normCurve, curveEval, curveLUT, presetOf } from './sculptcurve.js';
 import { makeTrackThumbnail } from './thumbnail.js';
@@ -102,6 +103,7 @@ const state = {
   tunWallTex: null, tunCeilTex: null, tunnelTexOwn: {}, // texturas de los túneles: generales (paredes / techo) y propias de cada túnel {uid: {wall, ceil}}
   riverWallTex: null, fallWallTex: null, riverBedTex: null, // (riverWallTex: roca de los ríos (paredes naturales); riverBedTex: lecho de los ríos socavados)
   riverArtTex: null, riverArtTopTex: null, riverArtOutTex: null, // paredes lisas de los ríos: cara interior, tapa y cara exterior (sin ellas, la de la cara)
+  waterTexRiver: null, waterTexLake: null, waterTexFall: null, water2TexRiver: null, water2TexLake: null, water2TexFall: null, // agua (null = de fábrica)
   signTexRight: null, signTexLeft: null, signTexRound: null, signTexZigzag: null, signTexPost: null, // señalética (null = de fábrica)
   riverTexs: {}, // texturas propias de cada río, por su id: {wallArt, wallArtTop, wallArtOut, wallNat}
   // texturas de las paredes socavadas de ríos y cascadas (null = roca por defecto)
@@ -177,6 +179,10 @@ function newRiver(kind, hill = null) {
   delete state.riverTexs[id]; // (de un río borrado con el mismo número)
   return { id, kind, hill, mode: sc.riverMode, depth: sc.riverDepth, walls: kind === 'fall' ? 'smooth' : sc.riverWalls === 'art' ? 'art' : 'nat', wallSubdiv: sc.riverWallSubdiv, strokes: [] };
 }
+const WATER_TEX_KEYS = ['waterTexRiver', 'waterTexLake', 'waterTexFall', 'water2TexRiver', 'water2TexLake', 'water2TexFall'];
+const WATER_CATS = [['river', 'River'], ['lake', 'Lake'], ['fall', 'Fall']];
+/** Tipo de agua de un río para su tarjeta: cascada, lago (elegido o detectado en la última vista) o río. */
+function riverCatOf(rv) { if (rv.kind === 'fall') return 'fall'; if (rv.waterType === 'lake') return 'lake'; if (rv.waterType === 'river') return 'river'; const w = preview.riverData && preview.riverData.find((q) => q.id === rv.id); return w && w.lake ? 'lake' : 'river'; }
 const SIGN_NUM_KEYS = ['signRadius', 'signMinTurn', 'signZigGap', 'signRoundTurn', 'signDist', 'signCount', 'signSep', 'signOffset', 'signYaw', 'signHeight', 'signSize'];
 const SIGN_AUTO_TXT = { right: 'Automático (curva a la derecha)', left: 'Automático (curva a la izquierda)', round: 'Automático (rotonda)', zigzag: 'Automático (camino zigzagueante)' };
 const SIGN_TYPE_TXT = { right: 'curva a la derecha', left: 'curva a la izquierda', round: 'rotonda', zigzag: 'camino zigzagueante', none: 'sin cartel' };
@@ -214,6 +220,27 @@ function riverStrokeWorld(L, q) {
   if (q.s) { delete o.e; o.s = q.s; }
   if (isLine(q)) { const [x2, y2] = L.toWorld(q.x2, q.y2); o.x2 = x2; o.y2 = y2; if (q.c0) o.c0 = q.c0; if (q.c1) o.c1 = q.c1; }
   return o;
+}
+/**
+ * 0.83: un río pintado sobre un cerro (la mayor parte de lo pintado encima de él) es una cascada de ese cerro: talla el
+ * cerro, se llama cascada_NN y va en celeste. Devuelve cuántos cambiaron.
+ */
+function riversOnHillsToFalls() {
+  let n = 0;
+  for (const rv of state.rivers) {
+    if (rv.kind === 'fall' || !state.hills.length) continue;
+    const C = strokeCircles(rv.strokes).filter((q) => !q.e);
+    if (!C.length) continue;
+    const cnt = new Map();
+    for (const q of C) { const h = hillAt([q.x, q.y]); if (h) cnt.set(h.id, (cnt.get(h.id) || 0) + 1); }
+    let best = null, bn = 0;
+    for (const [id, k] of cnt) if (k > bn) { bn = k; best = id; }
+    if (best == null || bn < C.length * 0.6) continue;
+    rv.kind = 'fall'; rv.hill = best;
+    if (rv.walls !== 'smooth' && rv.walls !== 'rock') rv.walls = 'smooth';
+    n++;
+  }
+  return n;
 }
 /** Ríos anteriores a la 0.78: las paredes «suaves» o «de roca» pasan a naturales (las cascadas no cambian). */
 function normalizeRiver(rv) { if (rv && rv.kind !== 'fall' && rv.walls !== 'art' && rv.walls !== 'nat') rv.walls = 'nat'; return rv; }
@@ -253,9 +280,13 @@ function renderRiverPanel() {
     const hill = rv.kind === 'fall' ? state.hills.find((h) => h.id === rv.hill) : null;
     const isFall = rv.kind === 'fall', W = isFall ? null : riverWallsOf(rv), AR = isFall ? null : RIVER_ANGLES[W.type];
     const uvT = isFall ? null : riverUVOf({ uvOwn: true, tileX: rv.tileX, tileY: rv.tileY, uvFit: rv.uvFit, uvSnap: rv.uvSnap }, state.scene);
+    // agua (0.83): tipo (río, lago o cascada), tiling y segunda capa efectivos
+    const wcat = riverCatOf(rv), WU = { ...waterUVOf(rv, wcat, state.scene), l2g: waterUVOf({}, wcat, state.scene).l2 };
+    div.dataset.wcat = wcat;
+    const wtexRow = (k) => `<div class="row gap" style="flex-wrap:nowrap"><button class="rwtex small" data-kind="${k}">Cargar textura…</button><button class="rwtexRm small" data-kind="${k}"${app.riverOwnTex(rv.id, k) ? '' : ' disabled'}>Como la general</button><img class="thumb rwthumb" data-kind="${k}" alt=""></div>`;
     const texRow = (k) => `<div class="row gap" style="flex-wrap:nowrap"><button class="rtex small" data-kind="${k}">Cargar textura…</button><button class="rtexRm small" data-kind="${k}"${app.riverOwnTex(rv.id, k) ? '' : ' disabled'}>Como la general</button><img class="thumb rthumb" data-kind="${k}" alt=""></div>`;
     div.innerHTML = `
-      <div class="head"><span><button class="x rtoggle" title="Mostrar u ocultar sus parámetros">${rv.collapsed ? '▸' : '▾'}</button> <strong>${riverLabel(rv)}</strong> <span class="muted small">${rv.kind === 'fall' ? `cascada en ${hill ? hill.name || hillName(hill.id) : 'un cerro'}` : 'río'}</span></span><button class="x del" title="Eliminar">✕</button></div>
+      <div class="head"><span><button class="x rtoggle" title="Mostrar u ocultar sus parámetros">${rv.collapsed ? '▸' : '▾'}</button> <strong>${riverLabel(rv)}</strong> <span class="muted small">${rv.kind === 'fall' ? `cascada en ${hill ? hill.name || hillName(hill.id) : 'un cerro'}` : wcat === 'lake' ? 'lago' : 'río'}</span></span><button class="x del" title="Eliminar">✕</button></div>
       <div class="rbody">
       <div class="field"><label>Geometría</label><select class="rmode"><option value="surface"${rv.mode === 'surface' ? ' selected' : ''}>Posada sobre la superficie</option><option value="carved"${rv.mode === 'carved' ? ' selected' : ''}>Socavada</option></select></div>
       <div class="rcarved${rv.mode === 'carved' ? '' : ' disabled'}">
@@ -299,6 +330,17 @@ function renderRiverPanel() {
         <div class="field rtolBox"${rv.waterMode === 'simple' ? '' : ' hidden'} title="Cuánto puede alejarse el agua simplificada del terreno (menos = más triángulos)"><label>Detalle del agua <span class="val rtolV">${rv.waterTol ?? 5} cm</span></label><input type="range" class="rtol" min="2" max="20" step="1" value="${rv.waterTol ?? 5}"></div>
       </div>
       <div class="meta rinfo"></div>`}
+      <h4 class="mini">Agua</h4>
+      <label class="check small rflipBox"${wcat === 'lake' ? ' hidden' : ''} title="La corriente baja sola según el relieve; esto la da vuelta (solo ríos y cascadas: los lagos no tienen corriente)"><input type="checkbox" class="rflip"${rv.flipFlow ? ' checked' : ''}> Invertir corriente</label>
+      <div class="small">Superficie</div>${wtexRow('water')}
+      <div class="field" title="La misma superficie 3 cm más arriba, con su textura y su repetición (para animarla aparte)"><label>Segunda capa</label><select class="rw2"><option value=""${rv.water2 == null ? ' selected' : ''}>Como la general (${WU.l2g ? 'sí' : 'no'})</option><option value="1"${rv.water2 === true ? ' selected' : ''}>Sí</option><option value="0"${rv.water2 === false ? ' selected' : ''}>No</option></select></div>
+      <div class="rw2Box"${WU.l2 ? '' : ' hidden'}><div class="small">Capa 2</div>${wtexRow('water2')}</div>
+      <div class="meta">Sin textura propia usa la general de ${wcat === 'lake' ? 'los lagos' : wcat === 'fall' ? 'las cascadas' : 'los ríos'} (al final de esta sección).</div>
+      <label class="check small" title="Repetición U (a lo ancho) y V (${wcat === 'lake' ? 'en planta' : 'a lo largo de la corriente'}) propias; si no, las generales"><input type="checkbox" class="rwuvOwn"${rv.waterUvOwn ? ' checked' : ''}> Ajustes de mapeado del agua</label>
+      <div class="rwuvBox"${rv.waterUvOwn ? '' : ' hidden'}>
+        <div class="row gap"><label class="small">U <input type="number" class="rwU" min="0.1" step="0.5" style="width:56px" value="${WU.u}"> m</label><label class="small">V <input type="number" class="rwV" min="0.1" step="0.5" style="width:56px" value="${WU.v}"> m</label></div>
+        <div class="row gap"><label class="small">Capa 2: U <input type="number" class="rwU2" min="0.1" step="0.5" style="width:56px" value="${WU.u2}"> m</label><label class="small">V <input type="number" class="rwV2" min="0.1" step="0.5" style="width:56px" value="${WU.v2}"> m</label></div>
+      </div>
       </div>`;
     div.querySelector('.rtoggle').addEventListener('click', () => { rv.collapsed = !rv.collapsed; div.classList.toggle('collapsed', rv.collapsed); div.querySelector('.rtoggle').textContent = rv.collapsed ? '▸' : '▾'; });
     let editing = false;
@@ -313,6 +355,17 @@ function renderRiverPanel() {
     div.querySelector('button.del').addEventListener('click', () => { pushUndo(); state.rivers = state.rivers.filter((q) => q !== rv); if (state.selRiver === rv.id) state.selRiver = null; riversChanged(); });
     div.querySelector('.rmode').addEventListener('change', (e) => set('mode', e.target.value));
     div.querySelector('.rwalls').addEventListener('change', (e) => { set('walls', e.target.value); if (!isFall) renderRiverPanel(); });
+    // agua: textura propia, segunda capa, mapeado y corriente
+    div.querySelectorAll('img.rwthumb').forEach((img) => { const k = img.dataset.kind; img.src = thumbURL(app.waterTexCanvas(wcat, rv.id, k === 'water2' ? 2 : 1)); img.classList.toggle('inherited', !app.riverOwnTex(rv.id, k)); });
+    div.querySelectorAll('button.rwtex').forEach((btn) => btn.addEventListener('click', () => pickTextureFile((cv) => app.setRiverTexture(rv.id, btn.dataset.kind, cv))));
+    div.querySelectorAll('button.rwtexRm').forEach((btn) => btn.addEventListener('click', () => app.setRiverTexture(rv.id, btn.dataset.kind, null)));
+    div.querySelector('.rflip').addEventListener('change', (e) => set('flipFlow', e.target.checked));
+    div.querySelector('.rw2').addEventListener('change', (e) => { set('water2', e.target.value === '' ? null : e.target.value === '1'); renderRiverPanel(); });
+    div.querySelector('.rwuvOwn').addEventListener('change', (e) => {
+      if (e.target.checked) { const g = waterUVOf({}, wcat, state.scene); pushUndo(); Object.assign(rv, { waterUvOwn: true, waterU: g.u, waterV: g.v, water2U: g.u2, water2V: g.v2 }); preview.update(false); } else set('waterUvOwn', false);
+      renderRiverPanel();
+    });
+    for (const [cls, key] of [['.rwU', 'waterU'], ['.rwV', 'waterV'], ['.rwU2', 'water2U'], ['.rwV2', 'water2V']]) div.querySelector(cls).addEventListener('change', (e) => { const v = parseFloat(e.target.value); if (v > 0) set(key, v); });
     if (!isFall) {
       div.querySelectorAll('img.rthumb').forEach((img) => {
         const k = img.dataset.kind;
@@ -368,7 +421,7 @@ function renderRiverPanel() {
     div.querySelector('.rsub').addEventListener('input', (e) => set('wallSubdiv', Math.round(parseFloat(e.target.value)), false));
     div.querySelector('.rsub').addEventListener('change', () => { editing = false; });
     if (rv.kind !== 'fall') {
-      div.querySelector('.rtype').addEventListener('change', (e) => set('waterType', e.target.value));
+      div.querySelector('.rtype').addEventListener('change', (e) => { set('waterType', e.target.value); renderRiverPanel(); });
       div.querySelector('.rbed').addEventListener('change', (e) => set('bed', e.target.checked));
       div.querySelector('.rrect').addEventListener('change', (e) => set('lakeRect', e.target.checked));
       div.querySelector('.rwmode').addEventListener('change', (e) => { div.querySelector('.rtolBox').hidden = e.target.value !== 'simple'; set('waterMode', e.target.value); });
@@ -380,7 +433,7 @@ function renderRiverPanel() {
     el.appendChild(div);
   }
   const info = document.getElementById('riverInfo');
-  if (info) info.textContent = state.rivers.length ? '' : 'Activa «Ríos y cascadas» en la barra y pinta sobre el terreno. Con un cerro seleccionado, lo que pintes sobre él es una cascada.';
+  if (info) info.textContent = state.rivers.length ? '' : 'Activa «Ríos y cascadas» en la barra y pinta sobre el terreno. Lo que empieces a pintar sobre un cerro es una cascada de ese cerro.';
 }
 function hillIsEmpty(h) {
   // vacío si todos los centros de sus toques quedaron borrados
@@ -1916,8 +1969,9 @@ const app = {
         p = p0;
       }
       if (ses.erase) return;
-      const selH = state.selHill != null ? state.hills.find((h) => h.id === state.selHill) : null;
-      const onHill = !!(selH && ((p && hillContainsL(selH, p)) || hitHill === selH.id));
+      // 0.83: si empieza sobre un cerro (esté o no seleccionado), es una cascada de ese cerro
+      const selH = (p && hillAt(p)) || (hitHill != null ? state.hills.find((h) => h.id === hitHill) : null);
+      const onHill = !!selH;
       const kindR = onHill ? 'fall' : 'river';
       const ex = p ? [...state.rivers].reverse().find((rv) => rv.kind === kindR && (kindR !== 'fall' || rv.hill === selH.id) && riverContainsL(rv, p)) : null;
       let rv = ex;
@@ -2064,6 +2118,14 @@ const app = {
     preview.update(false);
   },
   onPaintProgress() { editor.draw(); preview.refreshPaintOverlay(); },
+  /** Nombre del río o cascada y dónde escribirlo en el mapa (el toque pintado más cercano al centro de lo pintado). */
+  riverLabelL(rv) {
+    const C = strokeCircles(rv.strokes).filter((q) => !q.e);
+    if (!C.length) return null;
+    let x = 0, y = 0; for (const q of C) { x += q.x; y += q.y; } x /= C.length; y /= C.length;
+    let b = C[0], bd = Infinity; for (const q of C) { const d = Math.hypot(q.x - x, q.y - y); if (d < bd) { bd = d; b = q; } }
+    return { x: b.x, y: b.y, name: riverLabel(rv) };
+  },
   /** Contorno real de un río (con los suavizados), en coordenadas del lienzo, para el mapa 2D; memorizado por su forma. */
   riverOutlineL(rv) {
     const L = state.layout;
@@ -2358,6 +2420,16 @@ const app = {
   },
   /** Textura de las paredes ('wall') o del techo ('ceil') de un túnel: la propia (uid) o la general; null = color. */
   tunnelTexCanvas(uid, kind) { const own = uid && state.tunnelTexOwn[uid]; return (own && own[kind]) || (kind === 'wall' ? state.tunWallTex : state.tunCeilTex) || null; },
+  /** Textura del agua: la propia del río (layer 1 = superficie, 2 = segunda capa), la general de su tipo o la de fábrica. */
+  waterTexCanvas(cat, id = null, layer = 1) {
+    const own = id != null ? this.riverOwnTex(id, layer === 2 ? 'water2' : 'water') : null;
+    if (own) return own;
+    const S = cat === 'lake' ? 'Lake' : cat === 'fall' ? 'Fall' : 'River', g = state[(layer === 2 ? 'water2Tex' : 'waterTex') + S];
+    if (g) return g;
+    const c = this._waterDef || (this._waterDef = {}), k = cat + layer;
+    return c[k] || (c[k] = makeWaterCanvas(cat, layer));
+  },
+  waterOwnTex(id, layer = 1) { return this.riverOwnTex(id, layer === 2 ? 'water2' : 'water'); },
   /** Textura de la señalética: la cargada o la de fábrica. type: right | left | round | zigzag | post. */
   signTexCanvas(type) {
     const k = { right: 'signTexRight', left: 'signTexLeft', round: 'signTexRound', zigzag: 'signTexZigzag', post: 'signTexPost' }[type];
@@ -2395,7 +2467,7 @@ const app = {
     return c;
   },
   setRiverTexture(id, k, cv) {
-    const t = state.riverTexs[id] || (state.riverTexs[id] = { wallArt: null, wallArtTop: null, wallArtOut: null, wallNat: null });
+    const t = state.riverTexs[id] || (state.riverTexs[id] = { wallArt: null, wallArtTop: null, wallArtOut: null, wallNat: null, water: null, water2: null });
     t[k] = cv;
     renderRiverPanel();
     preview.update(false, true);
@@ -2405,15 +2477,21 @@ const app = {
   riversChanged() { riversChanged(); },
   /** Tras armar los ríos: triángulos del agua y del lecho, y si es lago, en la tarjeta de cada uno. */
   onRiversInfo(RW) {
+    let stale = false;
     for (const w of RW || []) {
-      const el = document.querySelector(`#riverList .item[data-id="${w.id}"] .rinfo`);
+      const card = document.querySelector(`#riverList .item[data-id="${w.id}"]`);
+      // la tarjeta se armó sin saber si es lago (tipo automático): se rehace con su tipo de agua
+      if (card && card.dataset.wcat && card.dataset.wcat !== w.cat) stale = true;
+      const el = card && card.querySelector('.rinfo');
       if (!el) continue;
       const kind = w.lake ? (w.flat ? 'Lago (agua plana)' : 'Lago') : 'Río';
       const parts = [`<span>${kind}</span>`, `<span>Agua: ${w.tris.toLocaleString('es')} triángulos</span>`];
       if (w.rect) parts.push('<span>rectángulo</span>');
       if (w.bed) parts.push(`<span>Lecho: ${w.bed.tris.toLocaleString('es')} triángulos</span>`);
+      if (w.layer2) parts.push(`<span>Capa 2: ${w.layer2.tris.toLocaleString('es')} triángulos</span>`);
       el.innerHTML = parts.join(' · ') + (w.lakeSlope ? '<br><span>Lago posado en pendiente: el agua sigue el terreno. Para un lago plano, usa «Socavada».</span>' : '');
     }
+    if (stale) setTimeout(() => renderRiverPanel(), 0);
   },
   onCollisionInfo(C) {
     const el = $('collInfo');
@@ -5661,7 +5739,7 @@ function projectData() {
     riverWallTex: state.riverWallTex ? state.riverWallTex.toDataURL('image/png') : null,
     riverBedTex: state.riverBedTex ? state.riverBedTex.toDataURL('image/png') : null,
     riverArtTex: state.riverArtTex ? state.riverArtTex.toDataURL('image/png') : null,
-    ...Object.fromEntries(['signTexRight', 'signTexLeft', 'signTexRound', 'signTexZigzag', 'signTexPost'].map((k) => [k, state[k] ? state[k].toDataURL('image/png') : null])),
+    ...Object.fromEntries(['signTexRight', 'signTexLeft', 'signTexRound', 'signTexZigzag', 'signTexPost', ...WATER_TEX_KEYS].map((k) => [k, state[k] ? state[k].toDataURL('image/png') : null])),
     riverArtTopTex: state.riverArtTopTex ? state.riverArtTopTex.toDataURL('image/png') : null,
     riverArtOutTex: state.riverArtOutTex ? state.riverArtOutTex.toDataURL('image/png') : null,
     riverTexs: Object.fromEntries(Object.entries(state.riverTexs).filter(([id]) => state.rivers.some((rv) => String(rv.id) === String(id))).map(([id, t]) => [id, Object.fromEntries(Object.entries(t).map(([k, cv]) => [k, cv ? cv.toDataURL('image/png') : null]))])),
@@ -5885,10 +5963,10 @@ async function openProject(text, fileName = null) {
   state.dirtTex = await toCanvas(d.dirtTex);
   state.riverWallTex = await toCanvas(d.riverWallTex);
   state.riverBedTex = await toCanvas(d.riverBedTex);
-  for (const k of ['signTexRight', 'signTexLeft', 'signTexRound', 'signTexZigzag', 'signTexPost']) state[k] = await toCanvas(d[k]);
+  for (const k of ['signTexRight', 'signTexLeft', 'signTexRound', 'signTexZigzag', 'signTexPost', ...WATER_TEX_KEYS]) state[k] = await toCanvas(d[k]);
   state.riverArtTex = await toCanvas(d.riverArtTex); state.riverArtTopTex = await toCanvas(d.riverArtTopTex); state.riverArtOutTex = await toCanvas(d.riverArtOutTex);
   state.riverTexs = {};
-  for (const [id, t] of Object.entries(d.riverTexs || {})) state.riverTexs[id] = { wallArt: await toCanvas(t.wallArt), wallArtTop: await toCanvas(t.wallArtTop), wallArtOut: await toCanvas(t.wallArtOut), wallNat: await toCanvas(t.wallNat) };
+  for (const [id, t] of Object.entries(d.riverTexs || {})) state.riverTexs[id] = { wallArt: await toCanvas(t.wallArt), wallArtTop: await toCanvas(t.wallArtTop), wallArtOut: await toCanvas(t.wallArtOut), wallNat: await toCanvas(t.wallNat), water: await toCanvas(t.water), water2: await toCanvas(t.water2) };
   state.tunWallTex = await toCanvas(d.tunWallTex);
   state.tunCeilTex = await toCanvas(d.tunCeilTex);
   state.tunnelTexOwn = {};
@@ -5922,6 +6000,7 @@ async function openProject(text, fileName = null) {
   state.hills = d.hills || (d.hillPaint ? migrateHillPaint(d.hillPaint) : []);
   state.selHill = null;
   refreshHillPanel();
+  { const n = riversOnHillsToFalls(); if (n) { renderRiverPanel(); setTimeout(() => toast(`${n} río(s) pintado(s) sobre un cerro pasaron a ser cascadas de ese cerro.`), 500); } }
   state.items = d.items || { puddle: [], pad: [], strip: [] };
   state.triggers = Array.isArray(d.triggers) ? d.triggers : []; state.selTrigger = null; if (typeof renderTriggerPanel === 'function') renderTriggerPanel();
   state.selItem = null;
@@ -6195,6 +6274,12 @@ function syncSceneControls() {
   for (const [k, id] of [['cutArtTex', 'cutArtTex'], ['cutArtTopTex', 'cutArtTopTex'], ['cutArtOutTex', 'cutArtOutTex'], ['cutNatTex', 'cutNatTex'], ['riverWallTex', 'riverWall'], ['riverArtTex', 'riverArt'], ['riverArtTopTex', 'riverArtTop'], ['riverArtOutTex', 'riverArtOut'], ['fallWallTex', 'fallWall'], ['riverBedTex', 'riverBed'], ['tunWallTex', 'tunWallTex'], ['tunCeilTex', 'tunCeilTex']]) { const img = $(id + 'Thumb'); img.hidden = !state[k]; if (state[k]) img.src = thumbURL(state[k]); $(id + 'Remove').disabled = !state[k]; }
   if ($('tunnelTexTile')) { $('tunnelTexTile').value = sc.tunnelTexTile ?? 6; $('tunnelTexTileVal').textContent = `${sc.tunnelTexTile ?? 6} m`; }
   set('riverWallTile', sc.riverWallTile ?? 4); set('riverWallTileNum', sc.riverWallTile ?? 4);
+  // agua (0.83): texturas, repetición U / V y segunda capa por tipo
+  if ($('riverWaterU')) for (const [cat, S] of WATER_CATS) {
+    for (const k of ['U', 'V', 'U2', 'V2']) set(cat + 'Water' + k, sc[cat + 'Water' + k] ?? DEFAULT_SCENE[cat + 'Water' + k]);
+    $(cat + 'WaterL2').checked = !!sc[cat + 'WaterL2'];
+    for (const [id, layer] of [['waterTex' + S, 1], ['water2Tex' + S, 2]]) { const img = $(id + 'Thumb'); img.src = thumbURL(app.waterTexCanvas(cat, null, layer)); img.classList.toggle('inherited', !state[id]); $(id + 'Remove').disabled = !state[id]; }
+  }
   // señalética
   if ($('signs')) {
     $('signs').checked = !!sc.signs; $('signBox').classList.toggle('disabled', !sc.signs); set('signSide', sc.signSide || 'auto'); $('signOneSided').checked = !!sc.signOneSided;
@@ -7412,6 +7497,16 @@ function bindSceneControls() {
   pair('riverWallTile', 'riverWallTileNum', 'riverWallTile', 0.5, false); // paredes socavadas de las cascadas
   pair('riverWallTileX', 'riverWallTileXNum', 'riverWallTileX', 0.1, false); // paredes de los ríos: repetición a lo largo
   pair('riverWallTileY', 'riverWallTileYNum', 'riverWallTileY', 0.1, false); // y en la altura
+  // agua de ríos, lagos y cascadas
+  for (const [cat, S] of WATER_CATS) {
+    for (const k of ['U', 'V', 'U2', 'V2']) $(cat + 'Water' + k).addEventListener('change', (e) => { const v = parseFloat(e.target.value); if (!(v > 0)) return; sc[cat + 'Water' + k] = v; sceneChanged(); renderRiverPanel(); });
+    $(cat + 'WaterL2').addEventListener('change', (e) => { sc[cat + 'WaterL2'] = e.target.checked; sceneChanged(); renderRiverPanel(); });
+    for (const id of ['waterTex' + S, 'water2Tex' + S]) {
+      $(id + 'Btn').addEventListener('click', () => $(id + 'File').click());
+      $(id + 'File').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) loadTexture(f, id).then(() => renderRiverPanel()); });
+      $(id + 'Remove').addEventListener('click', () => { state[id] = null; syncSceneControls(); sceneChanged(); renderRiverPanel(); });
+    }
+  }
   // señalética de curvas
   $('signs').addEventListener('change', (e) => { sc.signs = e.target.checked; syncSceneControls(); sceneChanged(); });
   $('signSide').addEventListener('change', (e) => { sc.signSide = e.target.value; sceneChanged(); });
@@ -7503,7 +7598,7 @@ function bindSceneControls() {
     const { exportGLB } = await import('./export-glb.js');
     toast('Generando escena .glb…');
     try {
-      const { buffer, info } = await exportGLB(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, cutWallFor: (i, kind, part) => app.cutWallOwnTex(i, kind, part), cutArtTop: state.cutArtTopTex, cutArtOut: state.cutArtOutTex, collisionDeck: state.elev.deck ?? 1, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, riverArt: state.riverArtTex, riverArtTop: state.riverArtTopTex, riverArtOut: state.riverArtOutTex, riverWallFor: (id, kind, part) => app.riverWallOwnTex(id, kind, part), signTex: (t) => app.signTexCanvas(t), fallWall: state.fallWallTex, riverBed: state.riverBedTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas(), triggers: app.triggersWorld(), tunnelTex: (uid, kind) => app.tunnelTexCanvas(uid, kind), assetById: (id) => state.assets.find((a) => a.id === id) || null }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
+      const { buffer, info } = await exportGLB(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, cutWallFor: (i, kind, part) => app.cutWallOwnTex(i, kind, part), cutArtTop: state.cutArtTopTex, cutArtOut: state.cutArtOutTex, collisionDeck: state.elev.deck ?? 1, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, riverArt: state.riverArtTex, riverArtTop: state.riverArtTopTex, riverArtOut: state.riverArtOutTex, riverWallFor: (id, kind, part) => app.riverWallOwnTex(id, kind, part), signTex: (t) => app.signTexCanvas(t), waterTex: (cat, id, layer) => app.waterTexCanvas(cat, id, layer), waterOwn: (id, layer) => app.waterOwnTex(id, layer), fallWall: state.fallWallTex, riverBed: state.riverBedTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas(), triggers: app.triggersWorld(), tunnelTex: (uid, kind) => app.tunnelTexCanvas(uid, kind), assetById: (id) => state.assets.find((a) => a.id === id) || null }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
       download('track_scene.glb', buffer, 'model/gltf-binary');
       toast(`Escena exportada: pista ${info.trackTris.toLocaleString('es')} triángulos${info.terrainTris ? `, terreno ${info.terrainTris.toLocaleString('es')}` : ''}${info.hills ? `, ${info.hills} cerro(s)` : ''}${info.tunnels ? `, ${info.tunnels} túnel(es)` : ''}${info.gateTris ? ', pórtico de salida' : ''}${info.items ? `, ${info.items} elementos de pista` : ''}${info.signs ? `, ${info.signs} carteles` : ''}${info.trees ? `, ${info.trees} árboles` : ''}. Todo como objetos separados.`);
     } catch (err) { console.error(err); toastErr('No se pudo exportar la escena: ' + err.message); }
@@ -7517,7 +7612,7 @@ function bindSceneControls() {
     const { exportFBX } = await import('./export-fbx.js');
     toast('Generando escena .fbx…');
     try {
-      const { buffer, info } = await exportFBX(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, cutWallFor: (i, kind, part) => app.cutWallOwnTex(i, kind, part), cutArtTop: state.cutArtTopTex, cutArtOut: state.cutArtOutTex, collisionDeck: state.elev.deck ?? 1, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, riverArt: state.riverArtTex, riverArtTop: state.riverArtTopTex, riverArtOut: state.riverArtOutTex, riverWallFor: (id, kind, part) => app.riverWallOwnTex(id, kind, part), signTex: (t) => app.signTexCanvas(t), fallWall: state.fallWallTex, riverBed: state.riverBedTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas(), triggers: app.triggersWorld(), tunnelTex: (uid, kind) => app.tunnelTexCanvas(uid, kind), assetById: (id) => state.assets.find((a) => a.id === id) || null }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
+      const { buffer, info } = await exportFBX(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, cutWallFor: (i, kind, part) => app.cutWallOwnTex(i, kind, part), cutArtTop: state.cutArtTopTex, cutArtOut: state.cutArtOutTex, collisionDeck: state.elev.deck ?? 1, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, riverArt: state.riverArtTex, riverArtTop: state.riverArtTopTex, riverArtOut: state.riverArtOutTex, riverWallFor: (id, kind, part) => app.riverWallOwnTex(id, kind, part), signTex: (t) => app.signTexCanvas(t), waterTex: (cat, id, layer) => app.waterTexCanvas(cat, id, layer), waterOwn: (id, layer) => app.waterOwnTex(id, layer), fallWall: state.fallWallTex, riverBed: state.riverBedTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas(), triggers: app.triggersWorld(), tunnelTex: (uid, kind) => app.tunnelTexCanvas(uid, kind), assetById: (id) => state.assets.find((a) => a.id === id) || null }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
       download('track_scene.fbx', buffer, 'application/octet-stream');
       toast(`FBX exportado (${(buffer.length / 1048576).toFixed(1)} MB): pista${info.terrainTris ? ', terreno' : ''}${info.hills ? `, ${info.hills} cerro(s)` : ''}${info.tunnels ? `, ${info.tunnels} túnel(es)` : ''}${info.gateTris ? ', pórtico' : ''}${info.items ? `, ${info.items} elementos de pista` : ''}${info.trees ? `, ${info.trees} árboles` : ''}${info.grass ? ', hierba' : ''}. Z arriba, en metros, con texturas incrustadas.`);
     } catch (err) { console.error(err); toastErr('No se pudo exportar el FBX: ' + err.message); }

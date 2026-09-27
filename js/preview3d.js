@@ -897,7 +897,7 @@ export class Preview3D {
       this.setHillSelection(this.app.state.selHill, false);
       // ríos (sobre el terreno) y cascadas (sobre su cerro): mallas de agua con materiales distintos
       if (riversW && riversW.length) {
-        const RW = buildRivers(T, HS, riversW);
+        const RW = buildRivers(T, HS, riversW, sp);
         const riverMat = new THREE.MeshStandardMaterial({ color: 0x2f86d6, roughness: 0.12, metalness: 0.05, transparent: true, opacity: 0.85, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
         const fallMat = new THREE.MeshStandardMaterial({ color: 0xbfe8ff, emissive: 0x16323f, roughness: 0.25, metalness: 0, transparent: true, opacity: 0.9, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
         info.riverTris = 0;
@@ -913,14 +913,25 @@ export class Preview3D {
             this.extras.add(bm);
             info.riverTris += w.bed.tris;
           }
-          const m = new THREE.Mesh(mkGeo(w), (w.kind === 'fall' ? fallMat : riverMat).clone()); // material propio (para resaltarlo)
-          m.userData.riverId = w.id;
-          m.name = w.name;
-          m.renderOrder = 3;
-          if (w.kind === 'fall') this.markExag(m, (x, y) => T.sample(x, y)); else this.markExag(m, (x, y, z) => z);
-          this.riverMeshes.push(m);
-          this.extras.add(m);
-          info.riverTris += w.tris;
+          // 0.83: textura del agua (propia del río o la general de su tipo: río, lago o cascada) y segunda capa
+          const wmat = (layer) => {
+            const cv = this.app.waterTexCanvas ? this.app.waterTexCanvas(w.cat, w.id, layer) : null, t = this.texture(cv);
+            if (t) { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.needsUpdate = true; }
+            const mt = (w.kind === 'fall' ? fallMat : riverMat).clone();
+            if (t) { mt.map = t; mt.color.set(0xffffff); }
+            if (layer === 2) { mt.opacity = 1; mt.polygonOffsetFactor = -4; mt.polygonOffsetUnits = -4; }
+            return mt;
+          };
+          for (const [geo, layer] of [[w, 1], ...(w.layer2 ? [[w.layer2, 2]] : [])]) {
+            const m = new THREE.Mesh(mkGeo(geo), wmat(layer)); // material propio (para resaltarlo)
+            m.userData.riverId = w.id; m.userData.waterLayer = layer;
+            m.name = layer === 2 ? w.layer2.name : w.name;
+            m.renderOrder = layer === 2 ? 4 : 3;
+            if (w.kind === 'fall') this.markExag(m, (x, y) => T.sample(x, y)); else this.markExag(m, (x, y, z) => z);
+            this.riverMeshes.push(m);
+            this.extras.add(m);
+            info.riverTris += geo.tris;
+          }
         }
         this.riverData = RW;
         if (this.app.onRiversInfo) this.app.onRiversInfo(RW);
