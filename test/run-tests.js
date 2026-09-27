@@ -886,8 +886,49 @@ for (const [key, s] of Object.entries(SAMPLES)) {
       if (Math.abs(u - (S0.uL + 0.05 - 0.4)) < 0.05 && P[v + 2] < zt) foot++;
     }
     const nRows = T0.ctx.cutStations.reduce((a, w) => a + w.rows.length, 0), nSeg = T0.ctx.cutStations.reduce((a, w) => a + w.rows.length - 1, 0);
-    check(foot >= 2 && W.tris === nSeg * 8 + 2 * T0.ctx.cutStations.length * 2 && nRows > 0, `pared lisa: pie y tapas de los extremos (${foot} vértices del pie cerca; ${W.tris} triángulos)`);
+    check(foot >= 2 && W.tris === nSeg * 8 + 2 * T0.ctx.cutStations.length * 3 && nRows > 0, `pared lisa: pie y tapas de los extremos (${foot} vértices del pie cerca; ${W.tris} triángulos)`);
     check(T0.tris === T4.tris && T0.cutWalls.art.tris === T4.cutWalls.art.tris, `pared lisa: la densidad de las paredes no cambia nada (${T0.tris} / ${T4.tris})`);
+  }
+  // 0.70: ángulo de cada pared (lisas 45–135°, naturales 45–85°): la cara sube con esa inclinación, el terreno no asoma
+  // por la cara que se abre ni queda bajo la pista, y no hay árboles sobre la cara
+  const lean = (a) => (Math.abs(a - 90) < 1e-6 ? 0 : 1 / Math.tan((a * Math.PI) / 180));
+  for (const [aL, aR] of [[60, 120], [45, 135]]) {
+    const spA = { ...sp, terrainDensity: 20, dirtSide: 'both', dirtWidth: 3, dirtWidthL: 3, dirtWidthR: 3, cutRanges: [{ k: 0, s0, s1, walls: 'art', wallSubdiv: 1, angL: aL, angR: aR, idx: 0 }] };
+    const T = buildTerrain(L, E, spA), S = T.ctx.S;
+    let err = 0;
+    for (const w of T.ctx.cutStations) for (const q of w.rows) {
+      const off = (q.tx - q.ix) * q.nx + (q.ty - q.iy) * q.ny;
+      err = Math.max(err, Math.abs(off - lean(w.sg > 0 ? aL : aR) * Math.max(0, q.top - q.zEdge)));
+    }
+    const TP = T.positions, TI = T.baseIndices;
+    let poke = 0, inside = 0;
+    for (let t = 0; t < TI.length; t += 3) {
+      const vs = [TI[t], TI[t + 1], TI[t + 2]];
+      for (const wv of [[1 / 3, 1 / 3, 1 / 3], [0.6, 0.2, 0.2], [0.2, 0.6, 0.2], [0.2, 0.2, 0.6]]) {
+        const [px, py, pz] = [0, 1, 2].map((c) => wv[0] * TP[vs[0] * 3 + c] + wv[1] * TP[vs[1] * 3 + c] + wv[2] * TP[vs[2] * 3 + c]);
+        const n = nearestOnSamples(r, px, py), P = S[n.i];
+        if (r.s[n.i] < s0 + 3 || r.s[n.i] > s1 - 3) continue;
+        const u = (px - P.x) * -P.ty + (py - P.y) * P.tx, sg = u >= 0 ? 1 : -1, ext = (sg > 0 ? P.uL : P.uR) + 0.05, k = lean(sg > 0 ? aL : aR);
+        const du = Math.abs(u) - ext;
+        if (du < -0.05) { inside++; break; }
+        if (k > 0 && du > 0.05 && pz > P.zc + P.sr * sg * ext + du / k + 0.1) { poke++; break; }
+      }
+    }
+    const G = makeGround(T, null), trs = buildTrees(L, E, { ...spA, trees: true, treeDensity: 80, treeOffset: 0, treeSpread: 30 }, G).trees || [];
+    const onFace = trs.filter((p) => {
+      const n = nearestOnSamples(r, p.x, p.y), P = S[n.i];
+      if (r.s[n.i] < s0 || r.s[n.i] > s1) return false;
+      const u = (p.x - P.x) * -P.ty + (p.y - P.y) * P.tx, sg = u >= 0 ? 1 : -1, ext = (sg > 0 ? P.uL : P.uR) + 0.05;
+      return Math.abs(u) < ext + Math.max(0, lean(sg > 0 ? aL : aR)) * Math.max(0, p.z - (P.zc + P.sr * sg * ext));
+    }).length;
+    check(err < 0.01 && poke === 0 && inside === 0 && onFace === 0, `pared lisa a ${aL}° / ${aR}°: inclinación ${err.toFixed(3)} m de error, terreno asomando ${poke}, bajo la pista ${inside}, árboles sobre la cara ${onFace}`);
+  }
+  {
+    const width = (T, sg) => { const q = Math.round(410 / r.ds), P = T.ctx.S[q]; for (let d = 0; d < 40; d += 0.25) { const u = sg * ((sg > 0 ? P.uL : P.uR) + 0.4 + d), px = P.x - P.ty * u, py = P.y + P.tx * u; if (T.sample(px, py) >= T.ctx.groundAt(px, py) - 0.3) return d; } return 99; };
+    const TA = buildTerrain(L, E, { ...sp, cutRanges: [{ k: 0, s0, s1, walls: 'nat', wallSubdiv: 2, idx: 0 }] });
+    const TB = buildTerrain(L, E, { ...sp, cutRanges: [{ k: 0, s0, s1, walls: 'nat', wallSubdiv: 2, angL: 45, angR: 85, idx: 0 }] });
+    const wa = width(TA, 1), wl = width(TB, 1), wr = width(TB, -1);
+    check(wl > wa * 2 && wr < wa / 2 && TB.cutWalls.nat.parts.length === 1 && TB.cutWalls.nat.parts[0].idx === 0, `paredes naturales con ángulo: ancho de la roca ${wa.toFixed(1)} m a 71° → ${wl.toFixed(1)} m a 45° y ${wr.toFixed(1)} m a 85° (una parte por tramo)`);
   }
 }
 

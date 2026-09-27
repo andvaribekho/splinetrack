@@ -1,6 +1,22 @@
 // Traducción al inglés de la interfaz. Clave = texto en español tal como aparece en la página (espacios colapsados);
 // {0}, {1}… son partes variables (números, nombres). Lo que no está aquí se muestra en español.
 export default {
+  "Inclinación de las paredes": "Wall slope",
+  "Perfil de la zanja visto en el sentido de marcha (esquemático)": "Trench profile seen in the driving direction (schematic)",
+  "Las dos paredes con el mismo ángulo": "Both walls with the same angle",
+  "Mismo ángulo en ambas": "Same angle on both",
+  "Ángulo (ambas)": "Angle (both)",
+  "Ángulo izquierda": "Left angle",
+  "Ángulo derecha": "Right angle",
+  "Desde el piso: 90° sería vertical; las naturales van de 45° a 85° (roca en pendiente).": "From the floor: 90° would be vertical; natural walls go from 45° to 85° (sloped rock).",
+  "Desde el piso: 90° = vertical; menos se abre hacia afuera, más cuelga sobre la pista.": "From the floor: 90° = vertical; less opens outward, more overhangs the track.",
+  "Textura de la roca": "Rock texture",
+  "Textura de las paredes": "Wall texture",
+  "Como la general": "Like the general one",
+  "Sin textura propia usa la general de las paredes naturales (al final de esta sección).": "Without its own texture it uses the general natural-wall texture (at the end of this section).",
+  "Sin textura propia usa la general de las paredes lisas (al final de esta sección).": "Without its own texture it uses the general smooth-wall texture (at the end of this section).",
+  "Baja los puntos del tramo (perfil o gizmo Z): el terreno se abre en una zanja.": "Lower the section's points (profile or Z gizmo): the terrain opens into a trench.",
+  "pista": "track",
   "# Crea la colección \"Track Spline\" con curvas Bézier 3D (metros, Z arriba).": "# Crea la colección \"Track Spline\" con curvas Bézier 3D (metros, Z arriba).",
   "# Escrito en Y arriba (convención OBJ): importar con ejes por defecto en Blender / 3ds Max deja Z arriba.": "# Escrito en Y arriba (convención OBJ): importar con ejes por defecto en Blender / 3ds Max deja Z arriba.",
   "# Track Spline Generator: polilíneas 3D": "# Track Spline Generator: polilíneas 3D",

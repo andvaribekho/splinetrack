@@ -58,7 +58,7 @@ async function drag(x0, y0, x1, y1, steps = 3) { await page.mouse.move(x0, y0); 
 /** Nombres de los objetos de la escena exportada, agrupados por su padre. */
 const exportNames = () => ev(async () => {
   const t = window.__tsg, m = await import('/js/export-glb.js');
-  const { root } = await m.buildExportScene(t.state.layout, t.state.result, t.state.scene, { deco: { assetById: (id) => t.app.assetById(id), sets: t.state.decoSets, paintFor: (s) => t.app.decoPaintWorld(s) }, triggers: t.app.triggersWorld(), tunnelTex: (uid, k) => t.app.tunnelTexCanvas(uid, k), assetById: (id) => t.app.assetById(id) }, t.app.terrainPaintWorld ? t.app.terrainPaintWorld() : null, t.app.hillsWorld(), null);
+  const { root } = await m.buildExportScene(t.state.layout, t.state.result, t.state.scene, { deco: { assetById: (id) => t.app.assetById(id), sets: t.state.decoSets, paintFor: (s) => t.app.decoPaintWorld(s) }, triggers: t.app.triggersWorld(), tunnelTex: (uid, k) => t.app.tunnelTexCanvas(uid, k), assetById: (id) => t.app.assetById(id), cutWallFor: (i, k) => t.app.cutWallOwnTex(i, k) }, t.app.terrainPaintWorld ? t.app.terrainPaintWorld() : null, t.app.hillsWorld(), null);
   const out = {};
   root.traverse((o) => { if (o !== root && o.name && o.parent) (out[o.parent.name || '?'] = out[o.parent.name || '?'] || []).push(o.name); });
   return out;
@@ -1046,6 +1046,52 @@ test('tramo socavado: paredes con las secciones de la pista (en vivo), terreno d
   await ev(() => { const s = document.querySelector('#bridgeList .bwalls'); s.value = 'nat'; s.dispatchEvent(new Event('change', { bubbles: true })); });
   await idle();
   expect(vArt === false && (await vis()) === true, `densidad de paredes: lisas ${vArt}, naturales ${await vis()}`);
+});
+
+test('tramo socavado: inclinación de cada pared (gráfico del perfil) y textura propia de las paredes, con guardar y abrir', async () => {
+  await reset();
+  await ev(() => document.querySelector('#elevMode button[data-mode=direct]').click());
+  await idle();
+  await makeTramo('cut', [4, 5, 6, 7, 8, 9, 10, 11, 12]);
+  await ev(() => { const t = window.__tsg, zs = t.state.project.main.ctrlZ; for (const i of [6, 7, 8, 9, 10]) zs[i] = -7; zs[5] = -3.5; zs[11] = -3.5; t.scheduleBuild(); });
+  await page.click('#btnGenTerrain');
+  await idle();
+  const q = (sel) => `#bridgeList .item[data-i="0"] ${sel}`;
+  const setRange = (sel, v) => ev(([sel, v]) => { const el = document.querySelector(sel); el.value = String(v); el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }, [sel, v]);
+  // enlazadas por defecto (90°): mover la barra cambia las dos
+  const d0 = await ev((s) => { const c = document.querySelector(s); const px = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0; for (let k = 3; k < px.length; k += 4) if (px[k]) n++; return [n, window.__tsg.state.scene.cutRanges[0].angL, window.__tsg.state.scene.cutRanges[0].angR]; }, q('.bangCv'));
+  expect(d0[0] > 2000 && d0[1] === 90 && d0[2] === 90, `gráfico y 90° por defecto: ${d0}`);
+  await setRange(q('.bangL'), 70);
+  await idle();
+  let cr = await ev(() => window.__tsg.state.scene.cutRanges[0]);
+  expect(cr.angL === 70 && cr.angR === 70, `enlazadas: ${cr.angL}/${cr.angR}`);
+  // independientes: derecha colgando sobre la pista
+  await ev((s) => { const el = document.querySelector(s); el.checked = false; el.dispatchEvent(new Event('change', { bubbles: true })); }, q('.bangLink'));
+  await setRange(q('.bangR'), 120);
+  await idle();
+  const g = await ev(() => { const t = window.__tsg, T = t.preview.terrainData, cr = t.state.scene.cutRanges[0]; return [cr.angL, cr.angR, T.ctx.cutStations.map((w) => +w.lean.toFixed(3))]; });
+  expect(g[0] === 70 && g[1] === 120 && g[2].includes(+(1 / Math.tan(70 * Math.PI / 180)).toFixed(3)) && g[2].includes(+(1 / Math.tan(120 * Math.PI / 180)).toFixed(3)), `ángulos por pared: ${JSON.stringify(g)}`);
+  // paredes naturales: rango 45–85°
+  await ev((s) => { const el = document.querySelector(s); el.value = 'nat'; el.dispatchEvent(new Event('change', { bubbles: true })); }, q('.bwalls'));
+  await idle();
+  const rn = await ev((s) => { const el = document.querySelector(s); return [el.min, el.max, el.value]; }, q('.bangL'));
+  expect(rn[0] === '45' && rn[1] === '85', `rango de las naturales: ${rn}`);
+  // textura propia de la roca de este tramo: su objeto y su material al exportar
+  await ev(() => { const c = document.createElement('canvas'); c.width = c.height = 8; c.getContext('2d').fillStyle = '#c0f'; c.getContext('2d').fillRect(0, 0, 8, 8); window.__tsg.app.setBridgeTexture(0, 'wallNat', c); });
+  await idle();
+  const pm = await ev(() => window.__tsg.preview.wallMeshes.filter((m) => m.userData.cutWall === 'nat').map((m) => [m.userData.cutIdx, !!m.material.map]));
+  expect(pm.length === 1 && pm[0][0] === 0 && pm[0][1], `roca con su textura en 3D: ${JSON.stringify(pm)}`);
+  const names = Object.values(await exportNames()).flat();
+  expect(names.includes('socavado_01_roca') && !names.includes('terreno_roca_socavada'), `exportación: ${names.filter((n) => /socav|roca/.test(n))}`);
+  // guardar y abrir: ángulos y textura propia
+  const back = await ev(async () => {
+    const t = window.__tsg, d = JSON.parse(JSON.stringify(t.projectData()));
+    await t.openProject(d);
+    await t.idle();
+    const b = t.state.project.main.bridges[0];
+    return [b.walls, JSON.stringify(b.natAng), JSON.stringify(b.artAng), b.angLink, !!t.app.cutWallOwnTex(0, 'nat')];
+  });
+  expect(back[0] === 'nat' && back[2] === '[70,120]' && back[3] === false && back[4], `ida y vuelta: ${back}`);
 });
 
 test('tarjetas: la primera vez que se abre una lista desplegable no se cierra (la tarjeta no se vuelve a dibujar)', async () => {

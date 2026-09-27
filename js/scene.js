@@ -893,7 +893,7 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
   const anyCut = S.some((p) => p.cut);
   const cutNoise = valueNoise2((sp.treeSeed | 0) + 707);
   const cutInfo = (x, y) => {
-    let best = Infinity, kind = null;
+    let best = Infinity, kind = null, idx = null;
     fine.query(x, y, maxW / 2 + 26, (p) => {
       if (!p.cut) return;
       const dx = x - p.x, dy = y - p.y;
@@ -908,11 +908,12 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
       if (!nat) { if (d > 1e-3) return; z = floor; } // pared lisa: la pone una malla propia extruida desde la pista (0.64); el terreno solo baja dentro
       else {
         const n = cutNoise(x / 2.3, y / 2.3), n2 = cutNoise(x / 0.9 + 31, y / 0.9 - 17);
-        z = floor + d * (2.2 + 1.4 * n) + (d > 0.3 ? (n2 - 0.5) * 1.2 : 0); // roca: pendiente irregular
+        const tg = Math.tan((cutAngle(p.cut, u >= 0 ? 1 : -1) * Math.PI) / 180) / 2.9; // ángulo de la pared (71° = pendiente de siempre)
+        z = floor + d * (2.2 + 1.4 * n) * tg + (d > 0.3 ? (n2 - 0.5) * 1.2 : 0); // roca: pendiente irregular
       }
-      if (z < best) { best = z; kind = nat ? 'cutNat' : 'cutArt'; }
+      if (z < best) { best = z; kind = nat ? 'cutNat' : 'cutArt'; idx = p.cut.idx ?? 0; }
     });
-    return { z: best, kind };
+    return { z: best, kind, idx };
   };
   const heightAt0 = anySusp ? (x, y, rho) => {
     const zone = zoneAt(x, y, rho, null, 1);
@@ -991,7 +992,17 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
     // tramos socavados: fuera el terreno bajo la pista (antes de separar la roca de las paredes naturales, que también se
     // corta). Línea de corte: paredes lisas, la de la pared; naturales, justo bajo el borde de la pista (10 cm adentro)
     if (anyCut) {
-      const extOf = (p, u) => (u >= 0 ? p.uL : p.uR) + (p.cut.walls === 'nat' ? -0.1 : 0.05);
+      // pared lisa inclinada hacia afuera: el corte sigue el borde de arriba de la cara (bajo la tapa), no su base
+      const extOf = (p, u) => {
+        const sg = u >= 0 ? 1 : -1, e = (sg > 0 ? p.uL : p.uR);
+        if (p.cut.walls === 'nat') return e - 0.1;
+        const k = cutLean(cutAngle(p.cut, sg));
+        if (k <= 0) return e + 0.05;
+        const zEdge = p.zc + p.sr * sg * (e + 0.05), lx = -p.ty * sg, ly = p.tx * sg;
+        let off = k * Math.max(0.35, heightNat(p.x + lx * (e + 0.05), p.y + ly * (e + 0.05), 0.5) + 0.05 - zEdge);
+        off = k * Math.max(0.35, heightNat(p.x + lx * (e + 0.05 + off), p.y + ly * (e + 0.05 + off), 0.5) + 0.05 - zEdge);
+        return e + 0.05 + off + 0.15;
+      };
       const infoOf = (p, x, y, loose) => {
         const dx = x - p.x, dy = y - p.y, a = Math.abs(dx * p.tx + dy * p.ty), u = dx * -p.ty + dy * p.tx;
         const dd = Math.abs(u) - extOf(p, u);
@@ -1018,11 +1029,20 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
       };
       clipTerrainAtCuts(out, wallAt, (x, y) => { const w = wallAt(x, y) || wallAtLoose(x, y); return w && w.nat ? Math.min(w.floor, heightNat(x, y, 0.5)) : heightNat(x, y, 0.5); }, wallAtLoose);
     }
-    const cutCarve = (x, y) => { const ci = cutInfo(x, y); if (!ci.kind || ci.kind === 'cutArt') return null; const zn = heightNat(x, y, 0.5); return zn - ci.z > 0.3 ? ci.kind : null; };
+    const cutCarve = (x, y) => { const ci = cutInfo(x, y); if (!ci.kind || ci.kind === 'cutArt') return null; const zn = heightNat(x, y, 0.5); return zn - ci.z > 0.3 ? `cutNat:${ci.idx}` : null; }; // roca: una parte por tramo
     const classify = (x, y) => (carvedRivers && riverCarveAt(x, y) > 0.05 ? 'river' : anyCut ? cutCarve(x, y) : null);
     splitParts(out, classify, { river: Math.max(0.5, sp.riverWallTile ?? 4), cutArt: Math.max(0.5, sp.cutWallTile ?? 4), cutNat: Math.max(0.5, sp.cutWallTile ?? 4) });
     out.wall = out.parts.river || null; // compatibilidad: cauces de los ríos
-    out.cutWalls = { art: anyArt ? cutArtWalls(artSt, capW, Math.max(0.5, sp.cutWallTile ?? 4)) : null, nat: out.parts.cutNat || null };
+    // roca de las paredes naturales: todas juntas (vista) y una parte por tramo (textura propia / exportación)
+    const natParts = Object.entries(out.parts).filter(([k]) => k.startsWith('cutNat:')).map(([k, q]) => ({ idx: +k.slice(7), ...q }));
+    let nat = null;
+    if (natParts.length) {
+      const P = [], U = [], I = [];
+      for (const q of natParts) { const b = P.length / 3; P.push(...q.positions); U.push(...q.uvs); for (const v of q.indices) I.push(b + v); }
+      nat = { positions: new Float32Array(P), uvs: new Float32Array(U), indices: new Uint32Array(I), tris: I.length / 3, parts: natParts };
+      out.parts.cutNat = nat;
+    }
+    out.cutWalls = { art: anyArt ? cutArtWalls(artSt, capW, Math.max(0.5, sp.cutWallTile ?? 4)) : null, nat };
   }
   const groundAt = (x, y) => heightNat(x, y, 0.5); // nivel natural del suelo (sin las zanjas de las secciones socavadas)
   Object.defineProperty(out, 'ctx', { value: { S, fine, maxW, gap, zoneAt, heightAt, sp, origAt, riverCarveAt, inRiver, groundAt, cutStations: artSt }, enumerable: false });
@@ -1410,11 +1430,29 @@ export function buildHills(layout, elev, spIn, T, hills) {
  * mesh.baseIndices y mesh.parts = {clave: malla compacta con UV oblicuas (ver splitWalls)}. tiles: {clave: metros}.
  */
 /**
+ * Ángulo de cada pared de un tramo socavado, en grados, medido desde el piso de la zanja: 90 = vertical; menos de 90 la
+ * pared se abre hacia afuera (talud); más de 90 cuelga sobre la pista (solo las lisas: las naturales son el terreno).
+ */
+export const CUT_ANGLES = { art: { def: 90, min: 45, max: 135 }, nat: { def: 71, min: 45, max: 85 } };
+/** Ángulo de la pared izquierda (sg > 0) o derecha (sg < 0) de un socavado (p.cut). */
+export function cutAngle(cut, sg) {
+  const R = CUT_ANGLES[cut && cut.walls === 'nat' ? 'nat' : 'art'];
+  const a = cut ? (sg > 0 ? cut.angL : cut.angR) : null;
+  return clamp(Number.isFinite(a) ? a : R.def, R.min, R.max);
+}
+/** Desplazamiento horizontal hacia afuera por metro de altura (cotangente; 0 en 90°). */
+export const cutLean = (deg) => (Math.abs(deg - 90) < 1e-6 ? 0 : 1 / Math.tan((deg * Math.PI) / 180));
+
+/**
  * Estaciones de las paredes lisas de los tramos socavados: las mismas secciones que la malla de la pista (trackRows:
  * densidad, «Optimizada», tope de triángulos y transiciones), así la base de la pared sigue el borde de la pista, del
  * camino de tierra y de la barrera sin cortes. Entre dos estaciones se agregan solo las que hacen falta para que el
  * borde de arriba siga el suelo natural (sobre la cuerda, sin salirse de la línea de la pista).
- * Devuelve [{key (tramo), sg (+1 izquierda, -1 derecha), rows: [{ix, iy, ox, oy, zb, top, zo, s}]}].
+ * Cada pared tiene su ángulo (cutAngle): la cara interior sube desde la base inclinada hacia afuera (< 90°) o sobre la
+ * pista (> 90°); la tapa va de su borde de arriba hacia afuera (y, si cuelga, hasta pasar la línea de la base).
+ * Devuelve [{key (tramo), sg (+1 izquierda, -1 derecha), lean, rows: [{ix, iy (base, en la línea de la pared), nx, ny
+ * (hacia afuera), zEdge (borde de la pista), zb (pie), bx, by (pie de la cara), tx, ty (borde de arriba de la cara),
+ * ox, oy (borde de afuera de la tapa), top, zo, s}]}].
  */
 export function cutArtStations(layout, elev, sp, S, nat, gap, capW) {
   const isArt = (p) => p && p.cut && p.cut.walls !== 'nat';
@@ -1425,12 +1463,26 @@ export function cutArtStations(layout, elev, sp, S, nat, gap, capW) {
   const out = [];
   const TOL_UP = 0.12, TOL_DOWN = 0.35; // cuánto puede quedar el suelo sobre / bajo el borde recto de la pared
   const finish = (r) => {
-    const ni = nat(r.ix, r.iy), no = nat(r.ox, r.oy);
-    r.top = Math.max(r.zb + 0.35, Math.max(ni, no) + 0.05);
-    r.zo = Math.min(r.top, no) - 1;
+    const k = r.lean;
+    let top = Math.max(r.zb + 0.35, Math.max(nat(r.ix, r.iy), nat(r.ix + r.nx * capW, r.iy + r.ny * capW)) + 0.05);
+    for (let it = 0; it < (k ? 3 : 1); it++) { // la altura mueve el borde de arriba (inclinada) y el borde, la altura
+      const off = k * Math.max(0, top - r.zEdge), oo = Math.max(off, 0) + capW;
+      r.tx = r.ix + r.nx * off; r.ty = r.iy + r.ny * off;
+      r.ox = r.ix + r.nx * oo; r.oy = r.iy + r.ny * oo;
+      top = Math.max(r.zb + 0.35, Math.max(nat(r.tx, r.ty), nat(r.ox, r.oy)) + 0.05);
+    }
+    r.top = top;
+    const bo = k * (r.zb - r.zEdge); // el pie sigue la misma inclinación (bajo la barrera / el camino)
+    r.bx = r.ix + r.nx * bo; r.by = r.iy + r.ny * bo;
+    r.zo = Math.min(top, nat(r.ox, r.oy)) - 1;
     return r;
   };
-  const lerp = (A, B, t) => finish({ ix: A.ix + (B.ix - A.ix) * t, iy: A.iy + (B.iy - A.iy) * t, ox: A.ox + (B.ox - A.ox) * t, oy: A.oy + (B.oy - A.oy) * t, zb: A.zb + (B.zb - A.zb) * t, s: A.s + (B.s - A.s) * t, extra: true });
+  const L = (A, B, t, f) => A[f] + (B[f] - A[f]) * t;
+  const lerp = (A, B, t) => {
+    let nx = L(A, B, t, 'nx'), ny = L(A, B, t, 'ny');
+    const h = Math.hypot(nx, ny) || 1; nx /= h; ny /= h;
+    return finish({ ix: L(A, B, t, 'ix'), iy: L(A, B, t, 'iy'), nx, ny, zEdge: L(A, B, t, 'zEdge'), zb: L(A, B, t, 'zb'), s: L(A, B, t, 's'), lean: A.lean, extra: true });
+  };
   for (const [k, list] of byRoute) {
     const n = list.length;
     let start = list.findIndex((p) => !isArt(p));
@@ -1447,9 +1499,10 @@ export function cutArtStations(layout, elev, sp, S, nat, gap, capW) {
       const key = run[0].cut.idx ?? 0;
       const keep = run.filter((p, j) => j === 0 || j === run.length - 1 || rows.has(p.i));
       for (const sg of [1, -1]) {
+        const lean = cutLean(cutAngle(run[0].cut, sg));
         const st = keep.map((p) => {
-          const ext = (sg > 0 ? p.uL : p.uR) + 0.05, lx = -p.ty * sg, ly = p.tx * sg;
-          return finish({ ix: p.x + lx * ext, iy: p.y + ly * ext, ox: p.x + lx * (ext + capW), oy: p.y + ly * (ext + capW), zb: p.zc + p.sr * sg * ext - Math.max(0.35, gap + 0.05), s: p.s, i: p.i });
+          const ext = (sg > 0 ? p.uL : p.uR) + 0.05, lx = -p.ty * sg, ly = p.tx * sg, zEdge = p.zc + p.sr * sg * ext;
+          return finish({ ix: p.x + lx * ext, iy: p.y + ly * ext, nx: lx, ny: ly, zEdge, zb: zEdge - Math.max(0.35, gap + 0.05), s: p.s, i: p.i, lean });
         });
         const res = [st[0]];
         const refine = (A, B, depth) => {
@@ -1464,21 +1517,21 @@ export function cutArtStations(layout, elev, sp, S, nat, gap, capW) {
           refine(A, M, depth + 1); res.push(M); refine(M, B, depth + 1);
         };
         for (let j = 1; j < st.length; j++) { refine(st[j - 1], st[j], 0); res.push(st[j]); }
-        out.push({ key, sg, k, rows: res });
+        out.push({ key, sg, k, lean, rows: res });
       }
     }
   }
   return out;
 }
 
-/** Malla de las paredes lisas (cara interior, tapa y cara exterior) a partir de sus estaciones (cutArtStations). */
+/** Malla de las paredes lisas (cara interior, tapa, cara exterior, pie y extremos) a partir de sus estaciones (cutArtStations). */
 export function cutArtWalls(stations, capW, tile = 4) {
   const parts = new Map(); // por tramo socavado (idx): {pos, uv, idx}
   for (const { key, sg, rows } of stations) {
     if (rows.length < 2) continue;
     if (!parts.has(key)) parts.set(key, { pos: [], uv: [], idx: [] });
     const { pos, uv, idx } = parts.get(key);
-    // tres tiras: cara interior, tapa y cara exterior; el orden de los vértices deja las normales hacia afuera
+    // tiras a lo largo; el orden de los vértices deja las normales hacia afuera
     const strip = (A, B, vA, vB) => {
       const base = pos.length / 3;
       for (const r of rows) { pos.push(...A(r), ...B(r)); uv.push(r.s / tile, vA(r) / tile, r.s / tile, vB(r) / tile); }
@@ -1487,19 +1540,21 @@ export function cutArtWalls(stations, capW, tile = 4) {
         if (sg > 0) idx.push(a0, a1, b0, b0, a1, b1); else idx.push(a0, b0, a1, b0, b1, a1);
       }
     };
-    strip((r) => [r.ix, r.iy, r.zb], (r) => [r.ix, r.iy, r.top], (r) => r.zb, (r) => r.top); // interior (mira a la pista)
-    strip((r) => [r.ix, r.iy, r.top], (r) => [r.ox, r.oy, r.top], () => 0, () => capW); // tapa
+    // cara interior (mira a la pista): v = largo sobre la cara, así la textura no se estira al inclinarla
+    const faceV = (r) => Math.hypot(r.top - r.zb, Math.hypot(r.tx - r.bx, r.ty - r.by));
+    strip((r) => [r.bx, r.by, r.zb], (r) => [r.tx, r.ty, r.top], (r) => r.zb, (r) => r.zb + faceV(r));
+    strip((r) => [r.tx, r.ty, r.top], (r) => [r.ox, r.oy, r.top], () => 0, (r) => Math.hypot(r.ox - r.tx, r.oy - r.ty)); // tapa
     strip((r) => [r.ox, r.oy, r.top], (r) => [r.ox, r.oy, r.zo], (r) => r.top, (r) => r.zo); // exterior
     // pie: franja angosta hacia la pista a la altura de la base (el terreno bajo la pista se quita: tapa la rendija entre
     // la barrera o el camino de tierra y la pared)
-    const inw = (r, d) => [r.ix - (r.ox - r.ix) * d / capW, r.iy - (r.oy - r.iy) * d / capW, r.zb];
-    strip((r) => inw(r, 0.4), (r) => [r.ix, r.iy, r.zb], () => -0.4, () => 0);
+    strip((r) => [r.bx - r.nx * 0.4, r.by - r.ny * 0.4, r.zb], (r) => [r.bx, r.by, r.zb], () => -0.4, () => 0);
     // tapas de los extremos (el perfil de la pared), mirando hacia afuera del tramo
     for (const [r, o] of [[rows[0], rows[1]], [rows[rows.length - 1], rows[rows.length - 2]]]) {
       const base = pos.length / 3, fx = r.ix - o.ix, fy = r.iy - o.iy; // hacia afuera del tramo
-      const Q = [[r.ix, r.iy, r.zb], [r.ix, r.iy, r.top], [r.ox, r.oy, r.top], [r.ox, r.oy, r.zo]];
+      const Q = [[r.bx, r.by, r.zb], [r.tx, r.ty, r.top], [r.ox, r.oy, r.top], [r.ox, r.oy, r.zo], [r.ix + r.nx * capW, r.iy + r.ny * capW, r.zb]];
       for (const v of Q) { pos.push(...v); uv.push(((v[0] - r.ix) * -fy + (v[1] - r.iy) * fx) / Math.hypot(fx, fy) / tile, v[2] / tile); }
-      const tri = [[0, 1, 2], [0, 2, 3]];
+      // perfil cerrado: pie de la cara → arriba → tapa → pie de afuera → bajo la base (sirve también si la cara cuelga)
+      const tri = [[0, 1, 2], [0, 2, 4], [4, 2, 3]];
       for (const [a, b, c] of tri) {
         const A = Q[a], B = Q[b], C = Q[c];
         const nx = (B[1] - A[1]) * (C[2] - A[2]) - (B[2] - A[2]) * (C[1] - A[1]), ny = (B[2] - A[2]) * (C[0] - A[0]) - (B[0] - A[0]) * (C[2] - A[2]);
@@ -1535,8 +1590,8 @@ export function cutGuidePoints(stations, S, capW, layout, step = 2.5, natAt = nu
       const A = rows[j];
       // en cada estación (si la pista es muy densa, cada ~step m): afuera, pegado a la tapa, y adentro (queda bajo la pista)
       if (j === 0 || j === rows.length - 1 || Math.hypot(A.ix - lx, A.iy - ly) >= step * 0.8) {
-        push(A.ox + (A.ox - A.ix) * 0.1 / capW, A.oy + (A.oy - A.iy) * 0.1 / capW, A.top - 0.03);
-        push(A.ix - (A.ox - A.ix) * 0.35 / capW, A.iy - (A.oy - A.iy) * 0.35 / capW);
+        push(A.ox + A.nx * 0.1, A.oy + A.ny * 0.1, A.top - 0.03);
+        push(A.ix - A.nx * 0.35, A.iy - A.ny * 0.35);
         lx = A.ix; ly = A.iy;
       }
       if (j === rows.length - 1) break;
@@ -1544,8 +1599,9 @@ export function cutGuidePoints(stations, S, capW, layout, step = 2.5, natAt = nu
       for (let q = 1; q <= m; q++) {
         const t = q / (m + 1);
         const ix = A.ix + (B.ix - A.ix) * t, iy = A.iy + (B.iy - A.iy) * t, ox = A.ox + (B.ox - A.ox) * t, oy = A.oy + (B.oy - A.oy) * t;
-        push(ox + (ox - ix) * 0.1 / capW, oy + (oy - iy) * 0.1 / capW, A.top + (B.top - A.top) * t - 0.03);
-        push(ix - (ox - ix) * 0.35 / capW, iy - (oy - iy) * 0.35 / capW);
+        const nx = A.nx + (B.nx - A.nx) * t, ny = A.ny + (B.ny - A.ny) * t;
+        push(ox + nx * 0.1, oy + ny * 0.1, A.top + (B.top - A.top) * t - 0.03);
+        push(ix - nx * 0.35, iy - ny * 0.35);
       }
     }
   }
@@ -1566,8 +1622,9 @@ export function cutGuidePoints(stations, S, capW, layout, step = 2.5, natAt = nu
         // borde de arriba de la roca (donde la pendiente llega al suelo natural) y, si es alta, una fila al medio: así la
         // roca queda con su forma aunque el terreno tenga triángulos grandes
         const floor = p.z - gap, at = (d) => [p.x + lx * (ext + 0.4 + d), p.y + ly * (ext + 0.4 + d)];
-        let d = Math.max(0, natAt(...at(0)) - floor) / 2.9;
-        d = Math.max(0, natAt(...at(d)) - floor) / 2.9;
+        const slope = Math.tan((cutAngle(p.cut, sg) * Math.PI) / 180); // pendiente media de la roca
+        let d = Math.max(0, natAt(...at(0)) - floor) / slope;
+        d = Math.max(0, natAt(...at(d)) - floor) / slope;
         if (d < 0.5) continue;
         push(...at(d));
         if (d > 3) push(...at(d / 2));
@@ -1661,7 +1718,7 @@ export function splitParts(mesh, classify, tiles = {}) {
   mesh.otherIndices = new Uint32Array(others);
   mesh.parts = {};
   for (const [key, list] of Object.entries(groups)) {
-    const tile = tiles[key] || 4;
+    const tile = tiles[key] || tiles[key.split(':')[0]] || 4;
     const map = new Map(), pos = [], uv = [], idx = [];
     for (const v of list) {
       let k = map.get(v);
@@ -1899,12 +1956,16 @@ function scatter(layout, elev, sp, ground, o) {
     let ok = true;
     g.query(x, y, maxW / 2 + o.clear, (p) => { if (ok && Math.hypot(p.x - x, p.y - y) < p.ew / 2 + o.clear) ok = false; });
     // ni dentro de una zanja con paredes lisas (entre las paredes y sobre su tapa)
-    if (ok) g.query(x, y, maxW / 2 + 2, (p) => {
+    if (ok) g.query(x, y, maxW / 2 + 22, (p) => { // (+20 m: paredes inclinadas hacia afuera)
       if (!ok || !p.cut || p.cut.walls === 'nat') return;
       const dx = x - p.x, dy = y - p.y;
       const u = dx * -p.ty + dy * p.tx;
       if (Math.abs(dx * p.tx + dy * p.ty) > p.ds * (0.75 + Math.abs(u) / 20)) return;
-      if (Math.abs(u) < (u >= 0 ? p.uL : p.uR) + 0.5) ok = false;
+      // inclinada hacia afuera: tampoco sobre la cara (hasta su borde de arriba)
+      const sg = u >= 0 ? 1 : -1, k = Math.max(0, cutLean(cutAngle(p.cut, sg)));
+      const zg = k && ground && ground.sample ? ground.sample(x, y) : null, zEdge = p.zc + p.sr * sg * ((sg > 0 ? p.uL : p.uR) + 0.05);
+      const lean = zg != null && Number.isFinite(zg) ? k * Math.max(0, zg - zEdge) : 0;
+      if (Math.abs(u) < (u >= 0 ? p.uL : p.uR) + 0.5 + lean) ok = false;
     });
     if (!ok) return;
     placed.query(x, y, o.minSpace, (t) => { if (ok && Math.hypot(t.x - x, t.y - y) < o.minSpace) ok = false; });

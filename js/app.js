@@ -13,7 +13,7 @@ import { initSplitters } from './splitters.js';
 import { initHotkeys, comboOf } from './hotkeys.js';
 import { VERSION } from './version.js';
 import { ACTIONS, FIXED, bindingOf, isDefault, setBinding, resetAll as resetKeymap, matchAction, comboLabel } from './keymap.js';
-import { DEFAULT_SCENE, terrainCell, buildTrees, buildDecoInstances, bakeTreeList, bakeDecoList } from './scene.js';
+import { DEFAULT_SCENE, terrainCell, buildTrees, buildDecoInstances, bakeTreeList, bakeDecoList, CUT_ANGLES } from './scene.js';
 import { makeShadowCanvas, sunShadowDir } from './shadows.js';
 import { SCULPT_PRESETS, DEFAULT_SCULPT_CURVE, normCurve, curveEval, curveLUT, presetOf } from './sculptcurve.js';
 import { makeTrackThumbnail } from './thumbnail.js';
@@ -1060,7 +1060,11 @@ const app = {
   cutZonesS() {
     const L = state.layout;
     if (!L || !L.routes[0]) return [];
-    return (L.routes[0].bridges || []).filter((b) => b.type === 'cut' && b.s1 - b.s0 > 2).map((b) => ({ k: 0, idx: b.idx, s0: b.s0, s1: b.s1, walls: b.walls === 'nat' ? 'nat' : 'art', wallSubdiv: b.wallSubdiv ?? 2 }));
+    const tr = (state.project.main && state.project.main.bridges) || [];
+    return (L.routes[0].bridges || []).filter((b) => b.type === 'cut' && b.s1 - b.s0 > 2).map((b) => {
+      const ang = tr[b.idx] ? tramoAngles(tr[b.idx]) : [null, null];
+      return { k: 0, idx: b.idx, s0: b.s0, s1: b.s1, walls: b.walls === 'nat' ? 'nat' : 'art', wallSubdiv: b.wallSubdiv ?? 2, angL: ang[0], angR: ang[1] };
+    });
   },
   /** Tramos suspendidos en s de la ruta principal: [{k: 0, s0, s1, pillars, dirt, barrier, idx}]. */
   suspZonesS() {
@@ -2084,7 +2088,17 @@ const app = {
   dirtTexCanvas(r = null, susp = false, bridge = null) { if (bridge != null) return this.bridgeOwnTex(bridge, 'dirt') || state.dirtTex || defaultDirtCanvas(); return (susp && state.suspDirtTex) || (r && typeof r === 'object' && this.altOwnTex(r, 'dirt')) || state.dirtTex || defaultDirtCanvas(); },
   /** Textura propia de los tramos suspendidos (null = la de la pista). */
   suspTexCanvas() { return state.suspTex || null; },
-  cutWallTexCanvas(kind) { return (kind === 'art' ? state.cutArtTex : state.cutNatTex) || null; },
+  /** Textura de las paredes de un socavado: la propia del tramo i (si tiene) o la general de su tipo; null = color liso.
+   *  thumb: para la miniatura de la tarjeta, sin textura devuelve un cuadro del color de la pared. */
+  cutWallTexCanvas(kind, i = null, thumb = false) {
+    const own = i != null ? this.bridgeOwnTex(i, kind === 'art' ? 'wallArt' : 'wallNat') : null;
+    const cv = own || (kind === 'art' ? state.cutArtTex : state.cutNatTex) || null;
+    if (cv || !thumb) return cv;
+    const c = document.createElement('canvas'); c.width = c.height = 16;
+    const g = c.getContext('2d'); g.fillStyle = kind === 'art' ? '#9c9d98' : '#6b6158'; g.fillRect(0, 0, 16, 16);
+    return c;
+  },
+  cutWallOwnTex(i, kind) { return this.bridgeOwnTex(i, kind === 'art' ? 'wallArt' : 'wallNat'); },
   onGroundLine() { profile.draw(); },
   /** ¿El punto de control está en un tramo suspendido? (solo ruta principal) */
   ctrlInSusp(key, idx) {
@@ -2998,6 +3012,58 @@ async function migrateSuspToBridges(zones, tex) {
   }
   if (n) setTimeout(() => toast(`${n} tramo(s) de terreno elevado del proyecto pasaron a ser puentes (sección «Puentes»).`), 400);
 }
+/** Ángulos [izquierda, derecha] de las paredes de un tramo socavado (según su tipo de pared; enlazados = iguales). */
+function tramoAngles(b) {
+  const nat = b.walls === 'nat', R = CUT_ANGLES[nat ? 'nat' : 'art'], A = (nat ? b.natAng : b.artAng) || [];
+  const cl = (v) => Math.round(Math.max(R.min, Math.min(R.max, Number.isFinite(v) ? v : R.def)));
+  const l = cl(A[0]);
+  return [l, b.angLink !== false ? l : cl(A[1])];
+}
+/**
+ * Gráfico esquemático del perfil de un socavado, visto en el sentido de marcha: suelo natural arriba, la pista en el piso
+ * y cada pared con su ángulo (medido como la pendiente del talud: 90° vertical, menos se abre, más cuelga).
+ */
+function drawCutProfile(cv, [aL, aR], nat) {
+  if (!cv) return;
+  const W = 240, H = 86, dpr = 2;
+  cv.width = W * dpr; cv.height = H * dpr; cv.style.width = W + 'px'; cv.style.maxWidth = '100%'; cv.style.height = 'auto';
+  const g = localizeCtx(cv.getContext('2d'));
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, W, H);
+  const yT = 16, yF = 60, D = yF - yT, bL = 70, bR = 170; // arriba, piso, bases de las paredes
+  const lean = (a) => D / Math.tan((a * Math.PI) / 180); // desplazamiento del borde de arriba hacia afuera
+  const tL = bL - lean(aL), tR = bR + lean(aR);
+  const earth = nat ? '#6b6158' : '#4a4f45', wall = nat ? '#8a7d70' : '#b9bbb5';
+  // tierra detrás de cada pared (hasta el borde del gráfico) y el pasto arriba
+  g.fillStyle = earth;
+  g.beginPath(); g.moveTo(0, yT); g.lineTo(tL, yT); g.lineTo(bL, yF); g.lineTo(bL, yF + 6); g.lineTo(0, yF + 6); g.closePath(); g.fill();
+  g.beginPath(); g.moveTo(W, yT); g.lineTo(tR, yT); g.lineTo(bR, yF); g.lineTo(bR, yF + 6); g.lineTo(W, yF + 6); g.closePath(); g.fill();
+  g.strokeStyle = '#5f9a46'; g.lineWidth = 3;
+  g.beginPath(); g.moveTo(0, yT); g.lineTo(tL, yT); g.moveTo(tR, yT); g.lineTo(W, yT); g.stroke();
+  // piso con la pista
+  g.fillStyle = '#2b3038'; g.fillRect(bL, yF, bR - bL, 6);
+  g.fillStyle = '#42474f'; g.fillRect(bL + 8, yF - 3, bR - bL - 16, 3);
+  g.fillStyle = '#e0b23a'; for (let x = bL + 16; x < bR - 16; x += 14) g.fillRect(x, yF - 2, 7, 1.2);
+  // caras de las paredes
+  g.strokeStyle = wall; g.lineWidth = nat ? 2 : 3; g.lineCap = 'round';
+  g.beginPath(); g.moveTo(bL, yF); g.lineTo(tL, yT); g.moveTo(bR, yF); g.lineTo(tR, yT); g.stroke();
+  // ángulo en el pie de cada pared (del lado de la tierra: desde la horizontal hacia afuera hasta la cara)
+  g.strokeStyle = '#f2a93b'; g.fillStyle = '#f2c86b'; g.lineWidth = 1.2;
+  g.font = '600 11px system-ui, sans-serif'; g.textBaseline = 'middle';
+  const arc = (x, a, side) => {
+    const r = 13, t0 = side < 0 ? Math.PI : 0, t1 = side < 0 ? Math.PI + (a * Math.PI) / 180 : -(a * Math.PI) / 180;
+    g.beginPath(); g.arc(x, yF, r, Math.min(t0, t1), Math.max(t0, t1)); g.stroke();
+    const tm = (t0 + t1) / 2, lx = x + Math.cos(tm) * (r + 12), ly = yF + Math.sin(tm) * (r + 9);
+    g.textAlign = 'center';
+    g.fillText(`${a}°`, Math.max(14, Math.min(W - 14, lx)), Math.max(yT + 8, Math.min(yF - 4, ly)));
+  };
+  arc(bL, aL, -1); arc(bR, aR, 1);
+  // rótulos
+  g.fillStyle = '#8b95a8'; g.font = '10px system-ui, sans-serif'; g.textBaseline = 'alphabetic';
+  g.textAlign = 'left'; g.fillText('Izquierda', 3, H - 4);
+  g.textAlign = 'right'; g.fillText('Derecha', W - 3, H - 4);
+  g.textAlign = 'center'; g.fillText('pista', (bL + bR) / 2, H - 4);
+}
 /** Tramos anteriores a la versión 0.5 (solo puentes): tipo puente, sin camino de tierra y con barrera, piso de madera. */
 function normalizeTramo(b) {
   if (!b || b.type) return b;
@@ -3193,6 +3259,9 @@ function refreshBridgeList() {
     // camino de tierra y barrera: como la pista (por defecto en los tramos de pista), a ambos lados, a uno o sin
     const modeOf = (on, side) => (on == null ? 'inherit' : on ? side || 'both' : 'none');
     const dMode = modeOf(b.dirt, b.dirtSide), bMode = modeOf(b.barrier, b.barrierSide);
+    // socavado: ángulo de cada pared (lisas 45–135°, naturales 45–85°) y textura propia de su tipo
+    const wallKind = b.walls === 'nat' ? 'wallNat' : 'wallArt', AR = CUT_ANGLES[b.walls === 'nat' ? 'nat' : 'art'], angLink = b.angLink !== false;
+    const ang = tramoAngles(b);
     const EPm = edgeParams(state.scene, false), dirtW0 = { l: EPm.dirtWidthL, r: EPm.dirtWidthR }; // anchos de la pista (valor inicial de los propios)
     const modeSel = (cls, v, noneTxt) => `<select class="${cls}" title="Lado según el sentido de marcha; «Como la pista» sigue lo que tenga la pista principal">${[['inherit', 'Como la pista'], ['both', 'Ambos lados'], ['left', 'Izquierda'], ['right', 'Derecha'], ['none', noneTxt]].map(([k, t]) => `<option value="${k}"${v === k ? ' selected' : ''}>${t}</option>`).join('')}</select>`;
     d.innerHTML = `<div class="head"><span class="row" style="gap:4px;min-width:0"><button class="x btoggle" title="Mostrar u ocultar los parámetros del tramo">${b.collapsed ? '▸' : '▾'}</button><strong>${tName} ${i + 1}</strong></span><button class="x bdel" title="Quitar el tramo (vuelve a ser pista normal)">✕</button></div>
@@ -3202,7 +3271,16 @@ function refreshBridgeList() {
       <div class="bcutBox"${isCut ? '' : ' hidden'}>
         <div class="field"><label>Paredes</label><select class="bwalls"><option value="art"${b.walls !== 'nat' ? ' selected' : ''}>Lisas (extruidas de la pista)</option><option value="nat"${b.walls === 'nat' ? ' selected' : ''}>Naturales (del terreno)</option></select></div>
         <div class="field bwsBox"${b.walls === 'nat' ? '' : ' hidden'} title="Solo paredes naturales: más triángulos en la roca (las lisas siguen la densidad de la pista)"><label>Densidad de las paredes <span class="val bwsV">${b.wallSubdiv ?? 2} (×${subdivFactor(b.wallSubdiv ?? 2)} pol.)</span></label><input type="range" class="bws" min="0" max="6" step="1" value="${b.wallSubdiv ?? 2}"></div>
-        <div class="meta">Baja los puntos del tramo (perfil o gizmo Z): el terreno se abre en una zanja. Texturas de las paredes: al final de esta sección.</div>
+        <h4 class="mini">Inclinación de las paredes</h4>
+        <canvas class="bangCv" width="240" height="86" title="Perfil de la zanja visto en el sentido de marcha (esquemático)"></canvas>
+        <label class="check small" title="Las dos paredes con el mismo ángulo"><input type="checkbox" class="bangLink"${angLink ? ' checked' : ''}> Mismo ángulo en ambas</label>
+        <div class="field"><label><span class="bangLlab">${angLink ? 'Ángulo (ambas)' : 'Ángulo izquierda'}</span> <span class="val"><input type="number" class="bangLn" min="${AR.min}" max="${AR.max}" step="1" style="width:52px" value="${ang[0]}"> °</span></label><input type="range" class="bangL" min="${AR.min}" max="${AR.max}" step="1" value="${ang[0]}"></div>
+        <div class="field bangRBox"${angLink ? ' hidden' : ''}><label>Ángulo derecha <span class="val"><input type="number" class="bangRn" min="${AR.min}" max="${AR.max}" step="1" style="width:52px" value="${ang[1]}"> °</span></label><input type="range" class="bangR" min="${AR.min}" max="${AR.max}" step="1" value="${ang[1]}"></div>
+        <div class="meta">${b.walls === 'nat' ? 'Desde el piso: 90° sería vertical; las naturales van de 45° a 85° (roca en pendiente).' : 'Desde el piso: 90° = vertical; menos se abre hacia afuera, más cuelga sobre la pista.'}</div>
+        <h4 class="mini">${b.walls === 'nat' ? 'Textura de la roca' : 'Textura de las paredes'}</h4>
+        ${texRow(wallKind, 'Como la general')}
+        <div class="meta">Sin textura propia usa la general de las paredes ${b.walls === 'nat' ? 'naturales' : 'lisas'} (al final de esta sección).</div>
+        <div class="meta">Baja los puntos del tramo (perfil o gizmo Z): el terreno se abre en una zanja.</div>
       </div>
       <label class="check small" title="El tramo toma el ancho de la pista (sin transiciones); desmárcalo para darle su propio ancho"><input type="checkbox" class="bsame"${b.sameWidth ? ' checked' : ''}> Mismo ancho que la pista</label>
       <div class="field bwBox${b.sameWidth ? ' disabled' : ''}"><label>Ancho <span class="val"><input type="number" class="bw" min="2" max="80" step="0.5" style="width:60px" value="${b.w}"> m</span></label><input type="range" class="bwR" min="3" max="40" step="0.5" value="${Math.min(40, b.w)}"></div>
@@ -3223,7 +3301,7 @@ function refreshBridgeList() {
       </div>`;
     d.querySelectorAll('img.bthumb').forEach((img) => {
       const k = img.dataset.kind;
-      const cv = k === 'deck' ? app.bridgeDeckCanvas(i) : k === 'dirt' ? app.dirtTexCanvas(null, false, i) : app.barrierTexCanvas(null, false, i);
+      const cv = k === 'deck' ? app.bridgeDeckCanvas(i) : k === 'dirt' ? app.dirtTexCanvas(null, false, i) : k === 'wallArt' || k === 'wallNat' ? app.cutWallTexCanvas(k === 'wallArt' ? 'art' : 'nat', i, true) : app.barrierTexCanvas(null, false, i);
       img.src = thumbURL(cv);
       img.classList.toggle('inherited', !app.bridgeOwnTex(i, k));
     });
@@ -3262,7 +3340,42 @@ function refreshBridgeList() {
     for (const [cls, key] of [['.bdwL', 'dirtWL'], ['.bdwR', 'dirtWR']]) d.querySelector(cls).addEventListener('change', (e) => { const v = parseFloat(e.target.value); if (!Number.isFinite(v) || v < 0) return; pushUndo(); b[key] = Math.min(40, v); scheduleBuild(); });
     d.querySelector('.bbarMode').addEventListener('change', (e) => setMode('barrier', 'barrierSide', e.target.value));
     d.querySelector('.btype').addEventListener('change', (e) => { pushUndo(); b.type = e.target.value; if (b.type === 'cut' && !b.walls) { b.walls = 'art'; b.wallSubdiv = 2; } refreshBridgeList(); scheduleBuild(); });
-    d.querySelector('.bwalls').addEventListener('change', (e) => { pushUndo(); b.walls = e.target.value; d.querySelector('.bwsBox').hidden = b.walls !== 'nat'; scheduleBuild(); });
+    d.querySelector('.bwalls').addEventListener('change', (e) => { pushUndo(); b.walls = e.target.value; refreshBridgeList(); scheduleBuild(); });
+    // inclinación: barras y números, enlazadas o no, y el gráfico del perfil
+    if (isCut) {
+      const drawAng = () => drawCutProfile(d.querySelector('.bangCv'), tramoAngles(b), b.walls === 'nat');
+      drawAng();
+      let angEditing = false;
+      const setAng = (side, v, done) => {
+        if (!Number.isFinite(v)) return;
+        v = Math.round(Math.max(AR.min, Math.min(AR.max, v)));
+        if (!angEditing) { pushUndo(); angEditing = true; }
+        const key = b.walls === 'nat' ? 'natAng' : 'artAng', cur = tramoAngles(b);
+        if (b.angLink !== false) cur[0] = cur[1] = v; else cur[side] = v;
+        b[key] = cur;
+        d.querySelector('.bangL').value = cur[0]; d.querySelector('.bangLn').value = cur[0];
+        d.querySelector('.bangR').value = cur[1]; d.querySelector('.bangRn').value = cur[1];
+        drawAng();
+        if (done) { angEditing = false; scheduleBuild(); }
+      };
+      d.querySelector('.bangL').addEventListener('input', (e) => setAng(0, parseFloat(e.target.value), false));
+      d.querySelector('.bangL').addEventListener('change', (e) => setAng(0, parseFloat(e.target.value), true));
+      d.querySelector('.bangLn').addEventListener('change', (e) => setAng(0, parseFloat(e.target.value), true));
+      d.querySelector('.bangR').addEventListener('input', (e) => setAng(1, parseFloat(e.target.value), false));
+      d.querySelector('.bangR').addEventListener('change', (e) => setAng(1, parseFloat(e.target.value), true));
+      d.querySelector('.bangRn').addEventListener('change', (e) => setAng(1, parseFloat(e.target.value), true));
+      d.querySelector('.bangLink').addEventListener('change', (e) => {
+        pushUndo();
+        b.angLink = e.target.checked;
+        const key = b.walls === 'nat' ? 'natAng' : 'artAng', cur = tramoAngles(b);
+        if (b.angLink) { cur[1] = cur[0]; b[key] = cur; }
+        d.querySelector('.bangRBox').hidden = b.angLink;
+        d.querySelector('.bangLlab').textContent = b.angLink ? 'Ángulo (ambas)' : 'Ángulo izquierda';
+        d.querySelector('.bangR').value = cur[1]; d.querySelector('.bangRn').value = cur[1];
+        drawAng();
+        scheduleBuild();
+      });
+    }
     d.querySelector('.bws').addEventListener('input', (e) => { b.wallSubdiv = Math.round(parseFloat(e.target.value)); d.querySelector('.bwsV').textContent = `${b.wallSubdiv} (×${subdivFactor(b.wallSubdiv)} pol.)`; });
     d.querySelector('.bws').addEventListener('change', () => { pushUndo(); scheduleBuild(); });
     d.querySelectorAll('button.btex').forEach((btn) => btn.addEventListener('click', () => pickTextureFile((cv) => app.setBridgeTexture(i, btn.dataset.kind, cv))));
@@ -5396,7 +5509,7 @@ async function openProject(text, fileName = null) {
   state.trackTex = await toCanvas(d.trackTex);
   // materiales de cada puente; los proyectos anteriores tenían una sola textura para todos los tableros
   state.bridgeTexs = {};
-  for (const [uid, t] of Object.entries(d.bridgeTexs || {})) state.bridgeTexs[uid] = { deck: await toCanvas(t.deck), dirt: await toCanvas(t.dirt), barrier: await toCanvas(t.barrier) };
+  for (const [uid, t] of Object.entries(d.bridgeTexs || {})) state.bridgeTexs[uid] = { deck: await toCanvas(t.deck), dirt: await toCanvas(t.dirt), barrier: await toCanvas(t.barrier), wallArt: await toCanvas(t.wallArt), wallNat: await toCanvas(t.wallNat) };
   {
     const legacyDeck = await toCanvas(d.bridgeTex);
     for (const b of (state.project.main && state.project.main.bridges) || []) {
@@ -6986,7 +7099,7 @@ function bindSceneControls() {
     const { exportGLB } = await import('./export-glb.js');
     toast('Generando escena .glb…');
     try {
-      const { buffer, info } = await exportGLB(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas(), triggers: app.triggersWorld(), tunnelTex: (uid, kind) => app.tunnelTexCanvas(uid, kind), assetById: (id) => state.assets.find((a) => a.id === id) || null }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
+      const { buffer, info } = await exportGLB(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, cutWallFor: (i, kind) => app.cutWallOwnTex(i, kind), susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas(), triggers: app.triggersWorld(), tunnelTex: (uid, kind) => app.tunnelTexCanvas(uid, kind), assetById: (id) => state.assets.find((a) => a.id === id) || null }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
       download('track_scene.glb', buffer, 'model/gltf-binary');
       toast(`Escena exportada: pista ${info.trackTris.toLocaleString('es')} triángulos${info.terrainTris ? `, terreno ${info.terrainTris.toLocaleString('es')}` : ''}${info.hills ? `, ${info.hills} cerro(s)` : ''}${info.tunnels ? `, ${info.tunnels} túnel(es)` : ''}${info.gateTris ? ', pórtico de salida' : ''}${info.items ? `, ${info.items} elementos de pista` : ''}${info.trees ? `, ${info.trees} árboles` : ''}. Todo como objetos separados.`);
     } catch (err) { console.error(err); toastErr('No se pudo exportar la escena: ' + err.message); }
@@ -7000,7 +7113,7 @@ function bindSceneControls() {
     const { exportFBX } = await import('./export-fbx.js');
     toast('Generando escena .fbx…');
     try {
-      const { buffer, info } = await exportFBX(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas(), triggers: app.triggersWorld(), tunnelTex: (uid, kind) => app.tunnelTexCanvas(uid, kind), assetById: (id) => state.assets.find((a) => a.id === id) || null }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
+      const { buffer, info } = await exportFBX(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, cutWallFor: (i, kind) => app.cutWallOwnTex(i, kind), susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas(), triggers: app.triggersWorld(), tunnelTex: (uid, kind) => app.tunnelTexCanvas(uid, kind), assetById: (id) => state.assets.find((a) => a.id === id) || null }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
       download('track_scene.fbx', buffer, 'application/octet-stream');
       toast(`FBX exportado (${(buffer.length / 1048576).toFixed(1)} MB): pista${info.terrainTris ? ', terreno' : ''}${info.hills ? `, ${info.hills} cerro(s)` : ''}${info.tunnels ? `, ${info.tunnels} túnel(es)` : ''}${info.gateTris ? ', pórtico' : ''}${info.items ? `, ${info.items} elementos de pista` : ''}${info.trees ? `, ${info.trees} árboles` : ''}${info.grass ? ', hierba' : ''}. Z arriba, en metros, con texturas incrustadas.`);
     } catch (err) { console.error(err); toastErr('No se pudo exportar el FBX: ' + err.message); }

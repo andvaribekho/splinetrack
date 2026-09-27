@@ -792,18 +792,30 @@ export class Preview3D {
         this.terrainMesh = tmesh;
         this.extras.add(tmesh);
         // paredes de las secciones socavadas: artificiales (lisas) o naturales (roca)
-        for (const [kind, geo] of Object.entries(T.cutWalls || {})) {
-          if (!geo) continue;
-          const cv = this.app.cutWallTexCanvas ? this.app.cutWallTexCanvas(kind) : null;
+        // una malla por tramo: cada uno con su textura propia o la general de su tipo (un material por textura)
+        const wallMats = new Map();
+        const wallMat = (kind, cv) => {
+          const key = kind + ':' + (cv ? (cv.__uid || (cv.__uid = Math.random().toString(36).slice(2))) : '-');
+          if (wallMats.has(key)) return wallMats.get(key);
           const t = this.texture(cv);
           if (t) { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.needsUpdate = true; }
           const mat = new THREE.MeshStandardMaterial({ map: t, color: t ? 0xffffff : kind === 'art' ? 0x9c9d98 : 0x6b6158, roughness: kind === 'art' ? 0.85 : 1, metalness: 0, flatShading: kind === 'nat', side: THREE.DoubleSide });
-          const wm = new THREE.Mesh(mkGeo(geo), mat);
-          wm.userData.cutWall = kind;
-          this.markExag(wm, (x, y, z) => z);
-          this.wallMeshes.push(wm);
-          this.extras.add(wm);
-          info.terrainTris += geo.tris;
+          wallMats.set(key, mat);
+          return mat;
+        };
+        for (const [kind, geo] of Object.entries(T.cutWalls || {})) {
+          if (!geo) continue;
+          for (const part of geo.parts && geo.parts.length ? geo.parts : [geo]) {
+            if (!part.indices || !part.indices.length) continue;
+            const cv = this.app.cutWallTexCanvas ? this.app.cutWallTexCanvas(kind, part.idx ?? null) : null;
+            const wm = new THREE.Mesh(mkGeo(part), wallMat(kind, cv));
+            wm.userData.cutWall = kind;
+            wm.userData.cutIdx = part.idx ?? null;
+            this.markExag(wm, (x, y, z) => z);
+            this.wallMeshes.push(wm);
+            this.extras.add(wm);
+            info.terrainTris += part.tris;
+          }
         }
         // nivel natural del suelo a lo largo de la ruta principal (para el gráfico de perfil)
         {
@@ -1485,7 +1497,7 @@ export class Preview3D {
     if (this.app.state.selBridge != null && !(onTrack && this.app.bridgeAtWorld(h[0].point.x, h[0].point.y) === this.app.state.selBridge)) this.app.selectBridge(null);
     if (h.length && (h[0].object === this.terrainMesh || h[0].object.userData.water) && this.app.focusPanel) this.app.focusPanel('terrain'); // clic en el terreno o el agua: sus parámetros
     if (ud.ref3d) { this.app.selectRef3d(true); return; } // modelo de referencia: se selecciona entero
-    if (ud.cutWall) { this.app.selectHill(null); if (this.app.focusPanel) this.app.focusPanel('bridges'); return; } // paredes de un tramo socavado
+    if (ud.cutWall) { this.app.selectHill(null); if (ud.cutIdx != null && this.app.selectBridge) this.app.selectBridge(ud.cutIdx); else if (this.app.focusPanel) this.app.focusPanel('bridges'); return; } // paredes de un tramo socavado: su tarjeta
     if (ud.riverWall) { this.app.selectHill(null); if (this.app.focusPanel) this.app.focusPanel('rivers', document.getElementById('riverWallHead')); return; } // paredes de un cauce: su material
     if (ud.riverId != null) { this.app.selectHill(null); if (this.app.selectRiver) this.app.selectRiver(ud.riverId); return; } // río o cascada: su tarjeta
     if (ud.decoSet != null) { // elemento decorativo: su set
