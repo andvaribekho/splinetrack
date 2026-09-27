@@ -1,6 +1,16 @@
 // Traducción al inglés de la interfaz. Clave = texto en español tal como aparece en la página (espacios colapsados);
 // {0}, {1}… son partes variables (números, nombres). Lo que no está aquí se muestra en español.
 export default {
+  "Línea": "Line",
+  "Extremos redondos": "Round ends",
+  "Extremos rectos": "Square ends",
+  "Estabilizar": "Stabilize",
+  "Pincel: pinta a mano. Línea: arrastra de un punto a otro y sale una recta (menos geometría; si empiezas en el extremo de otra línea, sigue desde ahí). Suavizar: redondea el borde de lo ya pintado": "Brush: paint freehand. Line: drag from one point to another for a straight line (less geometry; if you start at the end of another line, it continues from there). Smooth: rounds the edge of what is already painted",
+  "Extremos de la línea: redondos o rectos (rectos: menos triángulos). La unión entre dos líneas seguidas queda redonda": "Line ends: round or square (square: fewer triangles). The joint between two consecutive lines is round",
+  "Cuánto redondea cada pasada del pincel de suavizar": "How much each pass of the smooth brush rounds",
+  "El pincel sigue al cursor con retraso, como tirado por un hilo: el trazo sale más parejo": "The brush follows the cursor with a lag, as if pulled by a string: the stroke comes out smoother",
+  "Detalle del contorno": "Outline detail",
+  "Cuánto puede apartarse el borde simplificado del río (y el relieve entre vértices): más centímetros = menos triángulos en paredes, agua y lecho": "How far the simplified river edge (and the relief between vertices) may deviate: more centimeters = fewer triangles in walls, water and bed",
   ": la superficie se hunde (profundidad y paredes lisas o naturales, como los tramos socavados; las cascadas, suaves o de roca) y el agua queda dentro del cauce. Alt o clic derecho borra.": ": the surface sinks (depth and smooth or natural walls, like trench sections; waterfalls, smooth or rock) and the water stays inside the riverbed. Alt or right-click erases.",
   "Paredes de los ríos socavados": "Walls of carved rivers",
   "Como en los tramos socavados:": "As in trench sections:",

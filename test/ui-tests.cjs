@@ -612,6 +612,8 @@ test('exportar y guardar: Blender, 3ds Max, JSON, OBJ y el proyecto descargan su
     downloads.push(dl.suggestedFilename());
   }
   expect(downloads.some((n) => n.endsWith('.py')) && downloads.some((n) => n.endsWith('.ms')) && downloads.some((n) => n.endsWith('.json')) && downloads.some((n) => n.endsWith('.obj')) && downloads.includes('pista.tsg.json'), `descargas: ${downloads}`);
+  // cierra el menú (si quedara abierto, el Esc de la prueba siguiente lo cerraría a él y no saldría de la cámara de juego)
+  await page.keyboard.press('Escape');
 });
 
 test('cámara de juego: entra, oculta triggers, orbita (clic derecho restablece), brillo del auto y sale con Esc', async () => {
@@ -1301,6 +1303,59 @@ test('paredes de los ríos: lisas o naturales como los socavados (tarjeta, ángu
   names = Object.values(await exportNames()).flat();
   const own = await ev((s) => !document.querySelector(s).disabled, q('.rtexRm[data-kind="wallArtTop"]'));
   expect(own && names.includes('rio_01_paredes') && names.includes('rio_01_paredes_tapa'), `tapa con textura propia: ${own}, ${names.filter((n) => /rio_/.test(n))}`);
+});
+
+test('ríos: modo Línea (recta, encadenada, extremos rectos), Suavizar y Estabilizar; detalle del contorno', async () => {
+  await reset();
+  await page.click('#btnGenTerrain');
+  await idle();
+  await tool('river');
+  const setv = (id, v) => ev(([id, v]) => { const el = document.getElementById(id); if (el.type === 'checkbox') el.checked = v; else el.value = v; el.dispatchEvent(new Event('change', { bubbles: true })); el.dispatchEvent(new Event('input', { bubbles: true })); }, [id, v]);
+  await setv('riverMode', 'carved'); await setv('riverWalls', 'art'); await setv('riverShape', 'line');
+  const vis = await ev(() => ['riverLineCap', 'riverSmoothBox', 'riverStabBox'].map((id) => !document.getElementById(id).hidden));
+  const c = await ev(() => { const r = window.__tsg.state.layout.routes[0]; let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity; for (let i = 0; i < r.n; i++) { x0 = Math.min(x0, r.x[i]); x1 = Math.max(x1, r.x[i]); y0 = Math.min(y0, r.y[i]); y1 = Math.max(y1, r.y[i]); } return [(x0 + x1) / 2, (y0 + y1) / 2]; });
+  const A = await mapXY(c[0] - 50, c[1]), B = await mapXY(c[0] + 40, c[1] + 6), C = await mapXY(c[0] + 40, c[1] + 40);
+  await drag(A[0], A[1], B[0], B[1], 6);
+  await idle();
+  let st = await ev(() => window.__tsg.state.rivers.map((rv) => rv.strokes.map((q) => ({ ...q }))));
+  const walls1 = await ev(() => window.__tsg.preview.wallMeshes.filter((m) => m.userData.riverWall === 'art').length);
+  expect(vis[0] && !vis[1] && !vis[2] && st.length === 1 && st[0].length === 1 && Number.isFinite(st[0][0].x2) && walls1 > 0, `línea: opciones ${vis}, ${JSON.stringify(st)}, paredes ${walls1}`);
+  // encadenada desde el extremo, con extremos rectos: sigue desde el mismo punto y la unión queda redonda
+  await setv('riverLineCap', 'square');
+  const B2 = [B[0] + 3, B[1] + 2];
+  await drag(B2[0], B2[1], C[0], C[1], 6);
+  await idle();
+  st = await ev(() => window.__tsg.state.rivers.map((rv) => rv.strokes.map((q) => ({ ...q }))));
+  const [q1, q2] = st[0] || [];
+  expect(st.length === 1 && q2 && q2.x === q1.x2 && q2.y === q1.y2 && !q2.c0 && q2.c1 === 's' && !q1.c1, `encadenada: ${JSON.stringify(st)}`);
+  // suavizar: agrega toques de suavizado solo a los ríos que toca; en un lugar vacío no deja nada (ni un paso de deshacer)
+  await setv('riverShape', 'smooth');
+  const und0 = await ev(() => window.__tsg.undoLen());
+  const E0 = await mapXY(c[0] - 20, c[1] + 70), E1 = await mapXY(c[0] + 10, c[1] + 70);
+  await drag(E0[0], E0[1], E1[0], E1[1], 4);
+  await idle();
+  const und1 = await ev(() => window.__tsg.undoLen());
+  const S0 = await mapXY(c[0] + 38, c[1] + 3), S1 = await mapXY(c[0] + 44, c[1] + 12);
+  await drag(S0[0], S0[1], S1[0], S1[1], 5);
+  await idle();
+  st = await ev(() => window.__tsg.state.rivers.map((rv) => rv.strokes.map((q) => ({ ...q }))));
+  const nS = st[0].filter((q) => q.s).length;
+  expect(st.length === 1 && nS > 0 && und0 === und1, `suavizar: ${nS} toques de suavizado; en vacío deshacer ${und0} → ${und1}`);
+  // estabilizar: el trazo a pincel sigue al cursor con retraso (menos toques en un trazo corto)
+  const count = async (stab) => {
+    await ev(() => { const t = window.__tsg; t.state.rivers = []; t.app.riversChanged(); });
+    await setv('riverShape', 'brush'); await setv('riverStab', stab);
+    const P0 = await mapXY(c[0] - 40, c[1] - 30), P1 = await mapXY(c[0] + 20, c[1] - 30);
+    await drag(P0[0], P0[1], P1[0], P1[1], 30);
+    await idle();
+    return ev(() => { const rv = window.__tsg.state.rivers[0]; return rv ? [rv.strokes.length, Math.max(...rv.strokes.map((q) => q.x))] : [0, 0]; });
+  };
+  const n0 = await count(false), n1 = await count(true);
+  expect(n0[0] > 3 && n1[0] > 0 && n1[1] < n0[1], `estabilizar: sin ${n0}, con ${n1} (el último toque queda atrás del cursor)`);
+  await setv('riverStab', false);
+  // detalle del contorno en la tarjeta
+  const hasDet = await ev(() => !!document.querySelector('#riverList .item .rdet'));
+  expect(hasDet, 'detalle del contorno en la tarjeta');
 });
 
 test('tarjetas: la primera vez que se abre una lista desplegable no se cierra (la tarjeta no se vuelve a dibujar)', async () => {

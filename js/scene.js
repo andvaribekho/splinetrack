@@ -2,7 +2,7 @@
 // Todo en metros, Z arriba. Devuelve arrays planos listos para three.js o para exportar.
 import { SpatialGrid, rng, clamp, smoothstep, nearestOnSamples } from './geometry.js';
 import Delaunator from '../vendor/delaunator.js';
-import { riverField, subdivFactor, riverWallsOf } from './rivers.js';
+import { riverField, subdivFactor, riverWallsOf, riverDetail, strokeCircles } from './rivers.js';
 import { DEFAULT_SCULPT_CURVE } from './sculptcurve.js';
 import { SHADOW_DEFAULTS } from './shadows.js';
 import { convexHull2, hillFieldOne, detectTunnels, tunnelTop, buildTunnelGeometry, applyTunnelOverrides, portalBox, frameAt, edgeExtents, edgeParams, dirtWidthAt, tunnelInnerWidth } from './tunnels.js';
@@ -43,7 +43,7 @@ export const DEFAULT_SCENE = {
   terrainTexRepY: 20,
   paintFactor: 4, // multiplicador de densidad de las pinceladas antiguas (sin valor propio)
   riverWallTile: 4, // metros por repetición de la textura de las paredes socavadas
-  riverBrush: 6, riverMode: 'carved', riverDepth: 2, riverWalls: 'nat', riverWallSubdiv: 2, // ríos y cascadas nuevos
+  riverBrush: 6, riverMode: 'carved', riverDepth: 2, riverWalls: 'nat', riverWallSubdiv: 2, riverShape: 'brush', riverLineCap: 'round', riverSmooth: 50, riverStab: false, // ríos y cascadas nuevos
   paintSubdiv: 1, // subdivisiones extra del pincel de densidad: cada pincelada nueva guarda f = (n + 1)²
   terrainType: 'forest', // 'forest' (bosque) | 'beach' (playa: costa hacia el agua) | 'mountain' (acantilado y pared de roca)
   coastSide: 'right', // playa: 'left' | 'right' | 'both'
@@ -727,7 +727,7 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
   for (const F of RF) {
     if (F.river.mode !== 'carved' || (F.walls && F.walls.type === 'art')) continue; // lisas: malla propia (el terreno de adentro se quita)
     const f = subdivFactor(F.river.wallSubdiv ?? 2);
-    if (f > 1) paint = [...(paint || []), ...F.river.strokes.filter((q) => !q.e).map((q) => ({ x: q.x, y: q.y, r: q.r + F.wallW * 0.5 + 0.5, e: false, f }))];
+    if (f > 1) paint = [...(paint || []), ...strokeCircles(F.river.strokes).filter((q) => !q.e).map((q) => ({ x: q.x, y: q.y, r: q.r + F.wallW * 0.5 + 0.5, e: false, f }))];
   }
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, maxW = 0;
   for (const p of S) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); maxW = Math.max(maxW, p.ew); }
@@ -1032,7 +1032,8 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
       const stC = Math.max(0.5, Math.min(2.5, W.size * 0.85 * f)), cellR = 20 * Math.pow(1 / 20, clamp(sp.terrainDensity, 1, 100) / 100) / Math.sqrt(subdivFactor(F.river.wallSubdiv ?? 2));
       if (cellR > stC * 1.5) for (let d = stC; d < F.wallW - stC * 0.4; d += stC) rows.push(d);
     }
-    for (const L of F.contours(0, 0.08, 2.5)) for (const [x, y] of L) {
+    const dk = riverDetail(F.river) / 0.08; // «Detalle del contorno»: 8 cm = un punto cada 2,5 m, como antes
+    for (const L of F.contours(0, 0.08 * dk, clamp(2.5 * dk, 1, 8))) for (const [x, y] of L) {
       const n = sdNormal(F, x, y);
       for (const d of rows) riverGuides.push({ x: x - n[0] * d, y: y - n[1] * d, zMax: null });
     }
@@ -1362,7 +1363,7 @@ export function buildHills(layout, elev, spIn, T, hills) {
     for (const F of FF) {
       if (F.river.mode !== 'carved') continue;
       const fv = subdivFactor(F.river.wallSubdiv ?? 2);
-      if (fv > 1) for (const q of F.river.strokes) if (!q.e) subPaint.push({ x: q.x, y: q.y, r: q.r + F.wallW * 0.5 + 0.5, e: false, f: fv });
+      if (fv > 1) for (const q of strokeCircles(F.river.strokes)) if (!q.e) subPaint.push({ x: q.x, y: q.y, r: q.r + F.wallW * 0.5 + 0.5, e: false, f: fv });
     }
     // máscara de subdivisión (multiplicador por celda) sobre la caja del cerro
     let fmask = null, fmc = 0, fmw = 0, fmh = 0;
@@ -2810,25 +2811,58 @@ export function riverUVOf(rv, sp = {}) {
  * (borde de afuera de la tapa), natO, zo, skip}], …] (un arreglo por contorno).
  */
 export function riverArtStations(F, fns) {
-  const W = F.walls, cw = W.width, k = W.lean;
+  const W = F.walls, cw = W.width, k = W.lean, det = riverDetail(F.river);
+  const row = (x, y) => {
+    const [nx, ny] = sdNormal(F, x, y);
+    const ox = x + nx * cw, oy = y + ny * cw;
+    const natI = fns.nat(x, y), natO = fns.nat(ox, oy), mid = cw > 0.6 ? fns.nat(x + nx * cw / 2, y + ny * cw / 2) : -Infinity;
+    const top = Math.max(natI, natO, mid) + 0.05;
+    const zb = fns.bedAt(x - nx * Math.max(0.5, F.cell), y - ny * Math.max(0.5, F.cell)) - 0.05; // el cauce justo adentro
+    const H = Math.max(0.05, top - zb);
+    const bo = -k * H; // pie de la cara: hacia el agua si se abre (< 90°), hacia afuera si cuelga (> 90°)
+    return { ix: x, iy: y, nx, ny, top, zb, bx: x + nx * bo, by: y + ny * bo, ox, oy, natO, zo: Math.min(top, natO) - 1, skip: fns.skip ? fns.skip(x, y, top) : false, H };
+  };
+  // ¿el tramo entre dos estaciones sigue bien el relieve? (0.79: los vértices van según el relieve, no cada 2,5 m) —
+  // el suelo nunca asoma sobre la tapa, el pie sigue al cauce y la pista (skip) no cambia a mitad de camino
+  const fits = (A, B) => {
+    const L = Math.hypot(B.ix - A.ix, B.iy - A.iy), n = Math.min(40, Math.ceil(L / 1));
+    for (let q = 1; q < n; q++) {
+      const t = q / n, x = A.ix + (B.ix - A.ix) * t, y = A.iy + (B.iy - A.iy) * t;
+      let nx = A.nx + (B.nx - A.nx) * t, ny = A.ny + (B.ny - A.ny) * t; const l = Math.hypot(nx, ny) || 1; nx /= l; ny /= l;
+      const top = A.top + (B.top - A.top) * t, zb = A.zb + (B.zb - A.zb) * t;
+      const nat = Math.max(fns.nat(x, y), fns.nat(x + nx * cw, y + ny * cw), cw > 0.6 ? fns.nat(x + nx * cw / 2, y + ny * cw / 2) : -Infinity);
+      if (nat + 0.02 > top || nat + 0.05 - top > det) return false;
+      if (Math.abs(fns.bedAt(x - nx * Math.max(0.5, F.cell), y - ny * Math.max(0.5, F.cell)) - 0.05 - zb) > det) return false;
+      if (fns.skip && fns.skip(x, y, top) !== (t < 0.5 ? A.skip : B.skip)) return false;
+    }
+    return true;
+  };
   const loops = [];
-  for (const L of F.contours(0, 0.08, 2.5)) {
-    const rows = L.map(([x, y]) => {
-      const [nx, ny] = sdNormal(F, x, y);
-      const ox = x + nx * cw, oy = y + ny * cw;
-      const natI = fns.nat(x, y), natO = fns.nat(ox, oy), mid = cw > 0.6 ? fns.nat(x + nx * cw / 2, y + ny * cw / 2) : -Infinity;
-      const top = Math.max(natI, natO, mid) + 0.05;
-      const zb = fns.bedAt(x - nx * Math.max(0.5, F.cell), y - ny * Math.max(0.5, F.cell)) - 0.05; // el cauce justo adentro
-      const H = Math.max(0.05, top - zb);
-      const bo = -k * H; // pie de la cara: hacia el agua si se abre (< 90°), hacia afuera si cuelga (> 90°)
-      return { ix: x, iy: y, nx, ny, top, zb, bx: x + nx * bo, by: y + ny * bo, ox, oy, natO, zo: Math.min(top, natO) - 1, skip: fns.skip ? fns.skip(x, y, top) : false, H };
-    });
-    if (rows.length >= 3) loops.push(rows);
+  for (const L of F.contours(0, det, 30)) {
+    const out = [];
+    const base = L.map(([x, y]) => row(x, y));
+    for (let j = 0; j < base.length; j++) {
+      const A = base[j], B = base[(j + 1) % base.length];
+      out.push(A);
+      // parte el tramo hasta que siga el relieve (el punto nuevo, sobre el contorno)
+      const stack = [[A, B]], mids = [];
+      while (stack.length) {
+        const [P, Q] = stack.pop();
+        if (Math.hypot(Q.ix - P.ix, Q.iy - P.iy) < 1 || fits(P, Q)) { mids.push([P, Q]); continue; }
+        let mx = (P.ix + Q.ix) / 2, my = (P.iy + Q.iy) / 2;
+        const [nx, ny] = sdNormal(F, mx, my), d = F.sd(mx, my);
+        mx += nx * d; my += ny * d;
+        const M = row(mx, my);
+        stack.push([M, Q], [P, M]);
+      }
+      for (const [, Q] of mids) if (Q !== B) out.push(Q);
+    }
+    if (out.length >= 3) loops.push(out);
   }
   return loops;
 }
 
-/** Malla de las paredes lisas de un río (cara interior, tapa, exterior y pie), con índices por parte (face / top / out). */
+/** Malla de las paredes lisas de un río (cara interior, tapa y exterior), con índices por parte (face / top / out). */
 export function riverArtMesh(F, loops, sp = {}) {
   const W = F.walls, UV = riverUVOf(F.river, sp);
   const pos = [], uv = [], sub = { face: [], top: [], out: [] };
@@ -2871,8 +2905,7 @@ export function riverArtMesh(F, loops, sp = {}) {
       const buried = (r) => r.top - r.natO <= 0.12;
       strip(sub.out, (r) => [r.ox, r.oy, r.top], (r) => [r.ox, r.oy, r.zo], uO, uO, (r) => r.top / UV.y, (r) => r.zo / UV.y, outw, W.outer === 'buried' ? (r0, r1) => buried(r0) && buried(r1) : null);
     }
-    // pie: franja angosta hacia el agua a la altura del lecho (tapa la rendija con el lecho)
-    strip(sub.face, (r) => [r.bx - r.nx * 0.4, r.by - r.ny * 0.4, r.zb], (r) => [r.bx, r.by, r.zb], uB, uB, () => -0.4 / UV.y, () => 0, up);
+    // (0.79: sin pie bajo la cara: el lecho ya llega bajo la pared y la cara baja 5 cm bajo él)
   }
   const all = [...sub.face, ...sub.top, ...sub.out];
   return { positions: new Float32Array(pos), uvs: new Float32Array(uv), indices: new Uint32Array(all), tris: all.length / 3, sub: { face: new Uint32Array(sub.face), top: new Uint32Array(sub.top), out: new Uint32Array(sub.out) } };

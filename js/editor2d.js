@@ -757,16 +757,35 @@ export class Editor2D {
     pc.clearRect(0, 0, pl.width, pl.height);
     pc.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     for (const q of list) {
+      if (q.s) continue; // (suavizado de un río: no pinta)
       const [x, y] = this.toScreen(q.x, q.y);
       pc.globalCompositeOperation = q.e ? 'destination-out' : 'source-over';
       pc.fillStyle = heightColor ? heightColor(q) : color;
-      pc.beginPath(); pc.arc(x, y, q.r * this.view.zoom, 0, Math.PI * 2); pc.fill();
+      pc.beginPath();
+      if (Number.isFinite(q.x2)) { // línea (río): extremos redondos o rectos
+        const [x2, y2] = this.toScreen(q.x2, q.y2), R = q.r * this.view.zoom, a = Math.atan2(y2 - y, x2 - x), nx = -Math.sin(a) * R, ny = Math.cos(a) * R, ux = Math.cos(a) * R, uy = Math.sin(a) * R;
+        if (q.c0 === 's') { pc.moveTo(x - ux + nx, y - uy + ny); pc.lineTo(x - ux - nx, y - uy - ny); } else pc.arc(x, y, R, a + Math.PI / 2, a + (3 * Math.PI) / 2);
+        if (q.c1 === 's') { pc.lineTo(x2 + ux - nx, y2 + uy - ny); pc.lineTo(x2 + ux + nx, y2 + uy + ny); } else pc.arc(x2, y2, R, a - Math.PI / 2, a + Math.PI / 2);
+        pc.closePath();
+      } else pc.arc(x, y, q.r * this.view.zoom, 0, Math.PI * 2);
+      pc.fill();
     }
     pc.globalCompositeOperation = 'source-over';
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = alpha;
     ctx.drawImage(pl, 0, 0);
+    ctx.restore();
+  }
+
+  /** Contornos cerrados rellenos (par-impar: los huecos quedan vacíos), en coordenadas del lienzo. */
+  drawLoopsLayer(loops, color, alpha) {
+    const { ctx } = this;
+    ctx.save();
+    ctx.globalAlpha = alpha; ctx.fillStyle = color;
+    ctx.beginPath();
+    for (const L of loops) L.forEach(([x, y], i) => { const [sx, sy] = this.toScreen(x, y); if (i) ctx.lineTo(sx, sy); else ctx.moveTo(sx, sy); });
+    ctx.fill('evenodd');
     ctx.restore();
   }
 
@@ -879,9 +898,11 @@ export class Editor2D {
     if (tool === 'paint' && st.selHill != null) { const h = st.hills.find((q) => q.id === st.selHill); if (h && h.subdiv && h.subdiv.length) this.drawStrokeLayer(h.subdiv, '#e040fb', 0.45); }
     // ríos (azul) y cascadas (celeste)
     for (const rv of st.rivers || []) {
-      const sel = rv.id === st.selRiver;
-      this.drawStrokeLayer(rv.strokes, rv.kind === 'fall' ? '#bfe8ff' : '#3fa7ff', tool === 'river' ? (sel ? 0.6 : 0.45) : sel ? 0.5 : 0.3);
+      const sel = rv.id === st.selRiver, col = rv.kind === 'fall' ? '#bfe8ff' : '#3fa7ff', al = tool === 'river' ? (sel ? 0.6 : 0.45) : sel ? 0.5 : 0.3;
+      const ol = rv.strokes.some((q) => q.s) && this.app.riverOutlineL ? this.app.riverOutlineL(rv) : null; // suavizado: el contorno real
+      if (ol) this.drawLoopsLayer(ol, col, al); else this.drawStrokeLayer(rv.strokes, col, al);
     }
+    { const pl = tool === 'river' && this.app.pendingRiverLine ? this.app.pendingRiverLine() : null; if (pl) this.drawStrokeLayer([{ ...pl, e: false }], pl.e ? '#ff8a80' : '#3fa7ff', 0.5); } // la línea que se traza
     if (st.terrainSculpt && st.terrainSculpt.length && (tool === 'sculpt' || st.scene.terrain)) this.drawStrokeLayer(st.terrainSculpt, null, tool === 'sculpt' ? 0.4 : 0.14, (q) => (q.h > 0 ? 'rgb(255,160,70)' : 'rgb(80,160,255)'));
     if (tool === 'itemPaint') this.drawStrokeLayer(this.app.itemPaintStrokes(), this.app.itemPaintColor(), 0.4);
     // cursor del pincel
@@ -890,7 +911,7 @@ export class Editor2D {
       const erase = (this.painting && this.painting.erase) || st.paintErase;
       ctx_stroke: {
         const ctx = this.ctx;
-        ctx.strokeStyle = tool === 'tsmooth' ? '#9cff8a' : tool === 'sculpt' ? (this.painting ? (this.painting.erase ? '#50a0ff' : '#ffa046') : '#7ec8ff') : erase ? '#ff8a80' : tool === 'hill' ? '#e0a050' : tool === 'river' ? '#3fa7ff' : tool === 'itemPaint' ? this.app.itemPaintColor() : '#e040fb';
+        ctx.strokeStyle = tool === 'tsmooth' ? '#9cff8a' : tool === 'sculpt' ? (this.painting ? (this.painting.erase ? '#50a0ff' : '#ffa046') : '#7ec8ff') : erase ? '#ff8a80' : tool === 'hill' ? '#e0a050' : tool === 'river' ? (st.scene.riverShape === 'smooth' ? '#9cff8a' : '#3fa7ff') : tool === 'itemPaint' ? this.app.itemPaintColor() : '#e040fb';
         ctx.lineWidth = 1.5;
         const rm = tool === 'hill' ? st.scene.hillBrush : tool === 'sculpt' ? st.scene.sculptBrush : tool === 'river' ? st.scene.riverBrush : tool === 'tsmooth' ? st.scene.tsmoothBrush : st.scene.paintBrush;
         ctx.beginPath(); ctx.arc(x, y, (rm / st.layout.scale) * this.view.zoom, 0, Math.PI * 2); ctx.stroke();

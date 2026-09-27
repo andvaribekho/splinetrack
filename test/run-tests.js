@@ -12,7 +12,7 @@ import { nearestOnSamples } from '../js/geometry.js';
 import { buildEdgeMeshes } from '../js/edges.js';
 import { buildCollisionMeshes } from '../js/collision.js';
 import { edgeExtents, dirtWidthAt, edgeParams, convexHull2, frameAt, hillFieldOne } from '../js/tunnels.js';
-import { buildRivers, riverField, riverWallsOf } from '../js/rivers.js';
+import { buildRivers, riverField, riverWallsOf, strokesContain } from '../js/rivers.js';
 import { buildTriggers, sculptField, bakeTreeList, bakeDecoList, moveTree, treeConeVerts, vegPlace } from '../js/scene.js';
 import { treeModelItems, decoSetItems } from '../js/deco.js';
 import { buildShadows, shadowCasters, sunShadowDir } from '../js/shadows.js';
@@ -1207,6 +1207,41 @@ for (const [key, s] of Object.entries(SAMPLES)) {
       const m = median(rat);
       check(R && R.tris > 20 && grass === 0 && m > 0.8 && m < 1.25, `paredes naturales a ${ang}°: roca ${R && R.tris} triángulos, pasto sobre el cauce ${grass}, textura sin estirar (área UV/área ${m.toFixed(2)})`);
     }
+    // 0.79: sin pie bajo la cara (la cara interior es una sola tira, igual que la tapa)
+    check(A.sub.face.length === A.sub.top.length, `paredes lisas sin pie bajo la cara: cara ${A.sub.face.length / 3} = tapa ${A.sub.top.length / 3} triángulos`);
+    // 0.79: línea (segmento guardado como tal): bordes rectos y vértices según el relieve → menos geometría que el pincel
+    {
+      const P0 = [cx - 70, cy - 4], P1 = [cx + 70, cy + 12];
+      const brushS = []; for (let t = 0; t <= 1.0001; t += 1.5 / 141) brushS.push({ x: P0[0] + (P1[0] - P0[0]) * t, y: P0[1] + (P1[1] - P0[1]) * t + 0.35 * Math.sin(t * 57) + 0.2 * Math.sin(t * 131), r: 5, e: false }); // a mano: con un leve temblor
+      const lineR = { id: 11, kind: 'river', mode: 'carved', depth: 2, walls: 'art', artAng: 90, bed: true, strokes: [{ x: P0[0], y: P0[1], x2: P1[0], y2: P1[1], r: 5, e: false }] };
+      const lineS = { ...lineR, id: 12, strokes: [{ ...lineR.strokes[0], c0: 's', c1: 's' }] };
+      const brushR = { ...lineR, id: 13, strokes: brushS };
+      const wt = (rv) => { const o = run(rv); const q = o.T.riverWalls.art[0]; return { n: q.tris, o, q }; };
+      const b = wt(brushR), l = wt(lineR), sq = wt(lineS);
+      check(l.n < b.n * 0.75 && sq.n < l.n, `línea: paredes lisas ${l.n} triángulos (a pincel por el mismo camino ${b.n}); extremos rectos ${sq.n}`);
+      const { T: TL, F: FL, W: WL } = l.o, AL = l.q;
+      const inL = centIn(TL, FL, 0.2);
+      let pokeL = 0, nL = 0;
+      const topL = { positions: AL.positions, indices: AL.sub.top }, baseL = { positions: TL.positions, indices: TL.baseIndices };
+      for (const [x, y] of samplesIn({ ...FL, sd: (a2, b2) => -Math.abs(FL.sd(a2, b2) + 0.15) }, -0.1, 400)) { const zt = zOn(topL, x, y), zg = zOn(baseL, x, y); if (zt == null || zg == null) continue; nL++; if (zg > zt + 0.02) pokeL++; }
+      let gapL = 0, nRL = 0;
+      for (const [x, y] of samplesIn(FL, 0.02, 600)) { if (FL.sd(x, y) > 0.5) continue; nRL++; if (zOn(WL, x, y) == null || zOn(WL.bed, x, y) == null) gapL++; }
+      check(inL === 0 && nL > 10 && pokeL === 0 && nRL > 10 && gapL === 0, `línea con vértices según el relieve: terreno adentro ${inL}, el suelo no atraviesa la tapa (${pokeL} de ${nL}), agua y lecho hasta la pared (${gapL} de ${nRL} sin cubrir)`);
+      // detalle del contorno: más centímetros, menos triángulos
+      const coarse = wt({ ...brushR, id: 14, contourDetail: 30 });
+      check(coarse.n < b.n, `detalle del contorno 30 cm: ${coarse.n} triángulos (8 cm: ${b.n})`);
+    }
+    // 0.79: suavizar redondea el borde de lo pintado (menos vértices en el contorno) sin borrarlo
+    {
+      const sparse = []; for (let t = 0; t <= 1.0001; t += 0.05) sparse.push({ x: cx - 60 + 120 * t, y: cy + 10 * Math.sin(t * 5), r: 5, e: false });
+      const smooth = [...sparse]; for (let t = 0; t <= 1.0001; t += 0.02) smooth.push({ x: cx - 60 + 120 * t, y: cy + 10 * Math.sin(t * 5), r: 9, s: 0.7 });
+      const F1 = riverField({ id: 21, kind: 'river', mode: 'carved', depth: 2, walls: 'art', strokes: sparse }), F2 = riverField({ id: 22, kind: 'river', mode: 'carved', depth: 2, walls: 'art', strokes: smooth });
+      const nv = (F) => F.contours(0, 0.08, 1e9).reduce((a2, q) => a2 + q.length, 0);
+      const mid = [cx, cy + 10 * Math.sin(2.5)];
+      check(nv(F2) < nv(F1) * 0.7 && F2.sd(...mid) > 3.5 && F2.shape().area > F1.shape().area * 0.8, `suavizar: contorno ${nv(F1)} → ${nv(F2)} vértices, sigue pintado (centro ${F2.sd(...mid).toFixed(2)} m, área ${Math.round(F1.shape().area)} → ${Math.round(F2.shape().area)} m²)`);
+    }
+    // 0.79: toques en línea: dentro / fuera y extremos rectos
+    check(strokesContain([{ x: 0, y: 0, x2: 10, y2: 0, r: 2 }], 5, 1.9) && !strokesContain([{ x: 0, y: 0, x2: 10, y2: 0, r: 2 }], 5, 2.1) && strokesContain([{ x: 0, y: 0, x2: 10, y2: 0, r: 2 }], 11.5, 0.5) && !strokesContain([{ x: 0, y: 0, x2: 10, y2: 0, r: 2, c1: 's' }], 10.5, 0) && !strokesContain([{ x: 0, y: 0, x2: 10, y2: 0, r: 2 }, { x: 5, y: 0, r: 1, s: 0.5 }, { x: 5, y: 0, r: 1, e: true }], 5, 0), 'toques en línea: extremos redondos o rectos; borrar resta y suavizar no pinta');
     // proyectos anteriores: «suaves» y «de roca» pasan a naturales; las cascadas no cambian
     check(riverWallsOf({ walls: 'smooth' }).type === 'nat' && riverWallsOf({ walls: 'rock' }).type === 'nat' && riverWallsOf({}).type === 'nat' && riverField({ id: 7, kind: 'fall', mode: 'carved', depth: 2, walls: 'rock', strokes: riverS }).walls == null, 'ríos anteriores: paredes suaves o de roca → naturales (las cascadas siguen igual)');
   }

@@ -14,7 +14,7 @@ import { initHotkeys, comboOf } from './hotkeys.js';
 import { VERSION } from './version.js';
 import { ACTIONS, FIXED, bindingOf, isDefault, setBinding, resetAll as resetKeymap, matchAction, comboLabel } from './keymap.js';
 import { DEFAULT_SCENE, terrainCell, buildTrees, buildDecoInstances, bakeTreeList, bakeDecoList, CUT_ANGLES, rockOf, wallOf, wallUVOf, riverUVOf } from './scene.js';
-import { RIVER_ANGLES, riverWallsOf } from './rivers.js';
+import { RIVER_ANGLES, riverWallsOf, riverField, strokesContain, strokeCircles, strokeValue, isLine } from './rivers.js';
 import { makeShadowCanvas, sunShadowDir } from './shadows.js';
 import { SCULPT_PRESETS, DEFAULT_SCULPT_CURVE, normCurve, curveEval, curveLUT, presetOf } from './sculptcurve.js';
 import { makeTrackThumbnail } from './thumbnail.js';
@@ -175,10 +175,23 @@ function newRiver(kind, hill = null) {
   delete state.riverTexs[id]; // (de un río borrado con el mismo número)
   return { id, kind, hill, mode: sc.riverMode, depth: sc.riverDepth, walls: kind === 'fall' ? 'smooth' : sc.riverWalls === 'art' ? 'art' : 'nat', wallSubdiv: sc.riverWallSubdiv, strokes: [] };
 }
+/** Un toque de río en metros (círculo, línea o suavizado). */
+function riverStrokeWorld(L, q) {
+  const [x, y] = L.toWorld(q.x, q.y), o = { x, y, r: q.r * L.scale, e: q.e };
+  if (q.s) { delete o.e; o.s = q.s; }
+  if (isLine(q)) { const [x2, y2] = L.toWorld(q.x2, q.y2); o.x2 = x2; o.y2 = y2; if (q.c0) o.c0 = q.c0; if (q.c1) o.c1 = q.c1; }
+  return o;
+}
 /** Ríos anteriores a la 0.78: las paredes «suaves» o «de roca» pasan a naturales (las cascadas no cambian). */
 function normalizeRiver(rv) { if (rv && rv.kind !== 'fall' && rv.walls !== 'art' && rv.walls !== 'nat') rv.walls = 'nat'; return rv; }
-const riverContainsL = hillContainsL; // misma regla: el último toque que cubre el punto manda
-function riverIsEmpty(rv) { return !rv.strokes.some((q) => !q.e && riverContainsL(rv, [q.x, q.y])); }
+// misma regla que los cerros: el último toque que cubre el punto manda (0.79: también líneas; los de suavizar no cuentan)
+const riverContainsL = (rv, p) => strokesContain(rv.strokes, p[0], p[1]);
+function riverIsEmpty(rv) { return !rv.strokes.some((q) => !q.e && !q.s && riverContainsL(rv, isLine(q) ? [(q.x + q.x2) / 2, (q.y + q.y2) / 2] : [q.x, q.y])); }
+/** ¿El toque q (círculo o línea) toca lo pintado del río? */
+function riverTouches(rv, q, circ = null) {
+  const C = circ || strokeCircles(rv.strokes), Q = strokeCircles([{ ...q, s: undefined }]);
+  return C.some((st) => !st.e && Q.some((c) => Math.hypot(st.x - c.x, st.y - c.y) < st.r + c.r));
+}
 function riverLabel(rv) {
   const same = state.rivers.filter((q) => q.kind === rv.kind);
   const n = same.indexOf(rv) + 1;
@@ -237,6 +250,7 @@ function renderRiverPanel() {
           <div class="field" title="Cuánto relieve tiene la roca: 0 = pendiente lisa"><label>Rugosidad <span class="val rrRoughV">${Math.round(W.rough)} %</span></label><input type="range" class="rrRough" min="0" max="100" step="1" value="${Math.round(W.rough)}"></div>
           <div class="field" title="De grava fina a bloques grandes. Con más rugosidad o rocas más chicas, la roca lleva más triángulos"><label>Tamaño de las rocas <span class="val rrSizeV">${(+W.size).toFixed(1)} m</span></label><input type="range" class="rrSize" min="0.3" max="6" step="0.1" value="${Math.min(6, W.size)}"></div>
         </div>
+        <div class="field" title="Cuánto puede apartarse el borde simplificado del río (y el relieve entre vértices): más centímetros = menos triángulos en paredes, agua y lecho"><label>Detalle del contorno <span class="val rdetV">${Math.round(rv.contourDetail ?? 8)} cm</span></label><input type="range" class="rdet" min="2" max="40" step="1" value="${Math.round(rv.contourDetail ?? 8)}"></div>
         <h4 class="mini">Inclinación de las paredes</h4>
         <canvas class="rangCv" width="240" height="86" title="Perfil del cauce (esquemático)"></canvas>
         <div class="field"><label>Ángulo <span class="val"><input type="number" class="rangN" min="${AR.min}" max="${AR.max}" step="1" style="width:52px" value="${Math.round(W.ang)}"> °</span></label><input type="range" class="rang" min="${AR.min}" max="${AR.max}" step="1" value="${Math.round(W.ang)}"></div>
@@ -293,6 +307,8 @@ function renderRiverPanel() {
         div.querySelector('.router').addEventListener('change', (e) => set('wallOuter', e.target.value));
       }
       div.querySelector('.rrStyle').addEventListener('change', (e) => set('rockStyle', e.target.value));
+      div.querySelector('.rdet').addEventListener('input', (e) => { div.querySelector('.rdetV').textContent = `${Math.round(e.target.value)} cm`; });
+      div.querySelector('.rdet').addEventListener('change', (e) => set('contourDetail', Math.round(parseFloat(e.target.value))));
       div.querySelector('.rrRough').addEventListener('input', (e) => { div.querySelector('.rrRoughV').textContent = `${Math.round(e.target.value)} %`; });
       div.querySelector('.rrRough').addEventListener('change', (e) => set('rockRough', Math.round(parseFloat(e.target.value))));
       div.querySelector('.rrSize').addEventListener('input', (e) => { div.querySelector('.rrSizeV').textContent = `${(+e.target.value).toFixed(1)} m`; });
@@ -1856,6 +1872,16 @@ const app = {
       // río sobre el terreno o, con un cerro seleccionado y pintando sobre él, cascada de ese cerro; si el trazo empieza
       // sobre un río (o cascada) del mismo tipo, lo extiende (así se bifurca si el trazo se abre)
       pushUndo(); ses.pushed = true;
+      const sc = state.scene, shape = sc.riverShape || 'brush';
+      if (shape === 'smooth') { ses.smooth = true; ses.circ = new Map(state.rivers.map((rv) => [rv.id, strokeCircles(rv.strokes)])); ses.touched = new Set(); return; }
+      if (shape === 'line' && p) {
+        // línea: se arrastra de un punto a otro; si empieza en el extremo de otra línea, sigue desde ahí (unión redonda)
+        const rr = sc.riverBrush / state.layout.scale;
+        let p0 = p, join = null;
+        for (const rv of state.rivers) for (const q of rv.strokes) if (isLine(q) && !q.e && !q.s && Math.hypot(q.x2 - p[0], q.y2 - p[1]) < Math.max(q.r, rr) * 0.8) { p0 = [q.x2, q.y2]; join = q; }
+        ses.line = { p0, p1: p0, join };
+        p = p0;
+      }
       if (ses.erase) return;
       const selH = state.selHill != null ? state.hills.find((h) => h.id === state.selHill) : null;
       const onHill = !!(selH && ((p && hillContainsL(selH, p)) || hitHill === selH.id));
@@ -1919,10 +1945,27 @@ const app = {
     }
     const r = rm / L.scale;
     if (ses.kind === 'river') {
+      if (ses.line) { ses.line.p1 = p; return; } // línea: se crea al soltar (mientras, se ve su contorno)
+      if (ses.smooth) { // suavizar: redondea el borde de los ríos que toca
+        if (ses.last && Math.hypot(p[0] - ses.last[0], p[1] - ses.last[1]) < r * 0.3) return;
+        ses.last = p;
+        const q = { x: +p[0].toFixed(2), y: +p[1].toFixed(2), r: +r.toFixed(2), s: +((sc.riverSmooth ?? 50) / 100).toFixed(2) };
+        for (const rv of state.rivers) if (riverTouches(rv, q, ses.circ.get(rv.id))) { rv.strokes.push(q); ses.touched.add(rv.id); }
+        return;
+      }
+      if (sc.riverStab) { // estabilizar: el pincel sigue al cursor como tirado por un hilo (el trazo sale más parejo)
+        if (!ses.lazy) ses.lazy = p;
+        else {
+          const dx = p[0] - ses.lazy[0], dy = p[1] - ses.lazy[1], d = Math.hypot(dx, dy), Ls = r * 1.2;
+          if (d <= Ls) return;
+          ses.lazy = [ses.lazy[0] + (dx * (d - Ls)) / d, ses.lazy[1] + (dy * (d - Ls)) / d];
+        }
+        p = ses.lazy;
+      }
       if (ses.last && Math.hypot(p[0] - ses.last[0], p[1] - ses.last[1]) < r * 0.3) return;
       ses.last = p;
       const q = { x: +p[0].toFixed(2), y: +p[1].toFixed(2), r: +r.toFixed(2), e: !!ses.erase };
-      if (ses.erase) { for (const rv of state.rivers) if (rv.strokes.some((st) => !st.e && Math.hypot(st.x - q.x, st.y - q.y) < st.r + q.r)) rv.strokes.push({ ...q }); if (ses.strokes) ses.strokes.push(q); }
+      if (ses.erase) { for (const rv of state.rivers) if (riverTouches(rv, q)) rv.strokes.push({ ...q }); if (ses.strokes) ses.strokes.push(q); }
       else { const rv = state.rivers.find((x) => x.id === ses.target); if (rv) rv.strokes.push(q); }
       return;
     }
@@ -1969,7 +2012,9 @@ const app = {
     if (kind === 'itemPaint') { if (state.itemPaintTarget && state.itemPaintTarget.type === 'deco') decoChanged(); else itemsChanged(); return; }
     if (kind === 'sculpt') refreshSculptInfo();
     if (kind === 'river') {
-      state.rivers = state.rivers.filter((rv) => rv.strokes.some((q) => !q.e) && !riverIsEmpty(rv));
+      if (ses && ses.line) this.commitRiverLine(ses);
+      if (ses && ses.smooth && !ses.touched.size) { undoStack.pop(); $('btnUndo').disabled = undoStack.length === 0; } // no tocó ningún río
+      state.rivers = state.rivers.filter((rv) => rv.strokes.some((q) => !q.e && !q.s) && !riverIsEmpty(rv));
       if (state.selRiver != null && !state.rivers.some((rv) => rv.id === state.selRiver)) state.selRiver = null;
       riversChanged();
       return;
@@ -1986,6 +2031,39 @@ const app = {
     preview.update(false);
   },
   onPaintProgress() { editor.draw(); preview.refreshPaintOverlay(); },
+  /** Contorno real de un río (con los suavizados), en coordenadas del lienzo, para el mapa 2D; memorizado por su forma. */
+  riverOutlineL(rv) {
+    const L = state.layout;
+    if (!L) return null;
+    const key = JSON.stringify(rv.strokes);
+    const m = this._rOut || (this._rOut = new Map()), hit = m.get(rv.id + ':' + rv.kind);
+    if (hit && hit.key === key && hit.L === L) return hit.loops;
+    const F = riverField({ ...rv, strokes: rv.strokes.map((q) => riverStrokeWorld(L, q)) });
+    const loops = F ? F.contours(0, 0.05, 1e9).map((lp) => lp.map(([x, y]) => L.toLayout(x, y))) : [];
+    m.set(rv.id + ':' + rv.kind, { key, L, loops });
+    return loops;
+  },
+  /** Toque de la línea que se está trazando (o null): {x, y, x2, y2, r, e, c0, c1}. */
+  pendingRiverLine(ses = state.paintSes) {
+    if (!ses || !ses.line || !state.layout) return null;
+    const sc = state.scene, r = sc.riverBrush / state.layout.scale, { p0, p1 } = ses.line, sq = sc.riverLineCap === 'square' ? 's' : undefined;
+    const q = { x: +p0[0].toFixed(2), y: +p0[1].toFixed(2), x2: +p1[0].toFixed(2), y2: +p1[1].toFixed(2), r: +r.toFixed(2), e: !!ses.erase };
+    if (sq && !ses.line.join) q.c0 = sq;
+    if (sq) q.c1 = sq;
+    return q;
+  },
+  /** Crea la línea al soltar: sobre el río elegido al empezar o, borrando, en todos los que toca. Un clic sin arrastrar = un toque. */
+  commitRiverLine(ses) {
+    const q = this.pendingRiverLine(ses);
+    if (!q) return;
+    const short = Math.hypot(q.x2 - q.x, q.y2 - q.y) < q.r * 0.3;
+    const st = short ? { x: q.x, y: q.y, r: q.r, e: q.e } : q;
+    if (ses.erase) { for (const rv of state.rivers) if (riverTouches(rv, st)) rv.strokes.push({ ...st }); return; }
+    const rv = state.rivers.find((x) => x.id === ses.target);
+    if (!rv) return;
+    if (!short && ses.line.join) delete ses.line.join.c1; // unión con la línea anterior: redonda
+    rv.strokes.push(st);
+  },
   /**
    * Toques de pincel que la vista 3D ilumina mientras se pinta, en metros: densidad → todas las zonas pintadas; cerro →
    * el cerro que se está pintando (o el seleccionado); relieve → los toques de esta pasada; elementos → su pintura.
@@ -1996,7 +2074,7 @@ const app = {
     const W = (list, extra = {}) => (list || []).map((q) => { const [x, y] = L.toWorld(q.x, q.y); return { x, y, r: q.r * L.scale, e: !!q.e, ...extra }; });
     const t = state.tool, ses = state.paintSes;
     if (t === 'paint' && state.selHill != null) { const h = state.hills.find((q) => q.id === state.selHill); return { color: 0xe040fb, strokes: h ? W(h.subdiv || []) : [] }; }
-    if (t === 'river') return { color: 0x3fa7ff, strokes: state.rivers.flatMap((rv) => W(rv.strokes)) };
+    if (t === 'river') { const pl = this.pendingRiverLine(); return { color: 0x3fa7ff, strokes: W(strokeCircles([...state.rivers.flatMap((rv) => rv.strokes), ...(pl ? [pl] : [])])) }; }
     if (t === 'paint') {
       const top = Math.max(4, ...state.densityPaint.map((q) => q.f || state.scene.paintFactor || 4));
       return { color: 0xe040fb, strokes: state.densityPaint.map((q) => { const [x, y] = L.toWorld(q.x, q.y); return { x, y, r: q.r * L.scale, e: !!q.e, a: q.e ? 1 : 0.45 + 0.55 * Math.min(1, (q.f || state.scene.paintFactor || 4) / top) }; }) };
@@ -2024,7 +2102,7 @@ const app = {
   riversWorld() {
     const L = state.layout;
     if (!L || !state.rivers.length) return null;
-    return state.rivers.map((rv) => ({ ...rv, name: riverLabel(rv), strokes: rv.strokes.map((q) => { const [x, y] = L.toWorld(q.x, q.y); return { x, y, r: q.r * L.scale, e: q.e }; }) }));
+    return state.rivers.map((rv) => ({ ...rv, name: riverLabel(rv), strokes: rv.strokes.map((q) => riverStrokeWorld(L, q)) }));
   },
   paintWorld() {
     const L = state.layout;
@@ -6030,6 +6108,9 @@ function syncSceneControls() {
   set('startGateHeight', sc.startGateHeight);
   set('startGate', sc.startGate); if (document.activeElement !== $('startText')) set('startText', sc.startText);
   $('startGateHeightVal').textContent = `${sc.startGateHeight} m`;
+  set('riverShape', sc.riverShape || 'brush'); set('riverLineCap', sc.riverLineCap || 'round'); set('riverSmooth', sc.riverSmooth ?? 50); $('riverStab').checked = !!sc.riverStab;
+  if ($('riverSmoothVal')) $('riverSmoothVal').textContent = `${Math.round(sc.riverSmooth ?? 50)} %`;
+  { const sh = sc.riverShape || 'brush'; $('riverLineCap').hidden = sh !== 'line'; $('riverSmoothBox').hidden = sh !== 'smooth'; $('riverStabBox').hidden = sh !== 'brush'; }
   set('riverMode', sc.riverMode); set('riverWalls', sc.riverWalls === 'art' ? 'art' : 'nat'); set('riverDepth', sc.riverDepth); set('riverWallSubdiv', sc.riverWallSubdiv);
   if ($('riverDepthVal')) $('riverDepthVal').textContent = `${(+sc.riverDepth).toFixed(1)} m`;
   if ($('riverWallSubdivVal')) $('riverWallSubdivVal').textContent = `${sc.riverWallSubdiv}`;
@@ -7050,6 +7131,10 @@ function bindSceneControls() {
   // ríos y cascadas: valores para los nuevos (barra) y botones del panel
   $('riverMode').addEventListener('change', (e) => { sc.riverMode = e.target.value; syncSceneControls(); });
   $('riverWalls').addEventListener('change', (e) => { sc.riverWalls = e.target.value; syncSceneControls(); });
+  $('riverShape').addEventListener('change', (e) => { sc.riverShape = e.target.value; syncSceneControls(); editor.draw(); });
+  $('riverLineCap').addEventListener('change', (e) => { sc.riverLineCap = e.target.value; syncSceneControls(); });
+  $('riverSmooth').addEventListener('input', (e) => { sc.riverSmooth = Math.round(parseFloat(e.target.value)); syncSceneControls(); });
+  $('riverStab').addEventListener('change', (e) => { sc.riverStab = e.target.checked; syncSceneControls(); });
   $('riverDepth').addEventListener('input', (e) => { sc.riverDepth = parseFloat(e.target.value); syncSceneControls(); });
   $('riverWallSubdiv').addEventListener('input', (e) => { sc.riverWallSubdiv = Math.round(parseFloat(e.target.value)); syncSceneControls(); });
   $('btnRiverTool').addEventListener('click', () => setTool('river'));
@@ -7799,4 +7884,4 @@ function idle(timeout = 30000) {
     step();
   });
 }
-window.__tsg = { state, app, editor, preview, profile, search, i18n: { setLang, getLang, missingTexts, t: _t }, openProject, scheduleBuild, refreshBridgeList, refreshPanels, projectData, busy, idle, autosaveNow, openAutosaves, asCfg: () => asCfg, idbAll, asServer: () => asServer, setAsServer: (v) => { asServer = !!v; refreshAutosaveInfo(); }, setAsFolder: async (h) => { asFolder = h; await refreshFolderPerm(); refreshAutosaveInfo(); } }; // para depuración y pruebas // para depuración
+window.__tsg = { state, app, editor, preview, profile, search, i18n: { setLang, getLang, missingTexts, t: _t }, openProject, scheduleBuild, refreshBridgeList, refreshPanels, projectData, undoLen: () => undoStack.length, busy, idle, autosaveNow, openAutosaves, asCfg: () => asCfg, idbAll, asServer: () => asServer, setAsServer: (v) => { asServer = !!v; refreshAutosaveInfo(); }, setAsFolder: async (h) => { asFolder = h; await refreshFolderPerm(); refreshAutosaveInfo(); } }; // para depuración y pruebas // para depuración

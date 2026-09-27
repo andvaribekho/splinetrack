@@ -3,6 +3,8 @@
 // hunde con paredes suaves o de roca y el agua queda dentro del cauce).
 // river = {id, name, kind: 'river' | 'fall', hill, mode: 'surface' | 'carved', depth, walls: 'smooth' | 'rock',
 //          wallSubdiv, strokes: [{x, y, r, e}]}   (en metros)
+// Toques (0.79): círculo {x, y, r, e}; línea {x, y, x2, y2, r, e, c0, c1} (c0 / c1 = 's': extremo recto, si no redondo);
+// suavizado {x, y, r, s} (redondea el borde de lo pintado antes, dentro de su radio; s = fuerza 0..1).
 import Delaunator from '../vendor/delaunator.js';
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -13,6 +15,46 @@ export const RIVER_DEFAULTS = { mode: 'carved', depth: 2, walls: 'nat', wallSubd
 export function subdivFactor(n) { const k = Math.max(0, Math.round(n ?? 1)); return (k + 1) * (k + 1); }
 
 const cache = new Map();
+/** Detalle del contorno de un río (m): cuánto puede apartarse el borde simplificado (y el relieve entre vértices). */
+export function riverDetail(rv) { return clamp(Number.isFinite(rv && rv.contourDetail) ? rv.contourDetail : 8, 2, 40) / 100; }
+/** ¿El toque es una línea? */
+export const isLine = (q) => q && Number.isFinite(q.x2) && Number.isFinite(q.y2);
+/** Distancia con signo al borde de un toque (> 0 dentro): círculo o línea con extremos redondos o rectos. */
+export function strokeValue(q, x, y) {
+  if (!isLine(q)) return q.r - Math.hypot(x - q.x, y - q.y);
+  const dx = q.x2 - q.x, dy = q.y2 - q.y, L = Math.hypot(dx, dy);
+  if (L < 1e-6) return q.r - Math.hypot(x - q.x, y - q.y);
+  const ux = dx / L, uy = dy / L, px = x - q.x, py = y - q.y;
+  const u = px * ux + py * uy, w = Math.abs(-px * uy + py * ux);
+  // cada extremo: redondo (distancia al punto) o recto (caja hasta el extremo)
+  if (u < 0 && q.c0 !== 's') return q.r - Math.hypot(u, w);
+  if (u > L && q.c1 !== 's') return q.r - Math.hypot(u - L, w);
+  const ex = u < 0 ? -u : u > L ? u - L : 0, ey = w - q.r;
+  if (ex > 0 || ey > 0) return -Math.hypot(ex, Math.max(0, ey));
+  return Math.min(-ey, q.c0 === 's' ? u : Infinity, q.c1 === 's' ? L - u : Infinity);
+}
+/** Caja de un toque (con su radio). */
+export function strokeBox(q) {
+  const xa = isLine(q) ? Math.min(q.x, q.x2) : q.x, xb = isLine(q) ? Math.max(q.x, q.x2) : q.x, ya = isLine(q) ? Math.min(q.y, q.y2) : q.y, yb = isLine(q) ? Math.max(q.y, q.y2) : q.y;
+  return { x0: xa - q.r, x1: xb + q.r, y0: ya - q.r, y1: yb + q.r };
+}
+/** Los toques como círculos (las líneas, con círculos cada medio radio; sin los de suavizar): para pintar, iluminar y buscar. */
+export function strokeCircles(strokes) {
+  const out = [];
+  for (const q of strokes || []) {
+    if (q.s) continue;
+    if (!isLine(q)) { out.push(q); continue; }
+    const L = Math.hypot(q.x2 - q.x, q.y2 - q.y), n = Math.max(1, Math.ceil(L / Math.max(0.05, q.r * 0.5)));
+    for (let k = 0; k <= n; k++) out.push({ x: q.x + ((q.x2 - q.x) * k) / n, y: q.y + ((q.y2 - q.y) * k) / n, r: q.r, e: q.e });
+  }
+  return out;
+}
+/** ¿El punto queda dentro de lo pintado? (el último toque que lo cubre manda; los de suavizar no cuentan) */
+export function strokesContain(strokes, x, y) {
+  let inside = false;
+  for (const q of strokes || []) if (!q.s && strokeValue(q, x, y) >= 0) inside = !q.e;
+  return inside;
+}
 function hash2(i, j, s) { let h = (i * 374761393 + j * 668265263 + s * 2246822519) ^ 0x5bd1e995; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; }
 function noise2(x, y, s) {
   const i = Math.floor(x), j = Math.floor(y), tx = x - i, ty = y - j;
@@ -47,7 +89,7 @@ export function riverWallsOf(rv) {
 }
 
 export function riverField(rv) {
-  const adds = (rv.strokes || []).filter((q) => !q.e);
+  const adds = (rv.strokes || []).filter((q) => !q.e && !q.s);
   if (!adds.length) return null;
   const RW = rv.kind === 'fall' ? null : riverWallsOf(rv);
   const key = JSON.stringify([rv.mode, rv.depth, rv.walls, rv.strokes, RW && [RW.ang, RW.style, RW.rough, RW.size]]);
@@ -60,21 +102,23 @@ export function riverField(rv) {
   const depth0 = Math.max(0.1, rv.depth ?? 2);
   const wallW = RW ? (RW.type === 'nat' ? depth0 / Math.tan((RW.ang * Math.PI) / 180) : 0) : rock ? Math.max(0.25, 0.1 * rMed) : Math.max(0.8, 0.6 * rMed);
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-  for (const q of adds) { x0 = Math.min(x0, q.x - q.r); x1 = Math.max(x1, q.x + q.r); y0 = Math.min(y0, q.y - q.r); y1 = Math.max(y1, q.y + q.r); }
+  for (const q of adds) { const b = strokeBox(q); x0 = Math.min(x0, b.x0); x1 = Math.max(x1, b.x1); y0 = Math.min(y0, b.y0); y1 = Math.max(y1, b.y1); }
   let c = clamp(rMin / 5, 0.25, 2);
   while (((x1 - x0) / c) * ((y1 - y0) / c) > 3e6) c *= 1.25;
   const m = 2 * c;
   x0 -= m; y0 -= m; x1 += m; y1 += m;
   const nx = Math.ceil((x1 - x0) / c) + 1, ny = Math.ceil((y1 - y0) / c) + 1;
   const F = new Float32Array(nx * ny).fill(-1e3);
-  for (const q of rv.strokes) { // en orden: los toques de borrar restan lo pintado antes
-    const R = q.r + m;
-    const i0 = Math.max(0, Math.floor((q.x - R - x0) / c)), i1 = Math.min(nx - 1, Math.ceil((q.x + R - x0) / c));
-    const j0 = Math.max(0, Math.floor((q.y - R - y0) / c)), j1 = Math.min(ny - 1, Math.ceil((q.y + R - y0) / c));
+  for (const q of rv.strokes) { // en orden: los toques de borrar restan lo pintado antes; los de suavizar redondean lo anterior
+    if (q.s) { smoothGrid(F, nx, ny, c, x0, y0, q, m); continue; }
+    const b = strokeBox(q);
+    const i0 = Math.max(0, Math.floor((b.x0 - m - x0) / c)), i1 = Math.min(nx - 1, Math.ceil((b.x1 + m - x0) / c));
+    const j0 = Math.max(0, Math.floor((b.y0 - m - y0) / c)), j1 = Math.min(ny - 1, Math.ceil((b.y1 + m - y0) / c));
+    const line = isLine(q);
     for (let j = j0; j <= j1; j++) {
-      const dy = y0 + j * c - q.y;
+      const yy = y0 + j * c, dy = yy - q.y;
       for (let i = i0; i <= i1; i++) {
-        const v = q.r - Math.hypot(x0 + i * c - q.x, dy), k = j * nx + i;
+        const v = line ? strokeValue(q, x0 + i * c, yy) : q.r - Math.hypot(x0 + i * c - q.x, dy), k = j * nx + i;
         if (q.e) { if (v > -m && -v < F[k]) F[k] = -v; } else if (v > F[k]) F[k] = v;
       }
     }
@@ -167,7 +211,7 @@ export function buildRiverWater(F, surfZ, origZ, skip = null) {
   const P = [];
   // puntos interiores (grilla con un leve desfase) + contorno de cada toque (el borde queda redondo)
   for (let y = y0 + s / 2, j = 0; y < y1; y += s, j++) for (let x = x0 + s / 2 + (j % 2) * s * 0.5; x < x1; x += s) if (F.sd(x, y) > s * 0.35) P.push(x, y);
-  for (const q of rv.strokes) {
+  for (const q of strokeCircles(rv.strokes)) {
     const n = Math.max(8, Math.ceil((2 * Math.PI * q.r) / s));
     for (let k = 0; k < n; k++) {
       const a = (k / n) * Math.PI * 2, x = q.x + Math.cos(a) * q.r, y = q.y + Math.sin(a) * q.r;
@@ -459,8 +503,10 @@ export function riverMeshes(T, F, skip, levels = null) {
     // lisas: el agua y el lecho llegan hasta la cara aunque esté inclinada (si cuelga, pasan bajo ella; si se abre, llegan
     // bajo la tapa y quedan tapados); naturales: el lecho llega bajo el pie de la roca
     const art = F.walls && F.walls.type === 'art', k = art ? F.walls.lean : 0;
-    const wIso = art ? Math.min(0.03, k * (0.3 * F.depth + 0.3) - 0.05) : 0.03;
-    const bIso = art ? Math.min(0, k * (F.depth + 0.5)) - 0.3 : Math.max(0, F.wallW - 0.3);
+    const dk = riverDetail(rv) / 0.08, ct = 0.15 * dk; // «Detalle del contorno» (8 cm = como antes)
+    // (lisas: el contorno simplificado puede quedar hasta ct adentro: el agua y el lecho se corren eso más afuera, bajo la pared)
+    const wIso = art ? Math.min(0.03, k * (0.3 * F.depth + 0.3) - 0.05) - ct : 0.03;
+    const bIso = art ? Math.min(0, k * (F.depth + 0.5)) - 0.3 - ct : Math.max(0, F.wallW - 0.3);
     const flat = lake && levels;
     res.flat = !!flat;
     const zW = flat ? () => levels.Lw : (x, y) => origAt(x, y) - 0.3 * F.depth;
@@ -484,8 +530,8 @@ export function riverMeshes(T, F, skip, levels = null) {
       if (rv.bed) res.bed = rectOk(bIso, levels.Lb - 0.05, 0.005);
       res.rect = !!res.water;
     }
-    if (!res.water) res.water = planeMesh(F.contours(wIso), (x, y) => F.sd(x, y) > wIso, zW, flat ? Infinity : 0.1, skip);
-    if (rv.bed && !res.bed) res.bed = planeMesh(F.contours(bIso), (x, y) => F.sd(x, y) > bIso, zB, flat ? Infinity : 0.1, null);
+    if (!res.water) res.water = planeMesh(F.contours(wIso, ct), (x, y) => F.sd(x, y) > wIso, zW, flat ? Infinity : 0.1 * dk, skip);
+    if (rv.bed && !res.bed) res.bed = planeMesh(F.contours(bIso, ct), (x, y) => F.sd(x, y) > bIso, zB, flat ? Infinity : 0.1 * dk, null);
     return res;
   }
   // posado: el agua sigue el terreno (copia de sus triángulos) o simplificada (con la tolerancia elegida)
@@ -528,5 +574,31 @@ function interiorDistance(F, nx, ny, c) {
   };
   for (let i = 0; i < nx; i++) { for (let j = 0; j < ny; j++) f[j] = D[j * nx + i]; pass(ny); for (let j = 0; j < ny; j++) D[j * nx + i] = d[j]; }
   for (let j = 0; j < ny; j++) { for (let i = 0; i < nx; i++) f[i] = D[j * nx + i]; pass(nx); for (let i = 0; i < nx; i++) D[j * nx + i] = d[i]; }
-  for (let k = 0; k < n; k++) if (F[k] > 0) { const e = Math.sqrt(D[k]) * c - 0.5 * c; if (e > F[k]) F[k] = e; }
+  // junto al borde quedan los valores exactos de los toques (así un borde recto, como el de una línea, sigue recto)
+  for (let k = 0; k < n; k++) if (F[k] > 1.5 * c) { const e = Math.sqrt(D[k]) * c - 0.5 * c; if (e > F[k]) F[k] = e; }
+}
+
+/**
+ * Pincel de suavizar: dentro de su radio, el campo se promedia con sus vecinos (caja de radio b), con un peso que se
+ * apaga hacia el borde del pincel. Redondea las esquinas, quita las ondas entre toques y los salientes finos.
+ */
+function smoothGrid(F, nx, ny, c, x0, y0, q, m) {
+  const R = q.r, st = clamp(Number.isFinite(q.s) ? q.s : 0.5, 0.05, 1);
+  const nb = Math.max(1, Math.round(clamp(0.3 * R * st, c, 6) / c));
+  const i0 = Math.max(0, Math.floor((q.x - R - x0) / c) - nb), i1 = Math.min(nx - 1, Math.ceil((q.x + R - x0) / c) + nb);
+  const j0 = Math.max(0, Math.floor((q.y - R - y0) / c) - nb), j1 = Math.min(ny - 1, Math.ceil((q.y + R - y0) / c) + nb);
+  if (i1 <= i0 || j1 <= j0) return;
+  const w = i1 - i0 + 1, h = j1 - j0 + 1, lo = -(m + (nb + 2) * c);
+  const A = new Float32Array(w * h), B = new Float32Array(w * h);
+  for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) A[j * w + i] = Math.max(lo, F[(j0 + j) * nx + i0 + i]);
+  // caja separable (en x y después en y)
+  for (let j = 0; j < h; j++) { let acc = 0, cnt = 0; for (let i = -nb; i < w + nb; i++) { const a = i + nb; if (a < w) { acc += A[j * w + a]; cnt++; } const r = i - nb - 1; if (r >= 0 && r < w) { acc -= A[j * w + r]; cnt--; } if (i >= 0 && i < w) B[j * w + i] = acc / cnt; } }
+  for (let i = 0; i < w; i++) { let acc = 0, cnt = 0; for (let j = -nb; j < h + nb; j++) { const a = j + nb; if (a < h) { acc += B[a * w + i]; cnt++; } const r = j - nb - 1; if (r >= 0 && r < h) { acc -= B[r * w + i]; cnt--; } if (j >= 0 && j < h) A[j * w + i] = acc / cnt; } }
+  for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
+    const x = x0 + (i0 + i) * c, y = y0 + (j0 + j) * c, d = Math.hypot(x - q.x, y - q.y);
+    if (d >= R) continue;
+    const t = 1 - smooth(0.55 * R, R, d), k = (j0 + j) * nx + i0 + i, v0 = F[k];
+    if (v0 < lo && A[j * w + i] <= lo + 1e-6) continue; // lejos de todo: sigue vacío
+    F[k] = v0 + (A[j * w + i] - Math.max(lo, v0)) * t;
+  }
 }
