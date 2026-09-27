@@ -117,6 +117,12 @@ export const DEFAULT_SCENE = {
   dirtWidth: 3, // m
   dirtTile: 4, // m de pista por repetición de la textura
   dirtTransition: 12, // m: transición del camino de tierra entre tramos de distinto ancho (0 = corte)
+  collision: false, // geometría de colisión (invisible) en la exportación: camino de tierra y costados
+  collDirt: true, // colisión del camino de tierra (plano de una cara, como el camino)
+  collSides: true, // costados: paredes invisibles en el borde (camino de tierra o pista)
+  collHeight: 3, // m: alto de los costados (se recorta bajo otra calzada que pase por arriba)
+  collThick: 1, // m: grosor de los costados hacia afuera (0 = plano de una cara que mira a la pista)
+  showCollision: true, // mostrarla (semitransparente) en la vista 3D
   barrierSide: 'none', // barrera de contención: 'none' | 'left' | 'right' | 'both'
   barrierHeight: 0.8, // m
   barrierThick: 0.25, // m
@@ -142,7 +148,7 @@ export { edgeExtents } from './tunnels.js';
 /** Cuánto bajan los faldones (pista y camino de tierra) desde el borde. */
 export function skirtDepth(sp) { const g = sp.terrainGap ?? 0.3; const h = Number.isFinite(sp.skirtHeight) ? sp.skirtHeight : g + 0.8; return Math.max(g + 0.1, h); }
 
-function trackSamples(layout, elev, sp = {}) {
+export function trackSamples(layout, elev, sp = {}) {
   const out = [];
   // bordes de cada ruta (cada atajo tiene los suyos): barrera de la ruta + camino de tierra en cada muestra (los tramos
   // pueden tener lados y anchos propios)
@@ -892,6 +898,23 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
   // lisas) o naturales (roca inclinada e irregular). cutInfo = altura de la zanja en (x,y) y el tipo de pared
   const anyCut = S.some((p) => p.cut);
   const cutNoise = valueNoise2((sp.treeSeed | 0) + 707);
+  const rockZ = (cut, floor, d, x, y, sg) => {
+    const R = rockOf(cut), sz = R.size, k = R.rough / 25; // k = 1: la roca de siempre (25 %, 0,9 m, irregular)
+    const sc = sz * (2.3 / 0.9);
+    const n = cutNoise(x / sc, y / sc), n2 = cutNoise(x / sz + 31, y / sz - 17);
+    const tg = Math.tan((cutAngle(cut, sg) * Math.PI) / 180) / 2.9; // ángulo de la pared (71° = pendiente de siempre)
+    let z = floor + d * (2.9 + 1.4 * (n - 0.5) * Math.min(2, k)) * tg;
+    const fade = Math.min(1, Math.max(0, (d - 0.3) / 0.5)); // el pie queda limpio
+    if (R.style === 'sharp') { // crestas y aristas (ruido «ridged», con una octava más chica)
+      const r1 = 1 - Math.abs(2 * n2 - 1), n3 = cutNoise(x / (sz * 0.45) + 7, y / (sz * 0.45) - 3), r2 = 1 - Math.abs(2 * n3 - 1);
+      z += (r1 * r1 * 1.3 + r2 * r2 * 0.45 - 0.62) * 1.5 * k * fade;
+    } else if (R.style === 'strata') { // capas: repisas casi planas y frentes empinados
+      const hL = Math.max(0.35, sz * 1.1), t = (z - floor) / hL, fr = t - Math.floor(t);
+      const zt = floor + hL * (Math.floor(t) + smoothstep(0.55, 1, fr));
+      z += (zt - z) * Math.min(1, k) * fade + (n2 - 0.5) * 0.35 * k * fade;
+    } else z += (n2 - 0.5) * 1.2 * k * fade;
+    return Math.max(floor, z);
+  };
   const cutInfo = (x, y) => {
     let best = Infinity, kind = null, idx = null;
     fine.query(x, y, maxW / 2 + 26, (p) => {
@@ -907,9 +930,7 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
       let z;
       if (!nat) { if (d > 1e-3) return; z = floor; } // pared lisa: la pone una malla propia extruida desde la pista (0.64); el terreno solo baja dentro
       else {
-        const n = cutNoise(x / 2.3, y / 2.3), n2 = cutNoise(x / 0.9 + 31, y / 0.9 - 17);
-        const tg = Math.tan((cutAngle(p.cut, u >= 0 ? 1 : -1) * Math.PI) / 180) / 2.9; // ángulo de la pared (71° = pendiente de siempre)
-        z = floor + d * (2.2 + 1.4 * n) * tg + (d > 0.3 ? (n2 - 0.5) * 1.2 : 0); // roca: pendiente irregular
+        z = rockZ(p.cut, floor, d, x, y, u >= 0 ? 1 : -1); // roca: pendiente con relieve (estilo, rugosidad, tamaño)
       }
       if (z < best) { best = z; kind = nat ? 'cutNat' : 'cutArt'; idx = p.cut.idx ?? 0; }
     });
@@ -971,7 +992,7 @@ export function buildTerrain(layout, elev, spIn = {}, paintIn = null) {
   const anyArt = S.some((p) => p.cut && p.cut.walls !== 'nat');
   const capW = 0.3; // tapa angosta: el terreno se recorta justo en la pared (0.67), la tapa solo remata el borde
   const artSt = anyArt ? cutArtStations(layout, elev, sp, S, (x, y) => heightNat(x, y, 0.5), gap, capW) : [];
-  const guides = S.some((p) => p.cut) ? cutGuidePoints(artSt, S, capW, layout, 2.5, (x, y) => heightNat(x, y, 0.5), gap) : null; // también con paredes naturales
+  const guides = S.some((p) => p.cut) ? cutGuidePoints(artSt, S, capW, layout, 2.5, (x, y) => heightNat(x, y, 0.5), gap, (cut) => 20 * Math.pow(1 / 20, clamp(sp.terrainDensity, 1, 100) / 100) / Math.sqrt(subdivFactor(cut.wallSubdiv ?? 2))) : null; // también con paredes naturales
   const out = painted || guides
     ? adaptiveMesh(minX, minY, W, H, sp, paint || [], heightAt, guides)
     : gridMesh(minX, minY, W, H, sp, heightAt);
@@ -1440,6 +1461,12 @@ export function cutAngle(cut, sg) {
   const a = cut ? (sg > 0 ? cut.angL : cut.angR) : null;
   return clamp(Number.isFinite(a) ? a : R.def, R.min, R.max);
 }
+/** Roca de las paredes naturales de un socavado: estilo ('irregular' | 'sharp' | 'strata'), rugosidad (0–100 %) y
+ *  tamaño de las rocas (m). Por defecto, la de siempre. */
+export function rockOf(cut) {
+  const st = cut && (cut.rockStyle === 'sharp' || cut.rockStyle === 'strata') ? cut.rockStyle : 'irregular';
+  return { style: st, rough: clamp(Number.isFinite(cut && cut.rough) ? cut.rough : 25, 0, 100), size: clamp(Number.isFinite(cut && cut.rockSize) ? cut.rockSize : 0.9, 0.3, 8) };
+}
 /** Desplazamiento horizontal hacia afuera por metro de altura (cotangente; 0 en 90°). */
 export const cutLean = (deg) => (Math.abs(deg - 90) < 1e-6 ? 0 : 1 / Math.tan((deg * Math.PI) / 180));
 
@@ -1581,7 +1608,7 @@ export function cutArtWalls(stations, capW, tile = 4) {
  * triángulo del terreno cruza de un lado al otro de la zanja ni tapa la rampa de entrada, aunque la densidad sea baja.
  * Devuelve [{x, y, zMax}] (zMax: altura máxima del punto; null = la que diga el terreno).
  */
-export function cutGuidePoints(stations, S, capW, layout, step = 2.5, natAt = null, gap = 0.3) {
+export function cutGuidePoints(stations, S, capW, layout, step = 2.5, natAt = null, gap = 0.3, cellHint = null) {
   const pts = [];
   const push = (x, y, zMax = null) => pts.push({ x, y, zMax });
   for (const { rows } of stations) {
@@ -1609,11 +1636,26 @@ export function cutGuidePoints(stations, S, capW, layout, step = 2.5, natAt = nu
   const isNat = (p) => p && p.cut && p.cut.walls === 'nat';
   const byRoute = new Map();
   for (const p of S) { if (!byRoute.has(p.k)) byRoute.set(p.k, []); byRoute.get(p.k).push(p); }
+  const lattice = { n: 0, max: 40000 };
+  // grilla de la roca con relieve: pasos según el tamaño de las rocas y «Densidad de las paredes»; solo si los triángulos
+  // del terreno en la roca (cellHint(cut)) son más grandes que esos pasos (con terreno denso no hace falta)
+  const latticeOf = (cut) => {
+    const R = rockOf(cut);
+    if (!(R.rough > 0)) return null;
+    if (!Number.isFinite(cut.rough) && !Number.isFinite(cut.rockSize) && !cut.rockStyle) return null; // la roca de siempre (sin tocar): igual que antes
+    const f = [1.8, 1.4, 1, 0.8, 0.65, 0.55, 0.5][Math.max(0, Math.min(6, Math.round(cut.wallSubdiv ?? 2)))];
+    const stA = Math.max(0.6, Math.min(3, R.size * 1.1 * f)), stC = Math.max(0.5, Math.min(2.5, R.size * 0.85 * f));
+    if (cellHint && cellHint(cut) <= stC * 1.5) return null;
+    return { stA, stC };
+  };
   for (const list of byRoute.values()) {
     const n = list.length, ds = list[0].ds || 1, every = Math.max(1, Math.round(step / ds));
     for (let i = 0; i < n; i++) {
       const p = list[i];
-      if (!isNat(p) || (i % every && isNat(list[i - 1]) && isNat(list[i + 1]))) continue;
+      const onEvery = !(i % every && isNat(list[i - 1]) && isNat(list[i + 1]));
+      if (!isNat(p)) continue;
+      const lt = latticeOf(p.cut), lat = !!lt && i % Math.max(1, Math.round(lt.stA / ds)) === 0;
+      if (!onEvery && !lat) continue;
       for (const sg of [1, -1]) {
         const ext = sg > 0 ? p.uL : p.uR, lx = -p.ty * sg, ly = p.tx * sg;
         push(p.x + lx * (ext - 0.3), p.y + ly * (ext - 0.3));
@@ -1628,6 +1670,10 @@ export function cutGuidePoints(stations, S, capW, layout, step = 2.5, natAt = nu
         if (d < 0.5) continue;
         push(...at(d));
         if (d > 3) push(...at(d / 2));
+        // con relieve: una grilla de puntos sobre la roca (según el tamaño de las rocas y la densidad de las paredes), así
+        // el relieve se ve aunque el terreno tenga triángulos grandes
+        const lt = latticeOf(p.cut);
+        if (lt && i % Math.max(1, Math.round(lt.stA / ds)) === 0) for (let dd = lt.stC; dd < d - lt.stC * 0.4; dd += lt.stC) if (lattice.n++ < lattice.max) push(...at(dd));
       }
     }
   }

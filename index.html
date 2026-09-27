@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Track Spline Generator v0.70</title>
+  <title>Track Spline Generator v0.71</title>
   <link rel="stylesheet" href="styles.css">
   <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.70</span></div>
+    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.71</span></div>
     <label class="proj-name-wrap" title="Nombre del proyecto: se usa al guardar (<nombre>.tsg.json) y en los autoguardados (<nombre>_auto_…)"><input id="projectName" class="proj-name" value="pista" spellcheck="false" maxlength="80"><span class="small muted" id="autosaveState"></span></label>
     <div class="top-actions">
       <button id="btnNew" title="Empezar de cero">Nuevo</button>
@@ -301,6 +301,16 @@
           <div class="field"><label>Tiling: largo de cada repetición <span class="val"><input type="number" id="barrierTileNum" min="0.5" step="0.5" style="width:56px"> m</span></label><input type="range" id="barrierTile" min="0.5" max="20" step="0.5"></div>
           <div class="row gap"><button id="btnBarrierTex">Cargar textura…</button><button id="btnBarrierTexRemove" disabled>Por defecto</button><img id="barrierTexThumb" class="thumb" hidden alt=""></div>
           <input id="fileBarrierTex" type="file" accept="image/*" hidden>
+        </div>
+        <h3 class="subhead" id="collHead">Colisión</h3>
+        <label class="check small"><input type="checkbox" id="collision"> Incluir geometría de colisión</label>
+        <div id="collBox">
+          <label class="check small"><input type="checkbox" id="collDirt"> Camino de tierra (plano de una cara)</label>
+          <label class="check small"><input type="checkbox" id="collSides"> Costados (paredes invisibles en el borde)</label>
+          <div class="field"><label>Alto de los costados <span class="val"><input type="number" id="collHeightNum" min="0.2" step="0.1" style="width:60px"> m</span></label><input type="range" id="collHeight" min="0.5" max="10" step="0.1"></div>
+          <div class="field"><label>Grosor de los costados (0 = plano de una cara) <span class="val"><input type="number" id="collThickNum" min="0" step="0.1" style="width:60px"> m</span></label><input type="range" id="collThick" min="0" max="3" step="0.1"></div>
+          <label class="check small"><input type="checkbox" id="showCollision"> Mostrar en la vista 3D</label>
+          <p class="hint" id="collInfo"></p>
         </div>
         <p class="hint">Los atajos tienen sus propios bordes: en su tarjeta de <b>Rutas alternativas</b>.</p>
         <p class="hint" id="edgesInfo"></p>

@@ -159,6 +159,7 @@ export class GameCam {
     this.pv.tc.getHelper().visible = true;
     this.pv.statsDiv.hidden = false;
     this.pv.triggerGroup.visible = true;
+    if (this.pv.collGroup) this.pv.collGroup.visible = this.app.state.scene.showCollision !== false;
     this.pv.controls.enabled = true;
     this.pv.update(false, true);
     this.pv.needsFrame = true;
@@ -297,6 +298,7 @@ export class GameCam {
     const P = this.pose(this.s);
     const G0 = this.app.state.game || {};
     this.pv.triggerGroup.visible = G0.hideTriggers === false; // «Ocultar triggers»: nada, ni las cajas semitransparentes
+    if (this.pv.collGroup) this.pv.collGroup.visible = false; // la colisión no se ve en el juego
     this.tick2d = (this.tick2d || 0) + dt;
     if (this.tick2d > 0.066 && this.app.onGameMove) { this.tick2d = 0; this.app.onGameMove(this.s); }
     const m = new THREE.Matrix4().makeBasis(P.fwd, P.left, P.up);

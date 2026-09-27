@@ -4,6 +4,7 @@ import { OrbitControls } from '../vendor/OrbitControls.js';
 import { TransformControls } from '../vendor/TransformControls.js';
 import { edgeSamples } from './export.js';
 import { buildEdgeMeshes } from './edges.js';
+import { buildCollisionMeshes } from './collision.js';
 import { instancedGroup, instanceMatrix } from './assets.js';
 import { decoSetItems, treeModelItems, treeModelItem, grassModelItems } from './deco.js';
 import { buildShadows, shadowCasters, sunVector } from './shadows.js';
@@ -157,6 +158,9 @@ export class Preview3D {
     // bordes de la pista (camino de tierra y barrera), extruidos de la malla de la pista
     this.edgeGroup = new THREE.Group();
     this.scene.add(this.edgeGroup);
+    this.collGroup = new THREE.Group(); // geometría de colisión (semitransparente en la vista; invisible al exportar)
+    this.collGroup.name = 'colision';
+    this.scene.add(this.collGroup);
     this.tunnelRuns = [];
     // modelo de referencia (FBX / GLB): un solo objeto que se mueve con su propio gizmo
     this.refExag = new THREE.Group(); // escala Z = exagerar Z (igual que la pista)
@@ -1412,8 +1416,37 @@ export class Preview3D {
     for (const m of B.barriers) mk(m, matFor('barrierTexCanvas', m, bm), 'barrier');
     this.triCounts.edges = B.dirtTris + B.barrierTris;
     if (this.app.onEdgesInfo) this.app.onEdgesInfo(B);
+    this.buildCollision();
     if (this.wire && this.wire.on) this.applyWireframe();
     if (stats) this.updateStats();
+    this.needsFrame = true;
+  }
+
+  /** Geometría de colisión (camino de tierra y costados): semitransparente, con el check «Mostrar en la vista 3D». */
+  buildCollision() {
+    this.disposeGroup(this.collGroup);
+    this.collGroup.scale.set(1, 1, this.zExag);
+    this.collData = null;
+    const L = this.app.state.layout, E = this.app.state.result, sp = this.app.state.scene;
+    if (!L || !E || !sp.collision) { if (this.app.onCollisionInfo) this.app.onCollisionInfo(null); return; }
+    const C = buildCollisionMeshes(L, E, sp, { deck: this.app.state.elev ? this.app.state.elev.deck ?? 1 : 1 });
+    this.collData = C;
+    const mat = (c) => new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.28, depthWrite: false, side: THREE.DoubleSide });
+    const dm = mat(0x40e0ff), smat = mat(0xff5fc8);
+    Object.assign(dm, { polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 }); // sobre el camino de tierra (misma altura)
+    for (const m of [...C.dirt, ...C.sides]) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(m.positions, 3));
+      g.setIndex(new THREE.BufferAttribute(m.indices, 1));
+      const mesh = new THREE.Mesh(g, m.side ? smat : dm);
+      mesh.name = m.name;
+      mesh.userData.collision = m.side ? 'sides' : 'dirt';
+      mesh.renderOrder = 7;
+      mesh.raycast = () => {}; // no se elige con clic (no tapa la pista)
+      this.collGroup.add(mesh);
+    }
+    this.collGroup.visible = sp.showCollision !== false && !(this.game && this.game.active);
+    if (this.app.onCollisionInfo) this.app.onCollisionInfo(C);
     this.needsFrame = true;
   }
 

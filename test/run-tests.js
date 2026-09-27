@@ -10,6 +10,7 @@ import { edgeSamples } from '../js/export.js';
 import { computeItems, defaultGroup, itemAt } from '../js/items.js';
 import { nearestOnSamples } from '../js/geometry.js';
 import { buildEdgeMeshes } from '../js/edges.js';
+import { buildCollisionMeshes } from '../js/collision.js';
 import { edgeExtents, dirtWidthAt, edgeParams, convexHull2, frameAt, hillFieldOne } from '../js/tunnels.js';
 import { buildRivers } from '../js/rivers.js';
 import { buildTriggers, sculptField, bakeTreeList, bakeDecoList, moveTree, treeConeVerts, vegPlace } from '../js/scene.js';
@@ -930,6 +931,58 @@ for (const [key, s] of Object.entries(SAMPLES)) {
     const wa = width(TA, 1), wl = width(TB, 1), wr = width(TB, -1);
     check(wl > wa * 2 && wr < wa / 2 && TB.cutWalls.nat.parts.length === 1 && TB.cutWalls.nat.parts[0].idx === 0, `paredes naturales con ángulo: ancho de la roca ${wa.toFixed(1)} m a 71° → ${wl.toFixed(1)} m a 45° y ${wr.toFixed(1)} m a 85° (una parte por tramo)`);
   }
+  // 0.71: roca de las paredes naturales: rugosidad, tamaño y estilo. Más rugosidad = más relieve (normales menos
+  // verticales); con densidad 1 igual se ve (grilla de puntos en la roca) y nada queda sobre la pista
+  {
+    const rock = (extra) => {
+      const T = buildTerrain(L, E, { ...sp, terrainDensity: 1, dirtSide: 'both', dirtWidth: 3, dirtWidthL: 3, dirtWidthR: 3, cutRanges: [{ k: 0, s0, s1, walls: 'nat', wallSubdiv: 2, idx: 0, ...extra }] });
+      const W = T.cutWalls.nat, P = W.positions;
+      let nz = 0;
+      for (let t = 0; t < W.indices.length; t += 3) {
+        const [a, b2, c] = [W.indices[t], W.indices[t + 1], W.indices[t + 2]];
+        const u = [0, 1, 2].map((q) => P[b2 * 3 + q] - P[a * 3 + q]), v = [0, 1, 2].map((q) => P[c * 3 + q] - P[a * 3 + q]);
+        const n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+        nz += Math.abs(n[2]) / (Math.hypot(...n) || 1);
+      }
+      return { T, tris: W.tris, nz: nz / Math.max(1, W.tris), inside: under(T, 'nat') };
+    };
+    const r0 = rock({}), rs = rock({ rough: 0, rockSize: 0.9 }), rh = rock({ rough: 90, rockSize: 0.9 }), shp = rock({ rough: 80, rockSize: 1.2, rockStyle: 'sharp' }), str = rock({ rough: 80, rockSize: 1.5, rockStyle: 'strata' });
+    check(rh.nz < rs.nz - 0.08 && rh.tris > r0.tris * 2 && [r0, rs, rh, shp, str].every((q) => q.inside.inside === 0 && q.inside.over === 0 && q.tris > 50), `roca natural: relieve ${rs.nz.toFixed(2)} (liso) → ${rh.nz.toFixed(2)} (90 %); triángulos ${r0.tris} → ${rh.tris}; afilada ${shp.tris}, en capas ${str.tris}; nada sobre la pista`);
+    // sin tocar los controles, la roca de siempre (sin grilla extra)
+    check(r0.T.cutGuides < rh.T.cutGuides / 2, `roca natural por defecto: sin puntos extra (${r0.T.cutGuides} guías; con relieve ${rh.T.cutGuides})`);
+  }
+}
+
+// 0.71: geometría de colisión: camino de tierra (plano) y costados (plano o volumen cerrado), con el alto recortado bajo
+// una calzada que pase por arriba y abiertos en las entradas de los atajos
+{
+  const edgesOf = (m) => { const M = new Map(); for (let t = 0; t < m.indices.length; t += 3) for (let e = 0; e < 3; e++) { const a = m.indices[t + e], b = m.indices[t + (e + 1) % 3]; const k = a < b ? a + ',' + b : b + ',' + a; M.set(k, (M.get(k) || 0) + 1); } return M; };
+  const L = buildLayout(SAMPLES.figure8.build(), { lapLength: 1000 });
+  const E = computeElevation(L, { hills: 0.5 });
+  const base = { collision: true, collHeight: 8, dirtSide: 'both', dirtWidth: 3, dirtWidthL: 3, dirtWidthR: 3 };
+  const C0 = buildCollisionMeshes(L, E, { ...base, collThick: 0 }, { deck: 1 }), C1 = buildCollisionMeshes(L, E, { ...base, collThick: 1 }, { deck: 1 });
+  const closed = C1.sides.every((m) => [...edgesOf(m).values()].every((v) => v === 2));
+  const planeOnly = C0.sides.every((m) => m.plane) && C0.tris < C1.tris / 2;
+  // alto libre: ningún vértice de un costado llega a menos de 0,15 m del tablero de la otra calzada
+  const S2 = L.routes[0];
+  let hit = 0;
+  const c = E.crossings[0], upS = c.up === 'a' ? c.sa : c.sb;
+  const iu = Math.round(upS / S2.ds) % S2.n, zUp = E.routes[0].z[iu];
+  for (const m of C1.sides) for (let v = 0; v < m.positions.length; v += 3) {
+    const dx = m.positions[v] - S2.x[iu], dy = m.positions[v + 1] - S2.y[iu];
+    if (Math.abs(dx * S2.tx[iu] + dy * S2.ty[iu]) > 4 || Math.abs(dx * -S2.ty[iu] + dy * S2.tx[iu]) > S2.w[iu] / 2 + 3) continue;
+    if (m.positions[v + 2] < zUp - 0.5 && m.positions[v + 2] > zUp - 1 - 0.15) hit++;
+  }
+  check(C1.dirt.length === 1 && C1.sides.length === 2 && closed && planeOnly && C1.clamped > 0 && hit === 0, `colisión: camino de tierra y 2 costados; con grosor, volumen cerrado (${closed}); sin grosor, un plano (${planeOnly}); ${C1.clamped} secciones más bajas en el cruce, ${hit} vértices tocando el tablero`);
+  const off = buildCollisionMeshes(L, E, { ...base, collision: false });
+  check(!off.dirt.length && !off.sides.length, 'colisión: apagada no genera nada');
+  // atajo: los costados se abren donde el atajo sale de la pista (como la barrera)
+  const LS = buildLayout(SAMPLES.shortcut.build(), { lapLength: 1000 }), ES = computeElevation(LS, { hills: 0.3 });
+  const CS = buildCollisionMeshes(LS, ES, { ...base, collThick: 1 }, { deck: 1 });
+  const BS = buildEdgeMeshes(LS, ES, { dirtSide: 'both', dirtWidth: 3, dirtWidthL: 3, dirtWidthR: 3, barrierSide: 'both', barrierHeight: 1 });
+  const sidesMain = CS.sides.filter((m) => m.k === 0), barMain = BS.barriers.filter((m) => m.k === 0);
+  const segs = (m) => m.indices.length;
+  check(sidesMain.length === 2 && CS.sides.some((m) => m.k === 1) && sidesMain.every((m) => segs(m) > 0) && barMain.length === 2, `colisión con atajo: costados en la pista y en el atajo (${CS.sides.map((m) => m.name).join(', ')})`);
 }
 
 // pilares: nunca sobre otra calzada, su camino de tierra o un atajo

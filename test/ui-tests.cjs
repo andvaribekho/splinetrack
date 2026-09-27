@@ -1094,6 +1094,45 @@ test('tramo socavado: inclinación de cada pared (gráfico del perfil) y textura
   expect(back[0] === 'nat' && back[2] === '[70,120]' && back[3] === false && back[4], `ida y vuelta: ${back}`);
 });
 
+test('colisión: camino de tierra y costados (vista 3D, alto y grosor, exportación en «colision») y roca de las paredes naturales', async () => {
+  await reset('figure8');
+  await ev(() => { const sc = window.__tsg.state.scene; sc.dirtSide = 'both'; sc.dirtWidthL = 3; sc.dirtWidthR = 3; sc.dirtWidth = 3; window.__tsg.scheduleBuild(); });
+  await idle();
+  expect(await ev(() => window.__tsg.preview.collGroup.children.length === 0 && /Desactivada|Off/.test(document.getElementById('collInfo').textContent)), 'colisión apagada por defecto');
+  await ev(() => { const el = document.getElementById('collision'); el.checked = true; el.dispatchEvent(new Event('change', { bubbles: true })); });
+  await idle();
+  await ev(() => { const el = document.getElementById('collHeightNum'); el.value = '9'; el.dispatchEvent(new Event('change', { bubbles: true })); });
+  const a = await ev(() => { const P = window.__tsg.preview; return [P.collGroup.children.map((m) => m.name), P.collGroup.visible, document.getElementById('collInfo').textContent]; });
+  expect(a[0].includes('colision_camino_tierra_ruta_principal') && a[0].filter((n) => /costados/.test(n)).length === 2 && a[1] && /quedan más bajas|are lower/.test(a[2]), `colisión en 3D: ${JSON.stringify(a)}`);
+  const tris = () => ev(() => window.__tsg.preview.collData.tris);
+  const t1 = await tris();
+  await ev(() => { const el = document.getElementById('collThickNum'); el.value = '0'; el.dispatchEvent(new Event('change', { bubbles: true })); });
+  const t0 = await tris();
+  expect(t0 < t1 / 2 && (await ev(() => window.__tsg.preview.collData.sides.every((m) => m.plane))), `grosor 0 = plano: ${t1} → ${t0}`);
+  await ev(() => { const el = document.getElementById('showCollision'); el.checked = false; el.dispatchEvent(new Event('change', { bubbles: true })); });
+  expect(await ev(() => window.__tsg.preview.collGroup.visible === false), 'ocultar en la vista 3D');
+  const ex = await exportNames();
+  expect(ex.colision && ex.colision.includes('colision_camino_tierra_ruta_principal') && ex.colision.filter((n) => /costados/.test(n)).length === 2, `exportación: ${JSON.stringify(ex.colision)}`);
+  // roca de las paredes naturales: sus controles solo con paredes naturales
+  await reset();
+  await ev(() => document.querySelector('#elevMode button[data-mode=direct]').click());
+  await idle();
+  await makeTramo('cut', [4, 5, 6, 7, 8, 9, 10, 11, 12]);
+  await ev(() => { const t = window.__tsg, zs = t.state.project.main.ctrlZ; for (const i of [6, 7, 8, 9, 10]) zs[i] = -7; zs[5] = -3.5; zs[11] = -3.5; t.scheduleBuild(); });
+  await page.click('#btnGenTerrain');
+  await idle();
+  const q = (sel) => `#bridgeList .item[data-i="0"] ${sel}`;
+  expect(await ev((s) => document.querySelector(s).hidden, q('.bRockBox')), 'roca oculta con paredes lisas');
+  await ev((s) => { const el = document.querySelector(s); el.value = 'nat'; el.dispatchEvent(new Event('change', { bubbles: true })); }, q('.bwalls'));
+  await idle();
+  const g0 = await ev(() => window.__tsg.preview.terrainData.cutGuides);
+  await ev((s) => { const el = document.querySelector(s); el.value = 'sharp'; el.dispatchEvent(new Event('change', { bubbles: true })); }, q('.brStyle'));
+  await ev((s) => { const el = document.querySelector(s); el.value = '80'; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }, q('.brRough'));
+  await idle();
+  const g1 = await ev((s) => { const t = window.__tsg, c = t.state.scene.cutRanges[0]; return [c.rockStyle, c.rough, !document.querySelector(s).hidden, t.preview.terrainData.cutGuides]; }, q('.bRockBox'));
+  expect(g1[0] === 'sharp' && g1[1] === 80 && g1[2], `roca: ${JSON.stringify(g1)} (guías antes ${g0})`);
+});
+
 test('tarjetas: la primera vez que se abre una lista desplegable no se cierra (la tarjeta no se vuelve a dibujar)', async () => {
   await reset();
   await makeTramo('cut', [5, 6, 7, 8, 9]);

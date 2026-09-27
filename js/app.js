@@ -13,7 +13,7 @@ import { initSplitters } from './splitters.js';
 import { initHotkeys, comboOf } from './hotkeys.js';
 import { VERSION } from './version.js';
 import { ACTIONS, FIXED, bindingOf, isDefault, setBinding, resetAll as resetKeymap, matchAction, comboLabel } from './keymap.js';
-import { DEFAULT_SCENE, terrainCell, buildTrees, buildDecoInstances, bakeTreeList, bakeDecoList, CUT_ANGLES } from './scene.js';
+import { DEFAULT_SCENE, terrainCell, buildTrees, buildDecoInstances, bakeTreeList, bakeDecoList, CUT_ANGLES, rockOf } from './scene.js';
 import { makeShadowCanvas, sunShadowDir } from './shadows.js';
 import { SCULPT_PRESETS, DEFAULT_SCULPT_CURVE, normCurve, curveEval, curveLUT, presetOf } from './sculptcurve.js';
 import { makeTrackThumbnail } from './thumbnail.js';
@@ -1063,7 +1063,8 @@ const app = {
     const tr = (state.project.main && state.project.main.bridges) || [];
     return (L.routes[0].bridges || []).filter((b) => b.type === 'cut' && b.s1 - b.s0 > 2).map((b) => {
       const ang = tr[b.idx] ? tramoAngles(tr[b.idx]) : [null, null];
-      return { k: 0, idx: b.idx, s0: b.s0, s1: b.s1, walls: b.walls === 'nat' ? 'nat' : 'art', wallSubdiv: b.wallSubdiv ?? 2, angL: ang[0], angR: ang[1] };
+      const tb = tr[b.idx] || {};
+      return { k: 0, idx: b.idx, s0: b.s0, s1: b.s1, walls: b.walls === 'nat' ? 'nat' : 'art', wallSubdiv: b.wallSubdiv ?? 2, angL: ang[0], angR: ang[1], rough: tb.rockRough, rockSize: tb.rockSize, rockStyle: tb.rockStyle };
     });
   },
   /** Tramos suspendidos en s de la ruta principal: [{k: 0, s0, s1, pillars, dirt, barrier, idx}]. */
@@ -2139,6 +2140,13 @@ const app = {
   tunnelTexCanvas(uid, kind) { const own = uid && state.tunnelTexOwn[uid]; return (own && own[kind]) || (kind === 'wall' ? state.tunWallTex : state.tunCeilTex) || null; },
   wallTexCanvas(kind) { return (kind === 'fall' ? state.fallWallTex : state.riverWallTex) || null; },
   coveredTexCanvas() { return state.coveredTex || darkenedCanvas(state.trackTex || defaultTrackCanvas(), 0.2); },
+  onCollisionInfo(C) {
+    const el = $('collInfo');
+    if (!el) return;
+    el.textContent = !C ? 'Desactivada.' : C.dirt.length || C.sides.length
+      ? `${C.tris.toLocaleString('es')} triángulos. Se exportan en el grupo «colision» con el material invisible «colision» (extras: collision = dirt / sides).${C.clamped ? ` ${C.clamped} secciones de los costados quedan más bajas para no tocar una calzada que pasa por arriba.` : ''}`
+      : 'Sin camino de tierra ni costados que generar.';
+  },
   onEdgesInfo(B) {
     state.edgeMeshes = B;
     const el = $('edgesInfo');
@@ -3262,6 +3270,7 @@ function refreshBridgeList() {
     // socavado: ángulo de cada pared (lisas 45–135°, naturales 45–85°) y textura propia de su tipo
     const wallKind = b.walls === 'nat' ? 'wallNat' : 'wallArt', AR = CUT_ANGLES[b.walls === 'nat' ? 'nat' : 'art'], angLink = b.angLink !== false;
     const ang = tramoAngles(b);
+    const rk = rockOf({ rough: b.rockRough, rockSize: b.rockSize, rockStyle: b.rockStyle });
     const EPm = edgeParams(state.scene, false), dirtW0 = { l: EPm.dirtWidthL, r: EPm.dirtWidthR }; // anchos de la pista (valor inicial de los propios)
     const modeSel = (cls, v, noneTxt) => `<select class="${cls}" title="Lado según el sentido de marcha; «Como la pista» sigue lo que tenga la pista principal">${[['inherit', 'Como la pista'], ['both', 'Ambos lados'], ['left', 'Izquierda'], ['right', 'Derecha'], ['none', noneTxt]].map(([k, t]) => `<option value="${k}"${v === k ? ' selected' : ''}>${t}</option>`).join('')}</select>`;
     d.innerHTML = `<div class="head"><span class="row" style="gap:4px;min-width:0"><button class="x btoggle" title="Mostrar u ocultar los parámetros del tramo">${b.collapsed ? '▸' : '▾'}</button><strong>${tName} ${i + 1}</strong></span><button class="x bdel" title="Quitar el tramo (vuelve a ser pista normal)">✕</button></div>
@@ -3271,6 +3280,12 @@ function refreshBridgeList() {
       <div class="bcutBox"${isCut ? '' : ' hidden'}>
         <div class="field"><label>Paredes</label><select class="bwalls"><option value="art"${b.walls !== 'nat' ? ' selected' : ''}>Lisas (extruidas de la pista)</option><option value="nat"${b.walls === 'nat' ? ' selected' : ''}>Naturales (del terreno)</option></select></div>
         <div class="field bwsBox"${b.walls === 'nat' ? '' : ' hidden'} title="Solo paredes naturales: más triángulos en la roca (las lisas siguen la densidad de la pista)"><label>Densidad de las paredes <span class="val bwsV">${b.wallSubdiv ?? 2} (×${subdivFactor(b.wallSubdiv ?? 2)} pol.)</span></label><input type="range" class="bws" min="0" max="6" step="1" value="${b.wallSubdiv ?? 2}"></div>
+        <div class="bRockBox"${b.walls === 'nat' ? '' : ' hidden'}>
+          <h4 class="mini">Roca</h4>
+          <div class="field"><label>Estilo</label><select class="brStyle" title="Irregular: bloques sueltos. Afilada: crestas y aristas. En capas: repisas y frentes, como estratos"><option value="irregular"${rk.style === 'irregular' ? ' selected' : ''}>Irregular</option><option value="sharp"${rk.style === 'sharp' ? ' selected' : ''}>Afilada (crestas)</option><option value="strata"${rk.style === 'strata' ? ' selected' : ''}>En capas (estratos)</option></select></div>
+          <div class="field" title="Cuánto relieve tiene la roca: 0 = pendiente lisa; 100 = salientes de más de 2 m"><label>Rugosidad <span class="val brRoughV">${rk.rough} %</span></label><input type="range" class="brRough" min="0" max="100" step="1" value="${rk.rough}"></div>
+          <div class="field" title="De grava fina a bloques grandes. Con más rugosidad o rocas más chicas, la roca lleva más triángulos (también según «Densidad de las paredes»)"><label>Tamaño de las rocas <span class="val brSizeV">${rk.size.toFixed(1)} m</span></label><input type="range" class="brSize" min="0.3" max="6" step="0.1" value="${rk.size}"></div>
+        </div>
         <h4 class="mini">Inclinación de las paredes</h4>
         <canvas class="bangCv" width="240" height="86" title="Perfil de la zanja visto en el sentido de marcha (esquemático)"></canvas>
         <label class="check small" title="Las dos paredes con el mismo ángulo"><input type="checkbox" class="bangLink"${angLink ? ' checked' : ''}> Mismo ángulo en ambas</label>
@@ -3341,6 +3356,14 @@ function refreshBridgeList() {
     d.querySelector('.bbarMode').addEventListener('change', (e) => setMode('barrier', 'barrierSide', e.target.value));
     d.querySelector('.btype').addEventListener('change', (e) => { pushUndo(); b.type = e.target.value; if (b.type === 'cut' && !b.walls) { b.walls = 'art'; b.wallSubdiv = 2; } refreshBridgeList(); scheduleBuild(); });
     d.querySelector('.bwalls').addEventListener('change', (e) => { pushUndo(); b.walls = e.target.value; refreshBridgeList(); scheduleBuild(); });
+    // roca de las paredes naturales: estilo, rugosidad y tamaño
+    if (isCut) {
+      d.querySelector('.brStyle').addEventListener('change', (e) => { pushUndo(); b.rockStyle = e.target.value; scheduleBuild(); });
+      d.querySelector('.brRough').addEventListener('input', (e) => { d.querySelector('.brRoughV').textContent = `${Math.round(e.target.value)} %`; });
+      d.querySelector('.brRough').addEventListener('change', (e) => { pushUndo(); b.rockRough = Math.round(parseFloat(e.target.value)); scheduleBuild(); });
+      d.querySelector('.brSize').addEventListener('input', (e) => { d.querySelector('.brSizeV').textContent = `${(+e.target.value).toFixed(1)} m`; });
+      d.querySelector('.brSize').addEventListener('change', (e) => { pushUndo(); b.rockSize = +(+e.target.value).toFixed(1); scheduleBuild(); });
+    }
     // inclinación: barras y números, enlazadas o no, y el gráfico del perfil
     if (isCut) {
       const drawAng = () => drawCutProfile(d.querySelector('.bangCv'), tramoAngles(b), b.walls === 'nat');
@@ -5858,6 +5881,11 @@ function syncSceneControls() {
   }
   for (const k of ['dirtTile', 'barrierHeight', 'barrierThick', 'barrierTile']) { set(k, sc[k]); set(k + 'Num', sc[k]); }
   set('dirtTransition', Math.min(60, sc.dirtTransition ?? 12)); set('dirtTransitionNum', sc.dirtTransition ?? 12);
+  // colisión
+  $('collision').checked = !!sc.collision; $('collDirt').checked = sc.collDirt !== false; $('collSides').checked = sc.collSides !== false; $('showCollision').checked = sc.showCollision !== false;
+  set('collHeight', Math.min(10, sc.collHeight ?? 3)); set('collHeightNum', sc.collHeight ?? 3);
+  set('collThick', Math.min(3, sc.collThick ?? 1)); set('collThickNum', sc.collThick ?? 1);
+  $('collBox').classList.toggle('disabled', !sc.collision);
   { const h = Math.max((sc.terrainGap ?? 0.3) + 0.1, Number.isFinite(sc.skirtHeight) ? sc.skirtHeight : (sc.terrainGap ?? 0.3) + 0.8); set('skirtHeight', h); set('skirtHeightNum', h); $('skirtBox').classList.toggle('disabled', !sc.skirts); }
   for (const k of ['dirtWidthL', 'dirtWidthR']) { const v = Number.isFinite(sc[k]) ? sc[k] : sc.dirtWidth; set(k, v); set(k + 'Num', v); } // ancho a cada lado (si no, el general)
   $('dirtBox').classList.toggle('disabled', !sc.dirtSide || sc.dirtSide === 'none');
@@ -7060,6 +7088,16 @@ function bindSceneControls() {
   pair('dirtWidthR', 'dirtWidthRNum', 'dirtWidthR', 0, false);
   pair('dirtTile', 'dirtTileNum', 'dirtTile', 0.5, false);
   pair('dirtTransition', 'dirtTransitionNum', 'dirtTransition', 0, false); // transición del camino de tierra entre tramos
+  // colisión: solo se rehace su malla (no la escena)
+  {
+    const collChanged = () => { syncSceneControls(); preview.buildCollision(); };
+    for (const id of ['collision', 'collDirt', 'collSides']) $(id).addEventListener('change', (e) => { sc[id] = e.target.checked; collChanged(); });
+    $('showCollision').addEventListener('change', (e) => { sc.showCollision = e.target.checked; preview.collGroup.visible = sc.showCollision && !(preview.game && preview.game.active); preview.needsFrame = true; });
+    const num = (key, min, max) => (v) => { v = parseFloat(v); if (!Number.isFinite(v)) return; sc[key] = Math.max(min, Math.min(max, v)); collChanged(); };
+    const hSet = num('collHeight', 0.2, 50), tSet = num('collThick', 0, 10);
+    $('collHeight').addEventListener('input', (e) => hSet(e.target.value)); $('collHeightNum').addEventListener('change', (e) => hSet(e.target.value));
+    $('collThick').addEventListener('input', (e) => tSet(e.target.value)); $('collThickNum').addEventListener('change', (e) => tSet(e.target.value));
+  }
   pair('barrierHeight', 'barrierHeightNum', 'barrierHeight', 0.1, false);
   pair('barrierThick', 'barrierThickNum', 'barrierThick', 0, false); // 0 = plano de una cara
   pair('barrierTile', 'barrierTileNum', 'barrierTile', 0.5, false);
@@ -7099,7 +7137,7 @@ function bindSceneControls() {
     const { exportGLB } = await import('./export-glb.js');
     toast('Generando escena .glb…');
     try {
-      const { buffer, info } = await exportGLB(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, cutWallFor: (i, kind) => app.cutWallOwnTex(i, kind), susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas(), triggers: app.triggersWorld(), tunnelTex: (uid, kind) => app.tunnelTexCanvas(uid, kind), assetById: (id) => state.assets.find((a) => a.id === id) || null }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
+      const { buffer, info } = await exportGLB(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, cutWallFor: (i, kind) => app.cutWallOwnTex(i, kind), collisionDeck: state.elev.deck ?? 1, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas(), triggers: app.triggersWorld(), tunnelTex: (uid, kind) => app.tunnelTexCanvas(uid, kind), assetById: (id) => state.assets.find((a) => a.id === id) || null }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
       download('track_scene.glb', buffer, 'model/gltf-binary');
       toast(`Escena exportada: pista ${info.trackTris.toLocaleString('es')} triángulos${info.terrainTris ? `, terreno ${info.terrainTris.toLocaleString('es')}` : ''}${info.hills ? `, ${info.hills} cerro(s)` : ''}${info.tunnels ? `, ${info.tunnels} túnel(es)` : ''}${info.gateTris ? ', pórtico de salida' : ''}${info.items ? `, ${info.items} elementos de pista` : ''}${info.trees ? `, ${info.trees} árboles` : ''}. Todo como objetos separados.`);
     } catch (err) { console.error(err); toastErr('No se pudo exportar la escena: ' + err.message); }
@@ -7113,7 +7151,7 @@ function bindSceneControls() {
     const { exportFBX } = await import('./export-fbx.js');
     toast('Generando escena .fbx…');
     try {
-      const { buffer, info } = await exportFBX(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, cutWallFor: (i, kind) => app.cutWallOwnTex(i, kind), susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas(), triggers: app.triggersWorld(), tunnelTex: (uid, kind) => app.tunnelTexCanvas(uid, kind), assetById: (id) => state.assets.find((a) => a.id === id) || null }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
+      const { buffer, info } = await exportFBX(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, cutWallFor: (i, kind) => app.cutWallOwnTex(i, kind), collisionDeck: state.elev.deck ?? 1, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas(), triggers: app.triggersWorld(), tunnelTex: (uid, kind) => app.tunnelTexCanvas(uid, kind), assetById: (id) => state.assets.find((a) => a.id === id) || null }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
       download('track_scene.fbx', buffer, 'application/octet-stream');
       toast(`FBX exportado (${(buffer.length / 1048576).toFixed(1)} MB): pista${info.terrainTris ? ', terreno' : ''}${info.hills ? `, ${info.hills} cerro(s)` : ''}${info.tunnels ? `, ${info.tunnels} túnel(es)` : ''}${info.gateTris ? ', pórtico' : ''}${info.items ? `, ${info.items} elementos de pista` : ''}${info.trees ? `, ${info.trees} árboles` : ''}${info.grass ? ', hierba' : ''}. Z arriba, en metros, con texturas incrustadas.`);
     } catch (err) { console.error(err); toastErr('No se pudo exportar el FBX: ' + err.message); }
@@ -7272,6 +7310,12 @@ const HINTS = {
   btnSculptClear: 'Quita todo el relieve esculpido (Ctrl+Z lo recupera).',
   paintErase: 'Pinta borrando (también con Alt o clic derecho).',
   wireOn: 'Muestra el wireframe de pista, terreno y árboles en la vista 3D (F3 lo muestra u oculta).',
+  collision: 'Agrega a la exportación mallas invisibles para la física del juego: el camino de tierra y paredes en los costados. No cambian lo que se ve.',
+  collDirt: 'Plano de una cara sobre el camino de tierra (solo sus bordes: pocos triángulos).',
+  collSides: 'Paredes invisibles en el borde del camino de tierra (o de la pista si no hay); donde hay barrera, en su cara interior. Se abren donde entra o sale un atajo.',
+  collHeight: 'Alto de los costados. Bajo otra calzada que pase por arriba (cruces) se recortan solos para no tocarla, con una rampa suave.',
+  collThick: 'Grosor hacia afuera (la cara interior no se mueve). Con grosor, un volumen cerrado: ayuda a que un auto muy rápido no los atraviese con pocos FPS (conviene además colisión continua en el motor). 0 = plano de una cara que mira a la pista.',
+  showCollision: 'Muestra la colisión semitransparente en la vista 3D (celeste: camino de tierra; rosa: costados). En la cámara de juego no se ve.',
   wireColor: 'Color del wireframe.',
   wireOpacity: 'Opacidad del wireframe.',
   btnGame: 'Un auto recorre la pista solo. Tercera o primera persona, velocidad ajustable; la cámara sigue curvas, pendientes y peralte.',

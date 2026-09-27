@@ -6,6 +6,7 @@ import { buildRivers } from './rivers.js';
 import { buildTrackMesh, coveredRanges, terrainTint, buildTerrain, buildTrees, buildHills, buildStartGate, buildGrass, makeGround, bridgePillars, suspPillars, buildTriggers } from './scene.js';
 import { pillarGeometry, torchGeometry } from './tunnels.js';
 import { buildEdgeMeshes } from './edges.js';
+import { buildCollisionMeshes } from './collision.js';
 import { assetObject, builtinAsset, mergedAssetMeshes } from './assets.js';
 import { decoSetItems, treeModelItems, grassModelItems } from './deco.js';
 import { buildShadows, shadowCasters } from './shadows.js';
@@ -447,6 +448,24 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
       }
     }
   }
+  // colisión: camino de tierra (plano) y costados (plano o volumen), material invisible «colision»; en los extras de glTF
+  // (userData) va {collision: 'dirt' | 'sides'} para que el motor los use como colisionadores y no los dibuje
+  let collisionTris = 0;
+  {
+    const C = buildCollisionMeshes(layout, elev, sp, { deck: textures.collisionDeck ?? 1 });
+    if (C.dirt.length || C.sides.length) {
+      const grp = new THREE.Group();
+      grp.name = 'colision';
+      root.add(grp);
+      const mat = new THREE.MeshBasicMaterial({ name: 'colision', color: 0xff00ff, transparent: true, opacity: 0, depthWrite: false });
+      for (const m of [...C.dirt, ...C.sides]) {
+        const o = mesh(m.name, m.positions, m.indices, null, mat);
+        o.userData = { collision: m.side ? 'sides' : 'dirt', ...(m.side ? { thickness: m.plane ? 0 : +(+sp.collThick).toFixed(3), oneSided: !!m.plane } : { oneSided: true }) };
+        grp.add(o);
+      }
+      collisionTris = C.tris;
+    }
+  }
   // hierba: una sola malla (planos cruzados) con textura recortada por transparencia
   let grassCount = 0;
   if (sp.grass) {
@@ -506,7 +525,7 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
       shadowCount = SH.count; shadowTris = SH.tris;
     }
   }
-  return { scene, root, info: { shadows: shadowCount, shadowTris, decoCount, trackTris: tm.indices.length / 3, terrainTris: terrain && sp.terrain ? terrain.tris : 0, hills: HS ? HS.hills.length : 0, hillTris: HS ? HS.tris : 0, tunnels: HS ? HS.tunnelGeo.length : 0, gateTris, trees: treeCount, treeTris: treeCount * 16, grass: grassCount, items: itemCount, triggers: triggerCount } };
+  return { scene, root, info: { shadows: shadowCount, shadowTris, decoCount, trackTris: tm.indices.length / 3, terrainTris: terrain && sp.terrain ? terrain.tris : 0, hills: HS ? HS.hills.length : 0, hillTris: HS ? HS.tris : 0, tunnels: HS ? HS.tunnelGeo.length : 0, gateTris, trees: treeCount, treeTris: treeCount * 16, grass: grassCount, items: itemCount, triggers: triggerCount, collisionTris } };
 }
 
 export async function exportGLB(...args) {
