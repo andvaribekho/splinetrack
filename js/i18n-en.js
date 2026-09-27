@@ -24,7 +24,7 @@ export default {
   "Sin textura propia usa la general (al final de esta sección).": "Without its own texture it uses the general one (at the end of this section).",
   "Sin textura propia usa la general (al final de esta sección); la tapa y la cara exterior, si no tienen, usan la de la cara interior.": "Without its own texture it uses the general one (at the end of this section); the top and the outer face, if they have none, use the inner face's.",
   "Repetición y ajuste de la textura propios de este tramo (si no, los generales del final de esta sección)": "This section's own texture repetition and fit (otherwise, the general ones at the end of this section)",
-  "Repetición propia": "Own repetition",
+  "Ajustes de mapeado de textura": "Texture mapping settings",
   "0 %: la textura en metros exactos (nunca se deforma; el borde de arriba la corta donde caiga). 100 %: la textura termina justo en el borde de arriba (se estira donde la pared cambia de alto)": "0 %: the texture in exact meters (never distorts; the top edge cuts it wherever it falls). 100 %: the texture ends exactly at the top edge (it stretches where the wall changes height)",
   "Cambia apenas el largo de cada repetición para que en el tramo entre un número entero (sin corte en los extremos)": "Slightly changes the length of each repetition so a whole number fits in the section (no cut at the ends)",
   "Ancho de la pared lisa (su tapa)": "Width of the smooth wall (its top)",

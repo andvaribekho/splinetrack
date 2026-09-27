@@ -1,6 +1,6 @@
 # Track Spline Generator
 
-**Versión 0.74** (se muestra en la barra superior, junto al nombre, y se guarda en cada proyecto como `appVersion`).
+**Versión 0.75** (se muestra en la barra superior, junto al nombre, y se guarda en cada proyecto como `appVersion`).
 
 Aplicación local con interfaz web que convierte un layout 2D de pista (minimapa o trazo a mano) en un spline 3D. Los cruces del layout se resuelven como pasos sobre/bajo nivel. El resto de la pista recibe colinas suaves controladas por un slider. Se exporta como curvas para **Blender** y **3ds Max**, donde se genera la geometría.
 
@@ -15,6 +15,8 @@ Aplicación local con interfaz web que convierte un layout 2D de pista (minimapa
 
 
 **Pinceles del terreno (0.52):** *Pintar subdivisión* tiene *Aumentar subd.* (por defecto: la pincelada tiene (n + 1)² veces más polígonos) o *Disminuir subd.* (la pincelada tiene (n + 1)² veces menos: el terreno queda más simple en esa zona); también vale para la subdivisión de un cerro seleccionado. *Esculpir relieve* tiene los botones *Elevar / hundir* (clic izquierdo eleva, derecho hunde) y **Suavizar**: el pincel no eleva ni hunde, reparte el relieve esculpido bajo él (baja las cimas y rellena los bordes, conservando el volumen); la *Fuerza* marca cuánto suaviza cada toque. Suaviza el relieve esculpido, no el terreno natural.
+**Novedades 0.75:** en la tarjeta del tramo socavado, **Repetición propia** pasa a llamarse **Ajustes de mapeado de textura**.
+
 **Novedades 0.74:** **paredes naturales sin cuñas de pasto:** el terreno se separaba en roca y pasto mirando solo el centro de cada triángulo, así que los triángulos grandes que bajan del borde de la zanja al pie quedaban de pasto y se veían como cuñas verdes dentro de la pared. Ahora un triángulo es roca si cualquiera de sus vértices está dentro de la zanja (donde la roca queda bajo el suelo natural): toda la cara de la pared, y la franja de piso junto al camino, es siempre material de roca (con sus UV de pared). Una fila de puntos justo afuera del borde de arriba deja el límite entre roca y pasto en una línea limpia.
 
 **Novedades 0.73:** el contador de triángulos de la vista 3D muestra la **colisión** en una línea aparte, en celeste (no se suma al total). El check **Colisiones** (mostrar u ocultar la colisión en la vista 3D) pasó a la barra de la vista 3D, junto a **Triggers**. Los checks de la colisión se llaman **Camino de tierra** y **Paredes**. En la barra del **perfil de elevación** hay un atajo **Automático / Directo** (automático por defecto), sincronizado con el del panel «Elevación».

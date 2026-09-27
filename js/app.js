@@ -3291,7 +3291,7 @@ function refreshBridgeList() {
         <h4 class="mini">${b.walls === 'nat' ? 'Textura de la roca' : 'Texturas de las paredes'}</h4>
         ${b.walls === 'nat' ? texRow('wallNat', 'Como la general') : `<div class="small">Cara interior</div>${texRow('wallArt', 'Como la general')}<div class="small">Tapa</div>${texRow('wallArtTop', 'Como la general')}<div class="small">Cara exterior</div>${texRow('wallArtOut', 'Como la general')}`}
         <div class="meta">Sin textura propia usa la general (al final de esta sección)${b.walls === 'nat' ? '' : '; la tapa y la cara exterior, si no tienen, usan la de la cara interior'}.</div>
-        <label class="check small" title="Repetición y ajuste de la textura propios de este tramo (si no, los generales del final de esta sección)"><input type="checkbox" class="buvOwn"${b.uvOwn ? ' checked' : ''}> Repetición propia</label>
+        <label class="check small" title="Repetición y ajuste de la textura propios de este tramo (si no, los generales del final de esta sección)"><input type="checkbox" class="buvOwn"${b.uvOwn ? ' checked' : ''}> Ajustes de mapeado de textura</label>
         <div class="buvBox"${b.uvOwn ? '' : ' hidden'}>
           <div class="field"><label>Repetición a lo largo (X) <span class="val"><input type="number" class="buvX" min="0.1" step="0.5" style="width:56px" value="${uvT.x}"> m</span></label></div>
           <div class="field"><label>Repetición en la altura (Y) <span class="val"><input type="number" class="buvY" min="0.1" step="0.5" style="width:56px" value="${uvT.y}"> m</span></label></div>
