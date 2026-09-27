@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Track Spline Generator v0.79</title>
+  <title>Track Spline Generator v0.80</title>
   <link rel="stylesheet" href="styles.css">
   <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.79</span></div>
+    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.80</span></div>
     <label class="proj-name-wrap" title="Nombre del proyecto: se usa al guardar (<nombre>.tsg.json) y en los autoguardados (<nombre>_auto_…)"><input id="projectName" class="proj-name" value="pista" spellcheck="false" maxlength="80"><span class="small muted" id="autosaveState"></span></label>
     <div class="top-actions">
       <button id="btnNew" title="Empezar de cero">Nuevo</button>
@@ -330,6 +330,43 @@
         <div class="field"><label>Texto del cartel</label><input type="text" id="startText" maxlength="24" style="width:100%"></div>
         <div class="field"><label>Altura libre <span class="val" id="startGateHeightVal"></span></label><input type="range" id="startGateHeight" min="4" max="15" step="0.5"></div>
         <p class="hint">Se ubica en la línea de meta de la ruta principal (botón «Mover la meta…» y luego clic sobre la pista en el mapa). Se exporta en el .glb con el pivote en la base, al centro de la calzada.</p>
+      </section>
+
+      <section class="panel" data-panel="signs">
+        <h2>Señalética de curvas</h2>
+        <p class="hint">Carteles antes de las curvas de la ruta principal, según el sentido de marcha (si lo inviertes, se rehacen): <b>curva a la derecha</b>, <b>a la izquierda</b>, <b>rotonda</b> (una curva que gira mucho: horquilla o rizo) y <b>camino zigzagueante</b> (curvas alternadas seguidas). Cada cartel son 2 planos, el poste y el cartel, y cada tipo tiene su textura (recortada por la transparencia). Se exportan en el grupo <code>senaletica</code>: <code>senal_curva_der</code>, <code>senal_curva_izq</code>, <code>senal_rotonda</code>, <code>senal_zigzag</code> y sus postes (<code>_postes</code>).</p>
+        <label class="check"><input type="checkbox" id="signs"> Carteles en las curvas</label>
+        <div id="signBox">
+        <h3 class="subhead">Qué es una curva</h3>
+        <div class="field" title="Solo llevan cartel las curvas más cerradas que este radio"><label>Radio menor a <span class="val"><input type="number" id="signRadiusNum" min="10" max="500" step="1" style="width:58px"> m</span></label><input type="range" id="signRadius" min="10" max="300" step="1"></div>
+        <div class="field" title="Una curva que gira menos (aunque sea cerrada) no lleva cartel"><label>Giro mínimo <span class="val"><input type="number" id="signMinTurnNum" min="5" max="180" step="1" style="width:58px"> °</span></label><input type="range" id="signMinTurn" min="5" max="180" step="1"></div>
+        <div class="field" title="Curvas alternadas (derecha–izquierda…) más cerca que esto forman un camino zigzagueante: un solo grupo de carteles antes de la primera"><label>Zigzag: curvas alternadas a menos de <span class="val"><input type="number" id="signZigGapNum" min="0" max="300" step="1" style="width:58px"> m</span></label><input type="range" id="signZigGap" min="0" max="150" step="1"></div>
+        <div class="field" title="Una curva que gira esto o más (horquilla, rizo) lleva el cartel de rotonda"><label>Rotonda: giro desde <span class="val"><input type="number" id="signRoundTurnNum" min="90" max="720" step="5" style="width:58px"> °</span></label><input type="range" id="signRoundTurn" min="90" max="360" step="5"></div>
+        <h3 class="subhead">Colocación</h3>
+        <div class="field" title="Desde la entrada de la curva hacia atrás hasta el primer cartel"><label>Distancia antes de la curva <span class="val"><input type="number" id="signDistNum" min="0" max="500" step="1" style="width:58px"> m</span></label><input type="range" id="signDist" min="0" max="200" step="1"></div>
+        <div class="field"><label>Cantidad por curva <span class="val"><input type="number" id="signCountNum" min="1" max="20" step="1" style="width:58px"> </span></label><input type="range" id="signCount" min="1" max="10" step="1"></div>
+        <div class="field"><label>Separación entre carteles <span class="val"><input type="number" id="signSepNum" min="0.5" max="200" step="0.5" style="width:58px"> m</span></label><input type="range" id="signSep" min="0.5" max="60" step="0.5"></div>
+        <div class="field"><label>Lado</label><select id="signSide" title="Según el sentido de marcha. Automático: por fuera de la curva (el conductor lo tiene de frente al llegar)"><option value="auto">Automático (por fuera de la curva)</option><option value="right">Derecha</option><option value="left">Izquierda</option><option value="both">Ambos lados</option></select></div>
+        <div class="field" title="Más allá del camino de tierra y la barrera"><label>Separación del borde <span class="val"><input type="number" id="signOffsetNum" min="0" max="20" step="0.1" style="width:58px"> m</span></label><input type="range" id="signOffset" min="0" max="10" step="0.1"></div>
+        <div class="field" title="Por defecto cada cartel mira al auto que llega; esto lo gira a mano (positivo: antihorario visto desde arriba)"><label>Giro <span class="val"><input type="number" id="signYawNum" min="-180" max="180" step="1" style="width:58px"> °</span></label><input type="range" id="signYaw" min="-180" max="180" step="1"></div>
+        <div class="field" title="Altura del centro del cartel sobre el suelo"><label>Altura <span class="val"><input type="number" id="signHeightNum" min="0.3" max="10" step="0.05" style="width:58px"> m</span></label><input type="range" id="signHeight" min="0.3" max="6" step="0.05"></div>
+        <div class="field" title="Ancho y alto del cartel"><label>Tamaño <span class="val"><input type="number" id="signSizeNum" min="0.1" max="6" step="0.05" style="width:58px"> m</span></label><input type="range" id="signSize" min="0.1" max="3" step="0.05"></div>
+        <h3 class="subhead">Texturas</h3>
+        <div class="row gap"><span class="small" style="min-width:86px">Curva derecha</span><button id="signTexRightBtn">Cargar textura…</button><button id="signTexRightRemove" disabled>Por defecto</button><img id="signTexRightThumb" class="thumb checker" alt=""></div>
+        <input id="signTexRightFile" type="file" accept="image/*" hidden>
+        <div class="row gap" style="margin-top:6px"><span class="small" style="min-width:86px">Curva izquierda</span><button id="signTexLeftBtn">Cargar textura…</button><button id="signTexLeftRemove" disabled>Por defecto</button><img id="signTexLeftThumb" class="thumb checker" alt=""></div>
+        <input id="signTexLeftFile" type="file" accept="image/*" hidden>
+        <div class="row gap" style="margin-top:6px"><span class="small" style="min-width:86px">Rotonda</span><button id="signTexRoundBtn">Cargar textura…</button><button id="signTexRoundRemove" disabled>Por defecto</button><img id="signTexRoundThumb" class="thumb checker" alt=""></div>
+        <input id="signTexRoundFile" type="file" accept="image/*" hidden>
+        <div class="row gap" style="margin-top:6px"><span class="small" style="min-width:86px">Zigzag</span><button id="signTexZigzagBtn">Cargar textura…</button><button id="signTexZigzagRemove" disabled>Por defecto</button><img id="signTexZigzagThumb" class="thumb checker" alt=""></div>
+        <input id="signTexZigzagFile" type="file" accept="image/*" hidden>
+        <div class="row gap" style="margin-top:6px"><span class="small" style="min-width:86px">Poste</span><button id="signTexPostBtn">Cargar textura…</button><button id="signTexPostRemove" disabled>Por defecto</button><img id="signTexPostThumb" class="thumb checker" alt=""></div>
+        <input id="signTexPostFile" type="file" accept="image/*" hidden>
+        <h3 class="subhead">Curvas detectadas <span class="badge" id="signCurveCount">0</span></h3>
+        <p class="hint">En cada una puedes dejar el tipo automático o forzarlo (se recuerda por su lugar en el mapa, aunque cambies el sentido o edites la pista).</p>
+        <div id="signCurveList" class="list"></div>
+        <div class="meta" id="signInfo"></div>
+        </div>
       </section>
 
       <section class="panel" data-panel="items">

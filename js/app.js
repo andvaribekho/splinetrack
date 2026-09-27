@@ -14,6 +14,7 @@ import { initHotkeys, comboOf } from './hotkeys.js';
 import { VERSION } from './version.js';
 import { ACTIONS, FIXED, bindingOf, isDefault, setBinding, resetAll as resetKeymap, matchAction, comboLabel } from './keymap.js';
 import { DEFAULT_SCENE, terrainCell, buildTrees, buildDecoInstances, bakeTreeList, bakeDecoList, CUT_ANGLES, rockOf, wallOf, wallUVOf, riverUVOf } from './scene.js';
+import { makeSignCanvas } from './signs.js';
 import { RIVER_ANGLES, riverWallsOf, riverField, strokesContain, strokeCircles, strokeValue, isLine } from './rivers.js';
 import { makeShadowCanvas, sunShadowDir } from './shadows.js';
 import { SCULPT_PRESETS, DEFAULT_SCULPT_CURVE, normCurve, curveEval, curveLUT, presetOf } from './sculptcurve.js';
@@ -101,6 +102,7 @@ const state = {
   tunWallTex: null, tunCeilTex: null, tunnelTexOwn: {}, // texturas de los túneles: generales (paredes / techo) y propias de cada túnel {uid: {wall, ceil}}
   riverWallTex: null, fallWallTex: null, riverBedTex: null, // (riverWallTex: roca de los ríos (paredes naturales); riverBedTex: lecho de los ríos socavados)
   riverArtTex: null, riverArtTopTex: null, riverArtOutTex: null, // paredes lisas de los ríos: cara interior, tapa y cara exterior (sin ellas, la de la cara)
+  signTexRight: null, signTexLeft: null, signTexRound: null, signTexZigzag: null, signTexPost: null, // señalética (null = de fábrica)
   riverTexs: {}, // texturas propias de cada río, por su id: {wallArt, wallArtTop, wallArtOut, wallNat}
   // texturas de las paredes socavadas de ríos y cascadas (null = roca por defecto)
   edgeMeshes: null, // última malla de bordes (para el mapa 2D y los clics)
@@ -174,6 +176,36 @@ function newRiver(kind, hill = null) {
   const id = state.rivers.reduce((m, rv) => Math.max(m, rv.id), 0) + 1;
   delete state.riverTexs[id]; // (de un río borrado con el mismo número)
   return { id, kind, hill, mode: sc.riverMode, depth: sc.riverDepth, walls: kind === 'fall' ? 'smooth' : sc.riverWalls === 'art' ? 'art' : 'nat', wallSubdiv: sc.riverWallSubdiv, strokes: [] };
+}
+const SIGN_NUM_KEYS = ['signRadius', 'signMinTurn', 'signZigGap', 'signRoundTurn', 'signDist', 'signCount', 'signSep', 'signOffset', 'signYaw', 'signHeight', 'signSize'];
+const SIGN_AUTO_TXT = { right: 'Automático (curva a la derecha)', left: 'Automático (curva a la izquierda)', round: 'Automático (rotonda)', zigzag: 'Automático (camino zigzagueante)' };
+const SIGN_TYPE_TXT = { right: 'curva a la derecha', left: 'curva a la izquierda', round: 'rotonda', zigzag: 'camino zigzagueante', none: 'sin cartel' };
+/** Lista de curvas detectadas (sección Señalética): tipo automático o forzado, recordado por el lugar del vértice. */
+function renderSignCurves(SG) {
+  const el = document.getElementById('signCurveList');
+  if (!el || draggingIn(el)) return;
+  const sc = state.scene, C = (SG && SG.curves) || [];
+  $('signCurveCount').textContent = C.length;
+  el.innerHTML = C.length ? '' : '<div class="tun-empty">No hay curvas con estos valores</div>';
+  const nBy = (i) => (SG.signs || []).filter((q) => q.curve === i).length;
+  for (const c of C) {
+    const d = document.createElement('div');
+    d.className = 'item sign-curve';
+    const val = c.forced || 'auto';
+    d.innerHTML = `<div class="head"><span><strong>Curva ${c.i + 1}</strong> <span class="muted small">${SIGN_TYPE_TXT[c.type]}</span></span><span class="small muted">${nBy(c.i)} cartel(es)</span></div>
+      <div class="meta"><span>s ${c.s0.toFixed(0)}–${c.s1.toFixed(0)} m · gira ${c.turn.toFixed(0)}° · radio mín. ${c.rmin.toFixed(0)} m</span>${c.parts > 1 ? `<span> · ${c.parts} curvas</span>` : ''}</div>
+      <div class="field"><label>Tipo</label><select class="scType" title="Automático: según la forma (y el sentido de marcha). Curva: a la derecha o a la izquierda según hacia dónde gira">${[['auto', SIGN_AUTO_TXT[c.auto]], ['curve', 'Curva (derecha o izquierda)'], ['round', 'Rotonda'], ['zigzag', 'Camino zigzagueante'], ['none', 'Sin cartel']].map(([k, t]) => `<option value="${k}"${val === k ? ' selected' : ''}>${t}</option>`).join('')}</select></div>`;
+    d.querySelector('.scType').addEventListener('change', (e) => {
+      pushUndo();
+      const ov = (sc.signOverrides || []).filter((o) => Math.hypot(o.x - c.x, o.y - c.y) >= Math.max(15, (c.s1 - c.s0) / 2));
+      if (e.target.value !== 'auto') ov.push({ x: +c.x.toFixed(2), y: +c.y.toFixed(2), type: e.target.value });
+      sc.signOverrides = ov;
+      sceneChanged();
+    });
+    el.appendChild(d);
+  }
+  const info = document.getElementById('signInfo');
+  if (info) info.textContent = SG ? `${SG.signs.length} cartel(es) · ${SG.tris} triángulos` : '';
 }
 /** Un toque de río en metros (círculo, línea o suavizado). */
 function riverStrokeWorld(L, q) {
@@ -2325,6 +2357,17 @@ const app = {
   },
   /** Textura de las paredes ('wall') o del techo ('ceil') de un túnel: la propia (uid) o la general; null = color. */
   tunnelTexCanvas(uid, kind) { const own = uid && state.tunnelTexOwn[uid]; return (own && own[kind]) || (kind === 'wall' ? state.tunWallTex : state.tunCeilTex) || null; },
+  /** Textura de la señalética: la cargada o la de fábrica. type: right | left | round | zigzag | post. */
+  signTexCanvas(type) {
+    const k = { right: 'signTexRight', left: 'signTexLeft', round: 'signTexRound', zigzag: 'signTexZigzag', post: 'signTexPost' }[type];
+    if (state[k]) return state[k];
+    const c = this._signDef || (this._signDef = {});
+    return c[type] || (c[type] = makeSignCanvas(type));
+  },
+  /** Tras armar la señalética: la lista de curvas detectadas (con su tipo automático o forzado). */
+  onSignsInfo(SG) { renderSignCurves(SG); editor.draw(); },
+  /** Carteles en coordenadas del lienzo (para el mapa 2D). */
+  signMarkersL() { const L = state.layout, SG = preview.signData; if (!L || !SG || !state.scene.signs) return []; return SG.signs.map((q) => { const [x, y] = L.toLayout(q.x, q.y); return { x, y, type: q.type }; }); },
   wallTexCanvas(kind) { return (kind === 'fall' ? state.fallWallTex : state.riverWallTex) || null; },
   /** Textura propia de las paredes de un río (k: 'wallArt' | 'wallArtTop' | 'wallArtOut' | 'wallNat') o null. */
   riverOwnTex(id, k) { const t = id != null ? state.riverTexs[id] : null; return (t && t[k]) || null; },
@@ -5599,6 +5642,7 @@ function projectData() {
     riverWallTex: state.riverWallTex ? state.riverWallTex.toDataURL('image/png') : null,
     riverBedTex: state.riverBedTex ? state.riverBedTex.toDataURL('image/png') : null,
     riverArtTex: state.riverArtTex ? state.riverArtTex.toDataURL('image/png') : null,
+    ...Object.fromEntries(['signTexRight', 'signTexLeft', 'signTexRound', 'signTexZigzag', 'signTexPost'].map((k) => [k, state[k] ? state[k].toDataURL('image/png') : null])),
     riverArtTopTex: state.riverArtTopTex ? state.riverArtTopTex.toDataURL('image/png') : null,
     riverArtOutTex: state.riverArtOutTex ? state.riverArtOutTex.toDataURL('image/png') : null,
     riverTexs: Object.fromEntries(Object.entries(state.riverTexs).filter(([id]) => state.rivers.some((rv) => String(rv.id) === String(id))).map(([id, t]) => [id, Object.fromEntries(Object.entries(t).map(([k, cv]) => [k, cv ? cv.toDataURL('image/png') : null]))])),
@@ -5822,6 +5866,7 @@ async function openProject(text, fileName = null) {
   state.dirtTex = await toCanvas(d.dirtTex);
   state.riverWallTex = await toCanvas(d.riverWallTex);
   state.riverBedTex = await toCanvas(d.riverBedTex);
+  for (const k of ['signTexRight', 'signTexLeft', 'signTexRound', 'signTexZigzag', 'signTexPost']) state[k] = await toCanvas(d[k]);
   state.riverArtTex = await toCanvas(d.riverArtTex); state.riverArtTopTex = await toCanvas(d.riverArtTopTex); state.riverArtOutTex = await toCanvas(d.riverArtOutTex);
   state.riverTexs = {};
   for (const [id, t] of Object.entries(d.riverTexs || {})) state.riverTexs[id] = { wallArt: await toCanvas(t.wallArt), wallArtTop: await toCanvas(t.wallArtTop), wallArtOut: await toCanvas(t.wallArtOut), wallNat: await toCanvas(t.wallNat) };
@@ -6131,6 +6176,12 @@ function syncSceneControls() {
   for (const [k, id] of [['cutArtTex', 'cutArtTex'], ['cutArtTopTex', 'cutArtTopTex'], ['cutArtOutTex', 'cutArtOutTex'], ['cutNatTex', 'cutNatTex'], ['riverWallTex', 'riverWall'], ['riverArtTex', 'riverArt'], ['riverArtTopTex', 'riverArtTop'], ['riverArtOutTex', 'riverArtOut'], ['fallWallTex', 'fallWall'], ['riverBedTex', 'riverBed'], ['tunWallTex', 'tunWallTex'], ['tunCeilTex', 'tunCeilTex']]) { const img = $(id + 'Thumb'); img.hidden = !state[k]; if (state[k]) img.src = thumbURL(state[k]); $(id + 'Remove').disabled = !state[k]; }
   if ($('tunnelTexTile')) { $('tunnelTexTile').value = sc.tunnelTexTile ?? 6; $('tunnelTexTileVal').textContent = `${sc.tunnelTexTile ?? 6} m`; }
   set('riverWallTile', sc.riverWallTile ?? 4); set('riverWallTileNum', sc.riverWallTile ?? 4);
+  // señalética
+  if ($('signs')) {
+    $('signs').checked = !!sc.signs; $('signBox').classList.toggle('disabled', !sc.signs); set('signSide', sc.signSide || 'auto');
+    for (const k of SIGN_NUM_KEYS) { set(k, sc[k] ?? DEFAULT_SCENE[k]); set(k + 'Num', sc[k] ?? DEFAULT_SCENE[k]); }
+    for (const [id, type] of [['signTexRight', 'right'], ['signTexLeft', 'left'], ['signTexRound', 'round'], ['signTexZigzag', 'zigzag'], ['signTexPost', 'post']]) { const img = $(id + 'Thumb'); img.src = thumbURL(app.signTexCanvas(type)); img.classList.toggle('inherited', !state[id]); $(id + 'Remove').disabled = !state[id]; }
+  }
   { const t0 = sc.riverWallTile ?? 4, tx = sc.riverWallTileX ?? t0, ty = sc.riverWallTileY ?? t0; set('riverWallTileX', Math.min(30, tx)); set('riverWallTileXNum', tx); set('riverWallTileY', Math.min(30, ty)); set('riverWallTileYNum', ty); }
   set('riverWallFit', sc.riverWallFit ?? 0); $('riverWallFitVal').textContent = `${Math.round(sc.riverWallFit ?? 0)} %`; $('riverWallSnap').checked = !!sc.riverWallSnap;
   { const t0 = sc.cutWallTile ?? 4, tx = sc.cutWallTileX ?? t0, ty = sc.cutWallTileY ?? t0; set('cutWallTileX', Math.min(30, tx)); set('cutWallTileXNum', tx); set('cutWallTileY', Math.min(30, ty)); set('cutWallTileYNum', ty); }
@@ -7342,6 +7393,15 @@ function bindSceneControls() {
   pair('riverWallTile', 'riverWallTileNum', 'riverWallTile', 0.5, false); // paredes socavadas de las cascadas
   pair('riverWallTileX', 'riverWallTileXNum', 'riverWallTileX', 0.1, false); // paredes de los ríos: repetición a lo largo
   pair('riverWallTileY', 'riverWallTileYNum', 'riverWallTileY', 0.1, false); // y en la altura
+  // señalética de curvas
+  $('signs').addEventListener('change', (e) => { sc.signs = e.target.checked; syncSceneControls(); sceneChanged(); });
+  $('signSide').addEventListener('change', (e) => { sc.signSide = e.target.value; sceneChanged(); });
+  for (const k of SIGN_NUM_KEYS) pair(k, k + 'Num', k, k === 'signYaw' ? -180 : 0, k === 'signCount');
+  for (const [id, type] of [['signTexRight', 'right'], ['signTexLeft', 'left'], ['signTexRound', 'round'], ['signTexZigzag', 'zigzag'], ['signTexPost', 'post']]) {
+    $(id + 'Btn').addEventListener('click', () => $(id + 'File').click());
+    $(id + 'File').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) loadTexture(f, id); });
+    $(id + 'Remove').addEventListener('click', () => { state[id] = null; syncSceneControls(); sceneChanged(); });
+  }
   $('riverWallFit').addEventListener('input', (e) => { $('riverWallFitVal').textContent = `${Math.round(e.target.value)} %`; });
   $('riverWallFit').addEventListener('change', (e) => { sc.riverWallFit = Math.round(parseFloat(e.target.value)); sceneChanged(); });
   $('riverWallSnap').addEventListener('change', (e) => { sc.riverWallSnap = e.target.checked; sceneChanged(); });
@@ -7423,9 +7483,9 @@ function bindSceneControls() {
     const { exportGLB } = await import('./export-glb.js');
     toast('Generando escena .glb…');
     try {
-      const { buffer, info } = await exportGLB(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, cutWallFor: (i, kind, part) => app.cutWallOwnTex(i, kind, part), cutArtTop: state.cutArtTopTex, cutArtOut: state.cutArtOutTex, collisionDeck: state.elev.deck ?? 1, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, riverArt: state.riverArtTex, riverArtTop: state.riverArtTopTex, riverArtOut: state.riverArtOutTex, riverWallFor: (id, kind, part) => app.riverWallOwnTex(id, kind, part), fallWall: state.fallWallTex, riverBed: state.riverBedTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas(), triggers: app.triggersWorld(), tunnelTex: (uid, kind) => app.tunnelTexCanvas(uid, kind), assetById: (id) => state.assets.find((a) => a.id === id) || null }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
+      const { buffer, info } = await exportGLB(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, cutWallFor: (i, kind, part) => app.cutWallOwnTex(i, kind, part), cutArtTop: state.cutArtTopTex, cutArtOut: state.cutArtOutTex, collisionDeck: state.elev.deck ?? 1, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, riverArt: state.riverArtTex, riverArtTop: state.riverArtTopTex, riverArtOut: state.riverArtOutTex, riverWallFor: (id, kind, part) => app.riverWallOwnTex(id, kind, part), signTex: (t) => app.signTexCanvas(t), fallWall: state.fallWallTex, riverBed: state.riverBedTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas(), triggers: app.triggersWorld(), tunnelTex: (uid, kind) => app.tunnelTexCanvas(uid, kind), assetById: (id) => state.assets.find((a) => a.id === id) || null }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
       download('track_scene.glb', buffer, 'model/gltf-binary');
-      toast(`Escena exportada: pista ${info.trackTris.toLocaleString('es')} triángulos${info.terrainTris ? `, terreno ${info.terrainTris.toLocaleString('es')}` : ''}${info.hills ? `, ${info.hills} cerro(s)` : ''}${info.tunnels ? `, ${info.tunnels} túnel(es)` : ''}${info.gateTris ? ', pórtico de salida' : ''}${info.items ? `, ${info.items} elementos de pista` : ''}${info.trees ? `, ${info.trees} árboles` : ''}. Todo como objetos separados.`);
+      toast(`Escena exportada: pista ${info.trackTris.toLocaleString('es')} triángulos${info.terrainTris ? `, terreno ${info.terrainTris.toLocaleString('es')}` : ''}${info.hills ? `, ${info.hills} cerro(s)` : ''}${info.tunnels ? `, ${info.tunnels} túnel(es)` : ''}${info.gateTris ? ', pórtico de salida' : ''}${info.items ? `, ${info.items} elementos de pista` : ''}${info.signs ? `, ${info.signs} carteles` : ''}${info.trees ? `, ${info.trees} árboles` : ''}. Todo como objetos separados.`);
     } catch (err) { console.error(err); toastErr('No se pudo exportar la escena: ' + err.message); }
   };
   $('btnExportGLB').addEventListener('click', glb);
@@ -7437,7 +7497,7 @@ function bindSceneControls() {
     const { exportFBX } = await import('./export-fbx.js');
     toast('Generando escena .fbx…');
     try {
-      const { buffer, info } = await exportFBX(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, cutWallFor: (i, kind, part) => app.cutWallOwnTex(i, kind, part), cutArtTop: state.cutArtTopTex, cutArtOut: state.cutArtOutTex, collisionDeck: state.elev.deck ?? 1, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, riverArt: state.riverArtTex, riverArtTop: state.riverArtTopTex, riverArtOut: state.riverArtOutTex, riverWallFor: (id, kind, part) => app.riverWallOwnTex(id, kind, part), fallWall: state.fallWallTex, riverBed: state.riverBedTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas(), triggers: app.triggersWorld(), tunnelTex: (uid, kind) => app.tunnelTexCanvas(uid, kind), assetById: (id) => state.assets.find((a) => a.id === id) || null }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
+      const { buffer, info } = await exportFBX(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, cutWallFor: (i, kind, part) => app.cutWallOwnTex(i, kind, part), cutArtTop: state.cutArtTopTex, cutArtOut: state.cutArtOutTex, collisionDeck: state.elev.deck ?? 1, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, riverArt: state.riverArtTex, riverArtTop: state.riverArtTopTex, riverArtOut: state.riverArtOutTex, riverWallFor: (id, kind, part) => app.riverWallOwnTex(id, kind, part), signTex: (t) => app.signTexCanvas(t), fallWall: state.fallWallTex, riverBed: state.riverBedTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas(), triggers: app.triggersWorld(), tunnelTex: (uid, kind) => app.tunnelTexCanvas(uid, kind), assetById: (id) => state.assets.find((a) => a.id === id) || null }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
       download('track_scene.fbx', buffer, 'application/octet-stream');
       toast(`FBX exportado (${(buffer.length / 1048576).toFixed(1)} MB): pista${info.terrainTris ? ', terreno' : ''}${info.hills ? `, ${info.hills} cerro(s)` : ''}${info.tunnels ? `, ${info.tunnels} túnel(es)` : ''}${info.gateTris ? ', pórtico' : ''}${info.items ? `, ${info.items} elementos de pista` : ''}${info.trees ? `, ${info.trees} árboles` : ''}${info.grass ? ', hierba' : ''}. Z arriba, en metros, con texturas incrustadas.`);
     } catch (err) { console.error(err); toastErr('No se pudo exportar el FBX: ' + err.message); }

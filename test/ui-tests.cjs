@@ -58,7 +58,7 @@ async function drag(x0, y0, x1, y1, steps = 3) { await page.mouse.move(x0, y0); 
 /** Nombres de los objetos de la escena exportada, agrupados por su padre. */
 const exportNames = () => ev(async () => {
   const t = window.__tsg, m = await import('/js/export-glb.js');
-  const { root } = await m.buildExportScene(t.state.layout, t.state.result, t.state.scene, { deco: { assetById: (id) => t.app.assetById(id), sets: t.state.decoSets, paintFor: (s) => t.app.decoPaintWorld(s) }, triggers: t.app.triggersWorld(), tunnelTex: (uid, k) => t.app.tunnelTexCanvas(uid, k), assetById: (id) => t.app.assetById(id), cutWallFor: (i, k, p) => t.app.cutWallOwnTex(i, k, p), cutArtTop: t.state.cutArtTopTex, cutArtOut: t.state.cutArtOutTex, riverArt: t.state.riverArtTex, riverArtTop: t.state.riverArtTopTex, riverArtOut: t.state.riverArtOutTex, riverWallFor: (id, k, p) => t.app.riverWallOwnTex(id, k, p) }, t.app.terrainPaintWorld ? t.app.terrainPaintWorld() : null, t.app.hillsWorld(), null);
+  const { root } = await m.buildExportScene(t.state.layout, t.state.result, t.state.scene, { deco: { assetById: (id) => t.app.assetById(id), sets: t.state.decoSets, paintFor: (s) => t.app.decoPaintWorld(s) }, triggers: t.app.triggersWorld(), tunnelTex: (uid, k) => t.app.tunnelTexCanvas(uid, k), assetById: (id) => t.app.assetById(id), cutWallFor: (i, k, p) => t.app.cutWallOwnTex(i, k, p), cutArtTop: t.state.cutArtTopTex, cutArtOut: t.state.cutArtOutTex, riverArt: t.state.riverArtTex, riverArtTop: t.state.riverArtTopTex, riverArtOut: t.state.riverArtOutTex, riverWallFor: (id, k, p) => t.app.riverWallOwnTex(id, k, p), signTex: (ty) => t.app.signTexCanvas(ty) }, t.app.terrainPaintWorld ? t.app.terrainPaintWorld() : null, t.app.hillsWorld(), null);
   const out = {};
   root.traverse((o) => { if (o !== root && o.name && o.parent) (out[o.parent.name || '?'] = out[o.parent.name || '?'] || []).push(o.name); });
   return out;
@@ -1356,6 +1356,48 @@ test('ríos: modo Línea (recta, encadenada, extremos rectos), Suavizar y Estabi
   // detalle del contorno en la tarjeta
   const hasDet = await ev(() => !!document.querySelector('#riverList .item .rdet'));
   expect(hasDet, 'detalle del contorno en la tarjeta');
+});
+
+test('señalética de curvas: carteles por fuera de la curva, lista de curvas con tipo forzado, textura propia, sentido invertido y exportación', async () => {
+  await reset();
+  await page.click('#btnGenTerrain');
+  await idle();
+  const setv = (id, v) => ev(([id, v]) => { const el = document.getElementById(id); if (el.type === 'checkbox') el.checked = v; else el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }, [id, v]);
+  await setv('signs', true);
+  await idle();
+  const info = () => ev(() => { const t = window.__tsg, SG = t.preview.signData; return SG ? { n: SG.signs.length, types: SG.curves.map((c) => c.type), sides: [...new Set(SG.signs.map((q) => q.side))], meshes: t.preview.signGroup ? t.preview.signGroup.children.map((m) => `${m.userData.sign}:${m.userData.signPart}`) : [], rows: document.querySelectorAll('#signCurveList .sign-curve').length, stats: document.querySelector('.stats, #stats3d') ? document.querySelector('.stats, #stats3d').textContent : '' } : null; });
+  const a = await info();
+  expect(a && a.n >= 2 && a.types.every((x) => x === 'right') && a.sides.join() === 'left' && a.meshes.includes('right:sign') && a.meshes.includes('right:post') && a.rows === a.types.length, `carteles: ${JSON.stringify(a)}`);
+  // cantidad por curva
+  await setv('signCountNum', 3);
+  await idle();
+  const b = await info();
+  expect(b.n === a.n * 3, `cantidad por curva: ${a.n} → ${b.n}`);
+  // tipo forzado en la lista: la primera curva sin cartel
+  await ev(() => { const el = document.querySelector('#signCurveList .sign-curve .scType'); el.value = 'none'; el.dispatchEvent(new Event('change', { bubbles: true })); });
+  await idle();
+  const c = await info();
+  const ov = await ev(() => window.__tsg.state.scene.signOverrides.length);
+  expect(c.n === b.n - 3 && ov === 1 && c.types[0] === 'none', `sin cartel: ${c.n} carteles, ${ov} tipo(s) forzado(s), ${c.types}`);
+  // sentido invertido: curvas a la izquierda, carteles a la derecha (y el tipo forzado sigue en su lugar)
+  await setv('reverse', true);
+  await idle();
+  const d = await info();
+  expect(d.types.filter((x) => x !== 'none').every((x) => x === 'left') && d.types.includes('none') && d.sides.join() === 'right', `sentido invertido: ${JSON.stringify(d)}`);
+  await setv('reverse', false);
+  await idle();
+  // textura propia de la curva a la derecha: el material del cartel la usa
+  const same = await ev(async () => {
+    const t = window.__tsg, c = document.createElement('canvas'); c.width = c.height = 8; c.getContext('2d').fillRect(0, 0, 8, 8);
+    t.state.signTexRight = c; t.app.sceneChanged ? t.app.sceneChanged() : t.preview.update(false); await t.idle();
+    const m = t.preview.signGroup.children.find((o) => o.userData.sign === 'right' && o.userData.signPart === 'sign');
+    return !!(m && m.material.map && m.material.map.image === c);
+  });
+  expect(same, 'la textura propia de «curva a la derecha» va en su cartel');
+  const names = Object.values(await exportNames()).flat();
+  expect(names.includes('senaletica') || names.includes('senal_curva_der'), `exportación: ${names.filter((n) => /senal/.test(n))}`);
+  const ex = await exportNames();
+  expect(ex.senaletica && ex.senaletica.includes('senal_curva_der') && ex.senaletica.includes('senal_curva_der_postes'), `grupo senaletica: ${JSON.stringify(ex.senaletica)}`);
 });
 
 test('tarjetas: la primera vez que se abre una lista desplegable no se cierra (la tarjeta no se vuelve a dibujar)', async () => {

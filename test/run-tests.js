@@ -13,6 +13,7 @@ import { buildEdgeMeshes } from '../js/edges.js';
 import { buildCollisionMeshes } from '../js/collision.js';
 import { edgeExtents, dirtWidthAt, edgeParams, convexHull2, frameAt, hillFieldOne } from '../js/tunnels.js';
 import { buildRivers, riverField, riverWallsOf, strokesContain } from '../js/rivers.js';
+import { detectCurves, placeSigns, buildSigns } from '../js/signs.js';
 import { buildTriggers, sculptField, bakeTreeList, bakeDecoList, moveTree, treeConeVerts, vegPlace } from '../js/scene.js';
 import { treeModelItems, decoSetItems } from '../js/deco.js';
 import { buildShadows, shadowCasters, sunShadowDir } from '../js/shadows.js';
@@ -1895,6 +1896,58 @@ for (const [key, s] of Object.entries(SAMPLES)) {
   check(a47 && a53 && Math.abs(dist(a47, a53) - 0.06 * W0) < 0.05 && a07 && a0 && Math.abs(dist(a0, a07) - 0.07 * W0) < 0.05, `mantener líneas: franja central ${a47 && a53 ? dist(a47, a53).toFixed(2) : '?'} m (≈ ${(0.06 * W0).toFixed(2)}), borde ${a0 && a07 ? dist(a0, a07).toFixed(2) : '?'} m`);
   const Mn = buildTrackMesh(L, E, { transSubdiv: true, transDivs: [] });
   check(Mn.indices.length === M0.indices.length || Mn.rows[0] >= M0.rows[0], 'sin divisiones no cambia la calzada');
+}
+
+// 0.80: señalética de curvas: detección según el sentido de marcha, lado por fuera de la curva, cantidad, distancia y
+// separación, rotonda y zigzag, tipo forzado por lugar, sin carteles sobre otra calzada
+{
+  const mk = (name, rev = false) => { const p = SAMPLES[name].build(); p.reverse = rev; const L = buildLayout(p, { lapLength: 1000 }); return { L, E: computeElevation(L, { hills: 0.3 }) }; };
+  const sideOf = (L, E, q) => { const F = frameAt(L.routes[0], E.routes[0], q.s); return Math.sign((q.x - F.x) * -F.ty + (q.y - F.y) * F.tx); }; // +1 izquierda
+  const A = mk('oval'), B = mk('oval', true);
+  const PA = placeSigns(A.L, A.E, {}), PB = placeSigns(B.L, B.E, {});
+  const types = (P) => P.curves.map((c) => c.type).join(',');
+  check(PA.curves.length >= 2 && PA.curves.every((c) => c.type === 'right') && PB.curves.every((c) => c.type === 'left') && PA.signs.every((q) => sideOf(A.L, A.E, q) > 0) && PB.signs.every((q) => sideOf(B.L, B.E, q) < 0),
+    `señalética: óvalo ${types(PA)} con carteles a la izquierda (por fuera); en sentido contrario ${types(PB)} a la derecha`);
+  // cantidad, separación, distancia y lado
+  const P3 = placeSigns(A.L, A.E, { signCount: 3, signSep: 12, signDist: 30, signSide: 'both' });
+  const c0 = P3.curves[0], s0 = P3.signs.filter((q) => q.curve === 0 && q.side === 'left').map((q) => q.s).sort((a, b) => b - a);
+  const r0 = A.L.routes[0], wrapD = (a, b) => ((a - b) % r0.L + r0.L) % r0.L;
+  check(P3.signs.filter((q) => q.curve === 0).length === 6 && Math.abs(wrapD(c0.s0, s0[0]) - 30) < 0.6 && Math.abs(wrapD(s0[0], s0[1]) - 12) < 0.6 && Math.abs(wrapD(s0[1], s0[2]) - 12) < 0.6,
+    `señalética: 3 carteles por lado a 30 m de la curva, cada 12 m (${s0.map((v) => wrapD(c0.s0, v).toFixed(1)).join(', ')} m antes)`);
+  // mira al auto que llega; el giro manual lo rota
+  const q0 = PA.signs[0], F0 = frameAt(r0, A.E.routes[0], ((q0.s - 25) % r0.L + r0.L) % r0.L), tl = Math.hypot(F0.x - q0.x, F0.y - q0.y);
+  const face = (q0.nx * (F0.x - q0.x) + q0.ny * (F0.y - q0.y)) / tl;
+  const qY = placeSigns(A.L, A.E, { signYaw: 90 }).signs[0], rot = Math.atan2(q0.nx * qY.ny - q0.ny * qY.nx, q0.nx * qY.nx + q0.ny * qY.ny) * 180 / Math.PI;
+  check(face > 0.999 && Math.abs(rot - 90) < 0.5, `señalética: mira al auto que llega (${face.toFixed(3)}); giro manual ${rot.toFixed(1)}°`);
+  // umbral de radio y giro mínimo
+  const nTight = detectCurves(A.L, { signRadius: 15 }).length, nWide = detectCurves(A.L, { signRadius: 200 }).length, nTurn = detectCurves(A.L, { signMinTurn: 170 }).length;
+  check(nTight === 0 && nWide >= PA.curves.length && nTurn < PA.curves.length, `señalética: umbral de radio (15 m: ${nTight} curvas; 200 m: ${nWide}) y giro mínimo (170°: ${nTurn})`);
+  // rizo = rotonda; horquillas de la estrella con el umbral de rotonda más bajo también
+  const LP = mk('loop'), ST = mk('star');
+  check(detectCurves(LP.L, {}).some((c) => c.type === 'round') && detectCurves(ST.L, {}).every((c) => c.type !== 'round') && detectCurves(ST.L, { signRoundTurn: 150 }).every((c) => c.type === 'round'), 'señalética: el rizo lleva rotonda; las horquillas de la estrella, solo con el umbral de rotonda más bajo');
+  // zigzag: curvas alternadas seguidas (pista abierta con eses)
+  {
+    const pts = []; for (let x = 0; x <= 900; x += 5) pts.push([x, 200 + 30 * Math.sin((x - 300) / 22) * (x > 300 && x < 300 + 22 * Math.PI * 4 ? 1 : 0)]);
+    const L = buildLayout({ main: { pts, closed: false }, alts: [], start: null, reverse: false }, { lapLength: 1000 });
+    const E = computeElevation(L, { hills: 0 });
+    const C = detectCurves(L, {}), Cz = detectCurves(L, { signZigGap: 0 });
+    const P = placeSigns(L, E, {});
+    check(C.length >= 1 && C[0].type === 'zigzag' && C[0].parts >= 3 && Cz.length > C.length && P.signs.every((q) => q.type === 'zigzag' || C[q.curve].type !== 'zigzag'), `señalética: eses seguidas = camino zigzagueante (${C.map((c) => `${c.type}×${c.parts}`).join(', ')}; sin unir: ${Cz.length} curvas)`);
+  }
+  // tipo forzado por lugar: sirve también en sentido contrario
+  const cA = PA.curves[0];
+  const ovN = [{ x: cA.x, y: cA.y, type: 'none' }], ovR = [{ x: cA.x, y: cA.y, type: 'round' }];
+  const PN = placeSigns(A.L, A.E, { signOverrides: ovN }), PR = placeSigns(B.L, B.E, { signOverrides: ovR });
+  const cB = PR.curves.find((c) => Math.hypot(c.x - cA.x, c.y - cA.y) < 15);
+  check(!PN.signs.some((q) => q.curve === 0) && PN.curves[0].type === 'none' && cB && cB.type === 'round' && cB.forced === 'round', `señalética: tipo forzado (sin cartel; rotonda también en sentido contrario: ${cB && cB.type})`);
+  // ninguna sobre otra calzada (figura en 8, con cruce) y geometría: 2 planos por cartel, altura y tamaño
+  const F8 = mk('figure8'), P8 = placeSigns(F8.L, F8.E, { signSide: 'both', signCount: 4, signSep: 8 });
+  let onRoad = 0;
+  for (const q of P8.signs) for (const [k, r] of F8.L.routes.entries()) { const n = nearestOnSamples(r, q.x, q.y); if (n && n.d < r.w[n.i] / 2 + 0.5) onRoad++; }
+  const BS = buildSigns(A.L, A.E, { signHeight: 2.5, signSize: 1.2 });
+  const M = BS.byType.right, zs = []; for (let v = 0; v < M.sign.positions.length / 3; v++) zs.push(M.sign.positions[v * 3 + 2] - BS.signs[Math.floor(v / 4)].z);
+  check(P8.signs.length > 10 && onRoad === 0 && BS.tris === BS.signs.length * 4 && Math.abs(Math.max(...zs) - 3.1) < 1e-4 && Math.abs(Math.min(...zs) - 1.9) < 1e-4 && M.post.indices.length === M.sign.indices.length,
+    `señalética: ${P8.signs.length} carteles en la figura en 8, ${onRoad} sobre una calzada; 4 triángulos por cartel; cartel de 1,2 m centrado a 2,5 m`);
 }
 
 // 0.63: traducción al inglés. Cada texto de index.html tiene su traducción; los patrones conservan sus partes variables.

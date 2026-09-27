@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { GLTFExporter } from '../vendor/exporters/GLTFExporter.js';
 import { buildRivers, riverNames } from './rivers.js';
+import { buildSigns, SIGN_NAMES } from './signs.js';
 import { buildTrackMesh, coveredRanges, terrainTint, buildTerrain, buildTrees, buildHills, buildStartGate, buildGrass, makeGround, bridgePillars, suspPillars, buildTriggers } from './scene.js';
 import { pillarGeometry, torchGeometry } from './tunnels.js';
 import { buildEdgeMeshes } from './edges.js';
@@ -376,6 +377,26 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
   // árboles: una sola malla («single mesh») o un objeto por árbol, con el pivote en el centro de la base
   let treeCount = 0;
   const ground = makeGround(terrain, HS);
+  // señalética de curvas (0.80): grupo «senaletica», por tipo un objeto con los carteles y otro con sus postes
+  let signCount = 0;
+  if (sp.signs) {
+    const tun = HS ? HS.tunnels.map((t) => ({ k: t.k, s0: t.sMid - t.len / 2, s1: t.sMid + t.len / 2 })) : [];
+    const SG = buildSigns(layout, elev, sp, ground, tun);
+    if (SG.signs.length) {
+      const grp = new THREE.Group();
+      grp.name = 'senaletica';
+      root.add(grp);
+      const texOf = (t) => (textures.signTex ? textures.signTex(t) : null);
+      const mat = (name, cv, color) => { const t = tex(cv); return new THREE.MeshStandardMaterial({ name, map: t, color: t ? 0xffffff : color, alphaTest: 0.5, transparent: false, side: THREE.DoubleSide, roughness: 0.7, metalness: 0 }); };
+      const postMat = mat('poste_senal', texOf('post'), 0x9da1a8);
+      for (const [type, M] of Object.entries(SG.byType)) {
+        const nm = SIGN_NAMES[type];
+        grp.add(mesh(nm, M.sign.positions, M.sign.indices, M.sign.uvs, mat(nm, texOf(type), 0xf5c518)));
+        grp.add(mesh(`${nm}_postes`, M.post.positions, M.post.indices, M.post.uvs, postMat));
+      }
+      signCount = SG.signs.length;
+    }
+  }
   // pilares de los tramos suspendidos: suspendido_NN_pilar_MM, pivote en la base
   {
     const sp2 = sp.suspRanges && sp.suspRanges.length ? sp : null;
@@ -574,7 +595,7 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
       shadowCount = SH.count; shadowTris = SH.tris;
     }
   }
-  return { scene, root, info: { shadows: shadowCount, shadowTris, decoCount, trackTris: tm.indices.length / 3, terrainTris: terrain && sp.terrain ? terrain.tris : 0, hills: HS ? HS.hills.length : 0, hillTris: HS ? HS.tris : 0, tunnels: HS ? HS.tunnelGeo.length : 0, gateTris, trees: treeCount, treeTris: treeCount * 16, grass: grassCount, items: itemCount, triggers: triggerCount, collisionTris } };
+  return { scene, root, info: { shadows: shadowCount, shadowTris, decoCount, trackTris: tm.indices.length / 3, terrainTris: terrain && sp.terrain ? terrain.tris : 0, hills: HS ? HS.hills.length : 0, hillTris: HS ? HS.tris : 0, tunnels: HS ? HS.tunnelGeo.length : 0, gateTris, trees: treeCount, treeTris: treeCount * 16, grass: grassCount, items: itemCount, triggers: triggerCount, signs: signCount, collisionTris } };
 }
 
 export async function exportGLB(...args) {

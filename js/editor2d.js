@@ -778,6 +778,21 @@ export class Editor2D {
     ctx.restore();
   }
 
+  /** Señalética de curvas: un rombo amarillo por cartel (celeste la rotonda, naranjo el zigzag). */
+  drawSigns() {
+    const list = this.app.signMarkersL ? this.app.signMarkersL() : [];
+    if (!list.length) return;
+    const { ctx } = this;
+    ctx.save();
+    ctx.lineWidth = 1.2; ctx.strokeStyle = '#111';
+    for (const q of list) {
+      const [x, y] = this.toScreen(q.x, q.y), r = 5;
+      ctx.fillStyle = q.type === 'round' ? '#7fd3ff' : q.type === 'zigzag' ? '#ffa24a' : '#f5c518';
+      ctx.beginPath(); ctx.moveTo(x, y - r); ctx.lineTo(x + r, y); ctx.lineTo(x, y + r); ctx.lineTo(x - r, y); ctx.closePath(); ctx.fill(); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   /** Contornos cerrados rellenos (par-impar: los huecos quedan vacíos), en coordenadas del lienzo. */
   drawLoopsLayer(loops, color, alpha) {
     const { ctx } = this;
@@ -1325,6 +1340,7 @@ export class Editor2D {
     if (L && E) this.drawCaveItems(L);
     if (L && E) this.drawVegItems(L);
     if (L && E) this.drawTriggers(L);
+    if (L && E) this.drawSigns();
     if (L && st.selAlt != null) this.drawSelectedAlt(L);
     if (L) this.drawTramoDivisions(L);
     if (L && st.selBridge != null) this.drawSelectedBridge(L);

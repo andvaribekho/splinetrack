@@ -8,6 +8,7 @@ import { buildCollisionMeshes } from './collision.js';
 import { instancedGroup, instanceMatrix } from './assets.js';
 import { decoSetItems, treeModelItems, treeModelItem, grassModelItems } from './deco.js';
 import { buildShadows, shadowCasters, sunVector } from './shadows.js';
+import { buildSigns } from './signs.js';
 import { buildTrackMesh, trackRows, trackCols, coveredRanges, terrainTint, buildTerrain, buildTrees, buildHills, buildStartGate, buildGrass, makeGround, bridgePillars, suspPillars, pillarBlocked, moveTree, treeConeVerts, vegPlace, buildTriggers } from './scene.js';
 import { buildRivers } from './rivers.js';
 import { pillarGeometry, torchGeometry } from './tunnels.js';
@@ -375,8 +376,8 @@ export class Preview3D {
     const t = this.triCounts;
     const sp = this.app.state.scene;
     const tun = t.tunnels || 0, hills = t.hills || 0, gate = t.gate || 0, grass = sp.grass ? (t.grass || 0) : 0;
-    const edges = t.edges || 0, deco = t.deco || 0, rivers = t.rivers || 0, shadows = t.shadows || 0;
-    const total = t.track + (sp.terrain ? t.terrain : 0) + (sp.trees ? t.trees : 0) + tun + hills + gate + grass + edges + deco + rivers + shadows;
+    const edges = t.edges || 0, deco = t.deco || 0, rivers = t.rivers || 0, shadows = t.shadows || 0, signs = sp.signs ? t.signs || 0 : 0;
+    const total = t.track + (sp.terrain ? t.terrain : 0) + (sp.trees ? t.trees : 0) + tun + hills + gate + grass + edges + deco + rivers + shadows + signs;
     const ot = this.objTris || { hills: new Map(), tunnels: new Map() };
     const st = this.app.state;
     const nH = ot.hills.size, nT = ot.tunnels.size;
@@ -385,7 +386,7 @@ export class Preview3D {
     const selTxt = selObj ? `<div class="sel"><b>Seleccionado</b> · ${selObj.name}: ${f(selObj.tris)} triángulos</div>` : '';
     const cT = this.collData && this.app.state.scene.collision ? this.collData.tris : 0; // colisión: otra línea, en celeste
     const collTxt = cT ? `<div class="coll"><b>Colisión</b> · ${f(cT)} triángulos</div>` : '';
-    this.statsDiv.innerHTML = `<b>Triángulos</b> · pista ${f(t.track)}${edges ? ` · bordes ${f(edges)}` : ''}${sp.terrain ? ` · terreno ${f(t.terrain)}` : ''}${hills || tun ? ` · cerros + túneles ${f(hills + tun)} (${[hills ? `${nH} cerro${nH === 1 ? '' : 's'}: ${f(hills)}` : '', tun ? `${nT} túnel${nT === 1 ? '' : 'es'}: ${f(tun)}` : ''].filter(Boolean).join(' · ')})` : ''}${rivers ? ` · ríos y cascadas ${f(rivers)}` : ''}${sp.trees ? ` · árboles ${f(t.trees)}` : ''}${grass ? ` · hierba ${f(grass)}` : ''}${gate ? ` · pórtico ${f(gate)}` : ''}${t.items ? ` · elementos ${f(t.items)} (${this.itemCount})` : ''}${deco ? ` · decoración ${f(deco)}` : ''}${shadows ? ` · sombras ${f(shadows)}` : ''} · <b>total ${f(total + (t.items || 0))}</b>${selTxt}${collTxt}`;
+    this.statsDiv.innerHTML = `<b>Triángulos</b> · pista ${f(t.track)}${edges ? ` · bordes ${f(edges)}` : ''}${sp.terrain ? ` · terreno ${f(t.terrain)}` : ''}${hills || tun ? ` · cerros + túneles ${f(hills + tun)} (${[hills ? `${nH} cerro${nH === 1 ? '' : 's'}: ${f(hills)}` : '', tun ? `${nT} túnel${nT === 1 ? '' : 'es'}: ${f(tun)}` : ''].filter(Boolean).join(' · ')})` : ''}${rivers ? ` · ríos y cascadas ${f(rivers)}` : ''}${sp.trees ? ` · árboles ${f(t.trees)}` : ''}${grass ? ` · hierba ${f(grass)}` : ''}${gate ? ` · pórtico ${f(gate)}` : ''}${signs ? ` · señalética ${f(signs)}` : ''}${t.items ? ` · elementos ${f(t.items)} (${this.itemCount})` : ''}${deco ? ` · decoración ${f(deco)}` : ''}${shadows ? ` · sombras ${f(shadows)}` : ''} · <b>total ${f(total + (t.items || 0))}</b>${selTxt}${collTxt}`;
   }
 
   /** Wireframe superpuesto (color y opacidad elegibles) sobre pista, terreno y árboles. */
@@ -1031,6 +1032,7 @@ export class Preview3D {
     }
     const ground = makeGround(this.terrainData, this.hillData);
     this.groundCache = ground;
+    this.buildSignMeshes(ground, info); // señalética de curvas
     if (this.paintMode) this.refreshPaintOverlay();
     this.vegModels = { trees: null, grass: null };
     const hasAsset = (id) => !!(this.app.assetById && this.app.assetById(id));
@@ -1081,6 +1083,43 @@ export class Preview3D {
     this.applyWireframe();
     if (this.game && this.game.active) this.game.onSceneRebuilt();
     if (this.app.onSceneInfo) this.app.onSceneInfo(info);
+  }
+
+  /** Señalética de curvas: por tipo, los carteles (textura propia o de fábrica, recortada por su transparencia) y los postes. */
+  buildSignMeshes(ground, info) {
+    if (this.signGroup) { this.extras.remove(this.signGroup); this.signGroup.traverse((o) => { if (o.geometry) o.geometry.dispose(); }); this.signGroup = null; }
+    this.signData = null;
+    const L = this.app.state.layout, E = this.app.state.result, sp = this.app.state.scene;
+    if (!L || !E || !sp.signs) { this.triCounts.signs = 0; if (this.app.onSignsInfo) setTimeout(() => this.app.onSignsInfo(null), 0); return; }
+    const tun = this.hillData ? this.hillData.tunnels.map((t) => ({ k: t.k, s0: t.sMid - t.len / 2, s1: t.sMid + t.len / 2 })) : [];
+    const SG = buildSigns(L, E, sp, ground, tun);
+    this.signData = SG;
+    const grp = new THREE.Group();
+    grp.userData.signs = true;
+    const mat = (cv) => { const t = this.texture(cv); return new THREE.MeshStandardMaterial({ map: t, alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.7, metalness: 0 }); };
+    const postMat = mat(this.app.signTexCanvas('post'));
+    for (const [type, M] of Object.entries(SG.byType)) {
+      const add = (geo, m, part) => {
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.BufferAttribute(geo.positions, 3));
+        g.setAttribute('uv', new THREE.BufferAttribute(geo.uvs, 2));
+        g.setIndex(new THREE.BufferAttribute(geo.indices, 1));
+        g.computeVertexNormals();
+        const mesh = new THREE.Mesh(g, m);
+        mesh.userData.sign = type; mesh.userData.signPart = part;
+        // cada cartel sube o baja con el suelo exagerado, sin estirarse (4 vértices por plano)
+        const pos = g.getAttribute('position'), list = SG.signs.filter((q) => q.type === type);
+        mesh.userData.exag = { base: new Float32Array(pos.array), shift: Float32Array.from({ length: pos.count }, (_, v) => list[Math.floor(v / 4)].z) };
+        grp.add(mesh);
+      };
+      add(M.sign, mat(this.app.signTexCanvas(type)), 'sign');
+      add(M.post, postMat, 'post');
+    }
+    this.extras.add(grp);
+    this.signGroup = grp;
+    this.triCounts.signs = SG.tris;
+    if (info) info.signs = SG.signs.length;
+    if (this.app.onSignsInfo) setTimeout(() => this.app.onSignsInfo(SG), 0);
   }
 
   /**
