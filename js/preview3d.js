@@ -836,13 +836,20 @@ export class Preview3D {
           this.app.state.groundLine = { s: sArr, z: zArr };
           if (this.app.onGroundLine) setTimeout(() => this.app.onGroundLine(), 0);
         }
-        if (T.wall) { // lecho y paredes de los ríos socavados: su propio material
-          const wm = new THREE.Mesh(mkGeo(T.wall), this.wallMaterial('river'));
-          wm.userData.riverWall = 'river';
-          this.markExag(wm, (x, y, z) => z);
-          this.wallMeshes.push(wm);
-          this.extras.add(wm);
-          info.terrainTris += T.wall.tris;
+        // paredes de los ríos socavados (0.78): roca (naturales) y mallas lisas por parte, cada una con su textura
+        if (T.riverWalls) {
+          const add = (geo, ix, kind, part, id) => {
+            if (!ix || !ix.length) return;
+            const cv = this.app.riverWallTexCanvas ? this.app.riverWallTexCanvas(kind, id, part) : null;
+            const wm = new THREE.Mesh(mkGeo({ positions: geo.positions, uvs: geo.uvs, indices: ix }), wallMat(kind, cv));
+            wm.userData.riverWall = kind; wm.userData.riverId = id; wm.userData.cutPart = part;
+            this.markExag(wm, (x, y, z) => z);
+            this.wallMeshes.push(wm);
+            this.extras.add(wm);
+            info.terrainTris += ix.length / 3;
+          };
+          for (const q of T.riverWalls.nat) add(q, q.indices, 'nat', 'face', q.id);
+          for (const q of T.riverWalls.art) for (const part of ['face', 'top', 'out']) add(q, q.sub[part], 'art', part, q.id);
         }
         info.terrainTris += (T.baseIndices || T.indices).length / 3; // lo que se dibuja (sin lo recortado), más las paredes
         // agua (playa y montaña): un plano azul al nivel del mar
@@ -1551,7 +1558,7 @@ export class Preview3D {
     if (h.length && (h[0].object === this.terrainMesh || h[0].object.userData.water) && this.app.focusPanel) this.app.focusPanel('terrain'); // clic en el terreno o el agua: sus parámetros
     if (ud.ref3d) { this.app.selectRef3d(true); return; } // modelo de referencia: se selecciona entero
     if (ud.cutWall) { this.app.selectHill(null); if (ud.cutIdx != null && this.app.selectBridge) this.app.selectBridge(ud.cutIdx); else if (this.app.focusPanel) this.app.focusPanel('bridges'); return; } // paredes de un tramo socavado: su tarjeta
-    if (ud.riverWall) { this.app.selectHill(null); if (this.app.focusPanel) this.app.focusPanel('rivers', document.getElementById('riverWallHead')); return; } // paredes de un cauce: su material
+    if (ud.riverWall) { this.app.selectHill(null); if (ud.riverId != null && this.app.selectRiver) this.app.selectRiver(ud.riverId); else if (this.app.focusPanel) this.app.focusPanel('rivers', document.getElementById('riverWallHead')); return; } // paredes de un río: su tarjeta
     if (ud.riverId != null) { this.app.selectHill(null); if (this.app.selectRiver) this.app.selectRiver(ud.riverId); return; } // río o cascada: su tarjeta
     if (ud.decoSet != null) { // elemento decorativo: su set
       if (this.app.state.ref3d && this.app.state.ref3d.sel) this.app.selectRef3d(false);

@@ -13,7 +13,8 @@ import { initSplitters } from './splitters.js';
 import { initHotkeys, comboOf } from './hotkeys.js';
 import { VERSION } from './version.js';
 import { ACTIONS, FIXED, bindingOf, isDefault, setBinding, resetAll as resetKeymap, matchAction, comboLabel } from './keymap.js';
-import { DEFAULT_SCENE, terrainCell, buildTrees, buildDecoInstances, bakeTreeList, bakeDecoList, CUT_ANGLES, rockOf, wallOf, wallUVOf } from './scene.js';
+import { DEFAULT_SCENE, terrainCell, buildTrees, buildDecoInstances, bakeTreeList, bakeDecoList, CUT_ANGLES, rockOf, wallOf, wallUVOf, riverUVOf } from './scene.js';
+import { RIVER_ANGLES, riverWallsOf } from './rivers.js';
 import { makeShadowCanvas, sunShadowDir } from './shadows.js';
 import { SCULPT_PRESETS, DEFAULT_SCULPT_CURVE, normCurve, curveEval, curveLUT, presetOf } from './sculptcurve.js';
 import { makeTrackThumbnail } from './thumbnail.js';
@@ -98,7 +99,9 @@ const state = {
   coveredTex: null, // textura de los tramos cubiertos: túneles y bajo cruces (null = la de la pista un 20 % más oscura)
   dirtTex: null, // canvas de la textura del camino de tierra (null = arena por defecto)
   tunWallTex: null, tunCeilTex: null, tunnelTexOwn: {}, // texturas de los túneles: generales (paredes / techo) y propias de cada túnel {uid: {wall, ceil}}
-  riverWallTex: null, fallWallTex: null, riverBedTex: null, // (riverBedTex: lecho de los ríos socavados)
+  riverWallTex: null, fallWallTex: null, riverBedTex: null, // (riverWallTex: roca de los ríos (paredes naturales); riverBedTex: lecho de los ríos socavados)
+  riverArtTex: null, riverArtTopTex: null, riverArtOutTex: null, // paredes lisas de los ríos: cara interior, tapa y cara exterior (sin ellas, la de la cara)
+  riverTexs: {}, // texturas propias de cada río, por su id: {wallArt, wallArtTop, wallArtOut, wallNat}
   // texturas de las paredes socavadas de ríos y cascadas (null = roca por defecto)
   edgeMeshes: null, // última malla de bordes (para el mapa 2D y los clics)
   grassTex: null, // canvas de la textura de hierba (null = por defecto)
@@ -169,8 +172,11 @@ function hillContainsL(h, p) {
 function newRiver(kind, hill = null) {
   const sc = state.scene;
   const id = state.rivers.reduce((m, rv) => Math.max(m, rv.id), 0) + 1;
-  return { id, kind, hill, mode: sc.riverMode, depth: sc.riverDepth, walls: sc.riverWalls, wallSubdiv: sc.riverWallSubdiv, strokes: [] };
+  delete state.riverTexs[id]; // (de un río borrado con el mismo número)
+  return { id, kind, hill, mode: sc.riverMode, depth: sc.riverDepth, walls: kind === 'fall' ? 'smooth' : sc.riverWalls === 'art' ? 'art' : 'nat', wallSubdiv: sc.riverWallSubdiv, strokes: [] };
 }
+/** Ríos anteriores a la 0.78: las paredes «suaves» o «de roca» pasan a naturales (las cascadas no cambian). */
+function normalizeRiver(rv) { if (rv && rv.kind !== 'fall' && rv.walls !== 'art' && rv.walls !== 'nat') rv.walls = 'nat'; return rv; }
 const riverContainsL = hillContainsL; // misma regla: el último toque que cubre el punto manda
 function riverIsEmpty(rv) { return !rv.strokes.some((q) => !q.e && riverContainsL(rv, [q.x, q.y])); }
 function riverLabel(rv) {
@@ -199,14 +205,42 @@ function renderRiverPanel() {
     div.className = 'item river-card' + (rv.id === state.selRiver ? ' sel' : '') + (rv.collapsed ? ' collapsed' : '');
     div.dataset.id = rv.id;
     const hill = rv.kind === 'fall' ? state.hills.find((h) => h.id === rv.hill) : null;
+    const isFall = rv.kind === 'fall', W = isFall ? null : riverWallsOf(rv), AR = isFall ? null : RIVER_ANGLES[W.type];
+    const uvT = isFall ? null : riverUVOf({ uvOwn: true, tileX: rv.tileX, tileY: rv.tileY, uvFit: rv.uvFit, uvSnap: rv.uvSnap }, state.scene);
+    const texRow = (k) => `<div class="row gap" style="flex-wrap:nowrap"><button class="rtex small" data-kind="${k}">Cargar textura…</button><button class="rtexRm small" data-kind="${k}"${app.riverOwnTex(rv.id, k) ? '' : ' disabled'}>Como la general</button><img class="thumb rthumb" data-kind="${k}" alt=""></div>`;
     div.innerHTML = `
       <div class="head"><span><button class="x rtoggle" title="Mostrar u ocultar sus parámetros">${rv.collapsed ? '▸' : '▾'}</button> <strong>${riverLabel(rv)}</strong> <span class="muted small">${rv.kind === 'fall' ? `cascada en ${hill ? hill.name || hillName(hill.id) : 'un cerro'}` : 'río'}</span></span><button class="x del" title="Eliminar">✕</button></div>
       <div class="rbody">
       <div class="field"><label>Geometría</label><select class="rmode"><option value="surface"${rv.mode === 'surface' ? ' selected' : ''}>Posada sobre la superficie</option><option value="carved"${rv.mode === 'carved' ? ' selected' : ''}>Socavada</option></select></div>
       <div class="rcarved${rv.mode === 'carved' ? '' : ' disabled'}">
         <div class="field"><label>Profundidad <span class="val"><input type="number" class="rdepthN" min="0.1" step="0.1" style="width:58px" value="${rv.depth}"> m</span></label><input type="range" class="rdepth" min="0.2" max="20" step="0.1" value="${Math.min(20, rv.depth)}"></div>
-        <div class="field"><label>Paredes</label><select class="rwalls"><option value="smooth"${rv.walls !== 'rock' ? ' selected' : ''}>Suaves</option><option value="rock"${rv.walls === 'rock' ? ' selected' : ''}>De roca</option></select></div>
-        <div class="field"><label>Densidad de las paredes <span class="val rsubV">${rv.wallSubdiv} (×${subdivFactor(rv.wallSubdiv)} pol.)</span></label><input type="range" class="rsub" min="0" max="6" step="1" value="${rv.wallSubdiv}"></div>
+        ${isFall ? `<div class="field"><label>Paredes</label><select class="rwalls"><option value="smooth"${rv.walls !== 'rock' ? ' selected' : ''}>Suaves</option><option value="rock"${rv.walls === 'rock' ? ' selected' : ''}>De roca</option></select></div>` : `
+        <div class="field"><label>Paredes</label><select class="rwalls"><option value="art"${W.type === 'art' ? ' selected' : ''}>Lisas (extruidas del contorno)</option><option value="nat"${W.type === 'nat' ? ' selected' : ''}>Naturales (del terreno)</option></select></div>
+        <h4 class="mini">${W.type === 'nat' ? 'Textura de la roca' : 'Texturas de las paredes'}</h4>
+        ${W.type === 'nat' ? texRow('wallNat') : `<div class="small">Cara interior</div>${texRow('wallArt')}<div class="small">Tapa</div>${texRow('wallArtTop')}<div class="small">Cara exterior</div>${texRow('wallArtOut')}`}
+        <div class="meta">Sin textura propia usa la general (al final de esta sección)${W.type === 'nat' ? '' : '; la tapa y la cara exterior, si no tienen, usan la de la cara interior'}.</div>
+        <label class="check small" title="Repetición y ajuste de la textura propios de este río (si no, los generales del final de esta sección)"><input type="checkbox" class="ruvOwn"${rv.uvOwn ? ' checked' : ''}> Ajustes de mapeado de textura</label>
+        <div class="ruvBox"${rv.uvOwn ? '' : ' hidden'}>
+          <div class="field"><label>Repetición a lo largo (X) <span class="val"><input type="number" class="ruvX" min="0.1" step="0.5" style="width:56px" value="${uvT.x}"> m</span></label></div>
+          <div class="field"><label>Repetición en la altura (Y) <span class="val"><input type="number" class="ruvY" min="0.1" step="0.5" style="width:56px" value="${uvT.y}"> m</span></label></div>
+          <div class="field" title="0 %: la textura en metros exactos (nunca se deforma). 100 %: termina justo en el borde de arriba (se estira donde la pared cambia de alto)"><label>Adaptación a la altura <span class="val ruvFitV">${Math.round(uvT.fit * 100)} %</span></label><input type="range" class="ruvFit" min="0" max="100" step="1" value="${Math.round(uvT.fit * 100)}"></div>
+          <label class="check small" title="Cambia apenas el largo de cada repetición para que en cada contorno entre un número entero"><input type="checkbox" class="ruvSnap"${uvT.snap ? ' checked' : ''}> Ajustar repeticiones al contorno</label>
+        </div>
+        <div class="rArtBox"${W.type === 'nat' ? ' hidden' : ''}>
+          <div class="field" title="Ancho de la pared lisa (su tapa), hacia afuera del contorno"><label>Ancho de la pared <span class="val"><input type="number" class="rwallW" min="0.1" max="3" step="0.05" style="width:56px" value="${W.width}"> m</span></label><input type="range" class="rwallWR" min="0.1" max="3" step="0.05" value="${W.width}"></div>
+          <div class="field" title="La cara exterior baja desde la tapa hasta 1 m bajo el suelo: casi siempre queda enterrada. «Ocultar las enterradas» la quita solo donde el suelo la tapa"><label>Caras exteriores</label><select class="router"><option value="show"${W.outer === 'show' ? ' selected' : ''}>Mostrar</option><option value="buried"${W.outer === 'buried' ? ' selected' : ''}>Ocultar las enterradas</option><option value="hide"${W.outer === 'hide' ? ' selected' : ''}>Ocultar todas</option></select></div>
+        </div>`}
+        <div class="field rsubBox"${!isFall && W.type === 'art' ? ' hidden' : ''} title="${isFall ? 'Subdivisiones extra de las paredes' : 'Solo paredes naturales: más triángulos en la roca'}"><label>Densidad de las paredes <span class="val rsubV">${rv.wallSubdiv} (×${subdivFactor(rv.wallSubdiv)} pol.)</span></label><input type="range" class="rsub" min="0" max="6" step="1" value="${rv.wallSubdiv}"></div>
+        ${isFall ? '' : `<div class="rRockBox"${W.type === 'nat' ? '' : ' hidden'}>
+          <h4 class="mini">Roca</h4>
+          <div class="field"><label>Estilo</label><select class="rrStyle" title="Irregular: bloques sueltos. Afilada: crestas y aristas. En capas: repisas y frentes, como estratos"><option value="irregular"${W.style === 'irregular' ? ' selected' : ''}>Irregular</option><option value="sharp"${W.style === 'sharp' ? ' selected' : ''}>Afilada (crestas)</option><option value="strata"${W.style === 'strata' ? ' selected' : ''}>En capas (estratos)</option></select></div>
+          <div class="field" title="Cuánto relieve tiene la roca: 0 = pendiente lisa"><label>Rugosidad <span class="val rrRoughV">${Math.round(W.rough)} %</span></label><input type="range" class="rrRough" min="0" max="100" step="1" value="${Math.round(W.rough)}"></div>
+          <div class="field" title="De grava fina a bloques grandes. Con más rugosidad o rocas más chicas, la roca lleva más triángulos"><label>Tamaño de las rocas <span class="val rrSizeV">${(+W.size).toFixed(1)} m</span></label><input type="range" class="rrSize" min="0.3" max="6" step="0.1" value="${Math.min(6, W.size)}"></div>
+        </div>
+        <h4 class="mini">Inclinación de las paredes</h4>
+        <canvas class="rangCv" width="240" height="86" title="Perfil del cauce (esquemático)"></canvas>
+        <div class="field"><label>Ángulo <span class="val"><input type="number" class="rangN" min="${AR.min}" max="${AR.max}" step="1" style="width:52px" value="${Math.round(W.ang)}"> °</span></label><input type="range" class="rang" min="${AR.min}" max="${AR.max}" step="1" value="${Math.round(W.ang)}"></div>
+        <div class="meta">${W.type === 'nat' ? 'Desde el lecho: 90° sería vertical; las naturales van de 45° a 85° (roca en pendiente).' : 'Desde el lecho: 90° = vertical; menos se abre hacia afuera, más cuelga sobre el agua.'}</div>`}
       </div>
       ${rv.kind === 'fall' ? '' : `<div class="field" title="Un lago (zona pintada rellena y compacta) tiene el agua y el lecho planos. Automático lo detecta por la forma"><label>Tipo</label><select class="rtype"><option value="auto"${!rv.waterType || rv.waterType === 'auto' ? ' selected' : ''}>Automático</option><option value="river"${rv.waterType === 'river' ? ' selected' : ''}>Río</option><option value="lake"${rv.waterType === 'lake' ? ' selected' : ''}>Lago</option></select></div>
       <div class="rcarvedOpts"${rv.mode === 'carved' ? '' : ' hidden'}>
@@ -231,7 +265,54 @@ function renderRiverPanel() {
     };
     div.querySelector('button.del').addEventListener('click', () => { pushUndo(); state.rivers = state.rivers.filter((q) => q !== rv); if (state.selRiver === rv.id) state.selRiver = null; riversChanged(); });
     div.querySelector('.rmode').addEventListener('change', (e) => set('mode', e.target.value));
-    div.querySelector('.rwalls').addEventListener('change', (e) => set('walls', e.target.value));
+    div.querySelector('.rwalls').addEventListener('change', (e) => { set('walls', e.target.value); if (!isFall) renderRiverPanel(); });
+    if (!isFall) {
+      div.querySelectorAll('img.rthumb').forEach((img) => {
+        const k = img.dataset.kind;
+        img.src = thumbURL(app.riverWallTexCanvas(k === 'wallNat' ? 'nat' : 'art', rv.id, k === 'wallArtTop' ? 'top' : k === 'wallArtOut' ? 'out' : 'face', true));
+        img.classList.toggle('inherited', !app.riverOwnTex(rv.id, k));
+      });
+      div.querySelectorAll('button.rtex').forEach((btn) => btn.addEventListener('click', () => pickTextureFile((cv) => app.setRiverTexture(rv.id, btn.dataset.kind, cv))));
+      div.querySelectorAll('button.rtexRm').forEach((btn) => btn.addEventListener('click', () => app.setRiverTexture(rv.id, btn.dataset.kind, null)));
+      div.querySelector('.ruvOwn').addEventListener('change', (e) => {
+        const on = e.target.checked;
+        if (on) { const g = riverUVOf(null, state.scene); pushUndo(); Object.assign(rv, { uvOwn: true, tileX: g.x, tileY: g.y, uvFit: Math.round(g.fit * 100), uvSnap: g.snap }); div.querySelector('.ruvX').value = g.x; div.querySelector('.ruvY').value = g.y; div.querySelector('.ruvFit').value = rv.uvFit; div.querySelector('.ruvFitV').textContent = `${rv.uvFit} %`; div.querySelector('.ruvSnap').checked = g.snap; editor.draw(); preview.update(false); }
+        else set('uvOwn', false);
+        div.querySelector('.ruvBox').hidden = !on;
+      });
+      const numSet = (cls, key, min, max) => div.querySelector(cls).addEventListener('change', (e) => { const v = parseFloat(e.target.value); if (!Number.isFinite(v)) return; e.target.value = Math.max(min, Math.min(max, v)); set(key, +e.target.value); });
+      numSet('.ruvX', 'tileX', 0.1, 200); numSet('.ruvY', 'tileY', 0.1, 200);
+      div.querySelector('.ruvFit').addEventListener('input', (e) => { div.querySelector('.ruvFitV').textContent = `${Math.round(e.target.value)} %`; });
+      div.querySelector('.ruvFit').addEventListener('change', (e) => set('uvFit', Math.round(parseFloat(e.target.value))));
+      div.querySelector('.ruvSnap').addEventListener('change', (e) => set('uvSnap', e.target.checked));
+      if (W.type === 'art') {
+        const setWW = (v, done) => { v = Math.max(0.1, Math.min(3, parseFloat(v))); if (!Number.isFinite(v)) return; div.querySelector('.rwallW').value = v; div.querySelector('.rwallWR').value = v; if (done) set('wallW', v); };
+        div.querySelector('.rwallWR').addEventListener('input', (e) => setWW(e.target.value, false));
+        div.querySelector('.rwallWR').addEventListener('change', (e) => setWW(e.target.value, true));
+        div.querySelector('.rwallW').addEventListener('change', (e) => setWW(e.target.value, true));
+        div.querySelector('.router').addEventListener('change', (e) => set('wallOuter', e.target.value));
+      }
+      div.querySelector('.rrStyle').addEventListener('change', (e) => set('rockStyle', e.target.value));
+      div.querySelector('.rrRough').addEventListener('input', (e) => { div.querySelector('.rrRoughV').textContent = `${Math.round(e.target.value)} %`; });
+      div.querySelector('.rrRough').addEventListener('change', (e) => set('rockRough', Math.round(parseFloat(e.target.value))));
+      div.querySelector('.rrSize').addEventListener('input', (e) => { div.querySelector('.rrSizeV').textContent = `${(+e.target.value).toFixed(1)} m`; });
+      div.querySelector('.rrSize').addEventListener('change', (e) => set('rockSize', +(+e.target.value).toFixed(1)));
+      // inclinación: un ángulo por tipo de pared (como los tramos), con el gráfico del perfil
+      const angKey = W.type === 'art' ? 'artAng' : 'natAng';
+      const drawAng = () => drawCutProfile(div.querySelector('.rangCv'), [riverWallsOf(rv).ang, riverWallsOf(rv).ang], W.type === 'nat', true);
+      drawAng();
+      const setAng = (v, done) => {
+        if (!Number.isFinite(v)) return;
+        v = Math.round(Math.max(AR.min, Math.min(AR.max, v)));
+        div.querySelector('.rang').value = v; div.querySelector('.rangN').value = v;
+        if (!editing) { pushUndo(); editing = true; }
+        rv[angKey] = v; drawAng();
+        if (done) { editing = false; editor.draw(); preview.update(false); }
+      };
+      div.querySelector('.rang').addEventListener('input', (e) => setAng(parseFloat(e.target.value), false));
+      div.querySelector('.rang').addEventListener('change', (e) => setAng(parseFloat(e.target.value), true));
+      div.querySelector('.rangN').addEventListener('change', (e) => setAng(parseFloat(e.target.value), true));
+    }
     div.querySelector('.rdepth').addEventListener('input', (e) => { div.querySelector('.rdepthN').value = e.target.value; set('depth', parseFloat(e.target.value), false); });
     div.querySelector('.rdepth').addEventListener('change', () => { editing = false; });
     div.querySelector('.rdepthN').addEventListener('change', (e) => { const v = parseFloat(e.target.value); if (v > 0) set('depth', v); });
@@ -2167,6 +2248,29 @@ const app = {
   /** Textura de las paredes ('wall') o del techo ('ceil') de un túnel: la propia (uid) o la general; null = color. */
   tunnelTexCanvas(uid, kind) { const own = uid && state.tunnelTexOwn[uid]; return (own && own[kind]) || (kind === 'wall' ? state.tunWallTex : state.tunCeilTex) || null; },
   wallTexCanvas(kind) { return (kind === 'fall' ? state.fallWallTex : state.riverWallTex) || null; },
+  /** Textura propia de las paredes de un río (k: 'wallArt' | 'wallArtTop' | 'wallArtOut' | 'wallNat') o null. */
+  riverOwnTex(id, k) { const t = id != null ? state.riverTexs[id] : null; return (t && t[k]) || null; },
+  riverWallOwnTex(id, kind, part = 'face') { return this.riverOwnTex(id, kind === 'nat' ? 'wallNat' : part === 'top' ? 'wallArtTop' : part === 'out' ? 'wallArtOut' : 'wallArt'); },
+  /** Textura de las paredes de un río: la propia (si tiene) o la general de su tipo; lisas: tapa/exterior → cara interior. */
+  riverWallTexCanvas(kind, id = null, part = 'face', thumb = false) {
+    const own = (k) => this.riverOwnTex(id, k);
+    let cv;
+    if (kind === 'art') {
+      const pk = part === 'top' ? 'wallArtTop' : part === 'out' ? 'wallArtOut' : null, pg = part === 'top' ? state.riverArtTopTex : part === 'out' ? state.riverArtOutTex : null;
+      cv = (pk && own(pk)) || pg || own('wallArt') || state.riverArtTex || null;
+    } else cv = own('wallNat') || state.riverWallTex || null;
+    if (cv || !thumb) return cv;
+    const c = document.createElement('canvas'); c.width = c.height = 16;
+    const g = c.getContext('2d'); g.fillStyle = kind === 'art' ? '#9c9d98' : '#6b6158'; g.fillRect(0, 0, 16, 16);
+    return c;
+  },
+  setRiverTexture(id, k, cv) {
+    const t = state.riverTexs[id] || (state.riverTexs[id] = { wallArt: null, wallArtTop: null, wallArtOut: null, wallNat: null });
+    t[k] = cv;
+    renderRiverPanel();
+    preview.update(false, true);
+    sceneChanged();
+  },
   coveredTexCanvas() { return state.coveredTex || darkenedCanvas(state.trackTex || defaultTrackCanvas(), 0.2); },
   riversChanged() { riversChanged(); },
   /** Tras armar los ríos: triángulos del agua y del lecho, y si es lago, en la tarjeta de cada uno. */
@@ -3072,7 +3176,7 @@ function tramoAngles(b) {
  * Gráfico esquemático del perfil de un socavado, visto en el sentido de marcha: suelo natural arriba, la pista en el piso
  * y cada pared con su ángulo (medido como la pendiente del talud: 90° vertical, menos se abre, más cuelga).
  */
-function drawCutProfile(cv, [aL, aR], nat) {
+function drawCutProfile(cv, [aL, aR], nat, river = false) {
   if (!cv) return;
   const W = 240, H = 86, dpr = 2;
   cv.width = W * dpr; cv.height = H * dpr; cv.style.width = W + 'px'; cv.style.maxWidth = '100%'; cv.style.height = 'auto';
@@ -3090,9 +3194,15 @@ function drawCutProfile(cv, [aL, aR], nat) {
   g.strokeStyle = '#5f9a46'; g.lineWidth = 3;
   g.beginPath(); g.moveTo(0, yT); g.lineTo(tL, yT); g.moveTo(tR, yT); g.lineTo(W, yT); g.stroke();
   // piso con la pista
-  g.fillStyle = '#2b3038'; g.fillRect(bL, yF, bR - bL, 6);
-  g.fillStyle = '#42474f'; g.fillRect(bL + 8, yF - 3, bR - bL - 16, 3);
-  g.fillStyle = '#e0b23a'; for (let x = bL + 16; x < bR - 16; x += 14) g.fillRect(x, yF - 2, 7, 1.2);
+  if (river) { // lecho y agua (el agua llega hasta las paredes)
+    g.fillStyle = '#4b4238'; g.fillRect(bL, yF, bR - bL, 6);
+    const yW = yF - 14, xl = bL - (yF - yW) / Math.tan((aL * Math.PI) / 180), xr = bR + (yF - yW) / Math.tan((aR * Math.PI) / 180);
+    g.fillStyle = 'rgba(44,127,192,0.75)'; g.beginPath(); g.moveTo(bL, yF); g.lineTo(xl, yW); g.lineTo(xr, yW); g.lineTo(bR, yF); g.closePath(); g.fill();
+  } else {
+    g.fillStyle = '#2b3038'; g.fillRect(bL, yF, bR - bL, 6);
+    g.fillStyle = '#42474f'; g.fillRect(bL + 8, yF - 3, bR - bL - 16, 3);
+    g.fillStyle = '#e0b23a'; for (let x = bL + 16; x < bR - 16; x += 14) g.fillRect(x, yF - 2, 7, 1.2);
+  }
   // caras de las paredes
   g.strokeStyle = wall; g.lineWidth = nat ? 2 : 3; g.lineCap = 'round';
   g.beginPath(); g.moveTo(bL, yF); g.lineTo(tL, yT); g.moveTo(bR, yF); g.lineTo(tR, yT); g.stroke();
@@ -3109,9 +3219,8 @@ function drawCutProfile(cv, [aL, aR], nat) {
   arc(bL, aL, -1); arc(bR, aR, 1);
   // rótulos
   g.fillStyle = '#8b95a8'; g.font = '10px system-ui, sans-serif'; g.textBaseline = 'alphabetic';
-  g.textAlign = 'left'; g.fillText('Izquierda', 3, H - 4);
-  g.textAlign = 'right'; g.fillText('Derecha', W - 3, H - 4);
-  g.textAlign = 'center'; g.fillText('pista', (bL + bR) / 2, H - 4);
+  if (!river) { g.textAlign = 'left'; g.fillText('Izquierda', 3, H - 4); g.textAlign = 'right'; g.fillText('Derecha', W - 3, H - 4); }
+  g.textAlign = 'center'; g.fillText(river ? 'lecho' : 'pista', (bL + bR) / 2, H - 4);
 }
 /** Tramos anteriores a la versión 0.5 (solo puentes): tipo puente, sin camino de tierra y con barrera, piso de madera. */
 function normalizeTramo(b) {
@@ -5411,6 +5520,10 @@ function projectData() {
     dirtTex: state.dirtTex ? state.dirtTex.toDataURL('image/png') : null,
     riverWallTex: state.riverWallTex ? state.riverWallTex.toDataURL('image/png') : null,
     riverBedTex: state.riverBedTex ? state.riverBedTex.toDataURL('image/png') : null,
+    riverArtTex: state.riverArtTex ? state.riverArtTex.toDataURL('image/png') : null,
+    riverArtTopTex: state.riverArtTopTex ? state.riverArtTopTex.toDataURL('image/png') : null,
+    riverArtOutTex: state.riverArtOutTex ? state.riverArtOutTex.toDataURL('image/png') : null,
+    riverTexs: Object.fromEntries(Object.entries(state.riverTexs).filter(([id]) => state.rivers.some((rv) => String(rv.id) === String(id))).map(([id, t]) => [id, Object.fromEntries(Object.entries(t).map(([k, cv]) => [k, cv ? cv.toDataURL('image/png') : null]))])),
     tunWallTex: state.tunWallTex ? state.tunWallTex.toDataURL('image/png') : null,
     tunCeilTex: state.tunCeilTex ? state.tunCeilTex.toDataURL('image/png') : null,
     tunnelTexOwn: Object.fromEntries(Object.entries(state.tunnelTexOwn).filter(([uid]) => (state.scene.tunnelOverrides || []).some((o) => o && o.texUid === uid)).map(([uid, t]) => [uid, { wall: t.wall ? t.wall.toDataURL('image/png') : null, ceil: t.ceil ? t.ceil.toDataURL('image/png') : null }])),
@@ -5631,6 +5744,9 @@ async function openProject(text, fileName = null) {
   state.dirtTex = await toCanvas(d.dirtTex);
   state.riverWallTex = await toCanvas(d.riverWallTex);
   state.riverBedTex = await toCanvas(d.riverBedTex);
+  state.riverArtTex = await toCanvas(d.riverArtTex); state.riverArtTopTex = await toCanvas(d.riverArtTopTex); state.riverArtOutTex = await toCanvas(d.riverArtOutTex);
+  state.riverTexs = {};
+  for (const [id, t] of Object.entries(d.riverTexs || {})) state.riverTexs[id] = { wallArt: await toCanvas(t.wallArt), wallArtTop: await toCanvas(t.wallArtTop), wallArtOut: await toCanvas(t.wallArtOut), wallNat: await toCanvas(t.wallNat) };
   state.tunWallTex = await toCanvas(d.tunWallTex);
   state.tunCeilTex = await toCanvas(d.tunCeilTex);
   state.tunnelTexOwn = {};
@@ -5653,7 +5769,7 @@ async function openProject(text, fileName = null) {
     try { state.assets.push(await loadAsset(b64ToBuf(a.data), a.name, a.id)); } catch (err) { toastErr(`No se pudo cargar ${a.name}: ${err.message}`); }
   }
   state.decoSets = d.decoSets || [];
-  state.rivers = d.rivers || []; state.selRiver = null; renderRiverPanel();
+  state.rivers = (d.rivers || []).map(normalizeRiver); state.selRiver = null; renderRiverPanel();
   state.selDeco = null;
   renderAssetList(); renderVegAssetLists(); renderDecoPanel();
   // modelo de referencia 3D guardado con el proyecto
@@ -5914,7 +6030,7 @@ function syncSceneControls() {
   set('startGateHeight', sc.startGateHeight);
   set('startGate', sc.startGate); if (document.activeElement !== $('startText')) set('startText', sc.startText);
   $('startGateHeightVal').textContent = `${sc.startGateHeight} m`;
-  set('riverMode', sc.riverMode); set('riverWalls', sc.riverWalls); set('riverDepth', sc.riverDepth); set('riverWallSubdiv', sc.riverWallSubdiv);
+  set('riverMode', sc.riverMode); set('riverWalls', sc.riverWalls === 'art' ? 'art' : 'nat'); set('riverDepth', sc.riverDepth); set('riverWallSubdiv', sc.riverWallSubdiv);
   if ($('riverDepthVal')) $('riverDepthVal').textContent = `${(+sc.riverDepth).toFixed(1)} m`;
   if ($('riverWallSubdivVal')) $('riverWallSubdivVal').textContent = `${sc.riverWallSubdiv}`;
   if ($('riverCarvedBox')) $('riverCarvedBox').classList.toggle('disabled', sc.riverMode !== 'carved');
@@ -5931,9 +6047,11 @@ function syncSceneControls() {
   };
   thumb('trackTexThumb', state.trackTex || defaultTrackCanvas(), 'btnTrackTexRemove');
   $('btnTrackTexRemove').disabled = !state.trackTex;
-  for (const [k, id] of [['cutArtTex', 'cutArtTex'], ['cutArtTopTex', 'cutArtTopTex'], ['cutArtOutTex', 'cutArtOutTex'], ['cutNatTex', 'cutNatTex'], ['riverWallTex', 'riverWall'], ['fallWallTex', 'fallWall'], ['riverBedTex', 'riverBed'], ['tunWallTex', 'tunWallTex'], ['tunCeilTex', 'tunCeilTex']]) { const img = $(id + 'Thumb'); img.hidden = !state[k]; if (state[k]) img.src = thumbURL(state[k]); $(id + 'Remove').disabled = !state[k]; }
+  for (const [k, id] of [['cutArtTex', 'cutArtTex'], ['cutArtTopTex', 'cutArtTopTex'], ['cutArtOutTex', 'cutArtOutTex'], ['cutNatTex', 'cutNatTex'], ['riverWallTex', 'riverWall'], ['riverArtTex', 'riverArt'], ['riverArtTopTex', 'riverArtTop'], ['riverArtOutTex', 'riverArtOut'], ['fallWallTex', 'fallWall'], ['riverBedTex', 'riverBed'], ['tunWallTex', 'tunWallTex'], ['tunCeilTex', 'tunCeilTex']]) { const img = $(id + 'Thumb'); img.hidden = !state[k]; if (state[k]) img.src = thumbURL(state[k]); $(id + 'Remove').disabled = !state[k]; }
   if ($('tunnelTexTile')) { $('tunnelTexTile').value = sc.tunnelTexTile ?? 6; $('tunnelTexTileVal').textContent = `${sc.tunnelTexTile ?? 6} m`; }
   set('riverWallTile', sc.riverWallTile ?? 4); set('riverWallTileNum', sc.riverWallTile ?? 4);
+  { const t0 = sc.riverWallTile ?? 4, tx = sc.riverWallTileX ?? t0, ty = sc.riverWallTileY ?? t0; set('riverWallTileX', Math.min(30, tx)); set('riverWallTileXNum', tx); set('riverWallTileY', Math.min(30, ty)); set('riverWallTileYNum', ty); }
+  set('riverWallFit', sc.riverWallFit ?? 0); $('riverWallFitVal').textContent = `${Math.round(sc.riverWallFit ?? 0)} %`; $('riverWallSnap').checked = !!sc.riverWallSnap;
   { const t0 = sc.cutWallTile ?? 4, tx = sc.cutWallTileX ?? t0, ty = sc.cutWallTileY ?? t0; set('cutWallTileX', Math.min(30, tx)); set('cutWallTileXNum', tx); set('cutWallTileY', Math.min(30, ty)); set('cutWallTileYNum', ty); }
   set('cutWallFit', sc.cutWallFit ?? 0); $('cutWallFitVal').textContent = `${Math.round(sc.cutWallFit ?? 0)} %`; $('cutWallSnap').checked = !!sc.cutWallSnap;
   thumb('coveredTexThumb', app.coveredTexCanvas(), 'btnCoveredTexRemove'); $('btnCoveredTexRemove').disabled = !state.coveredTex;
@@ -6936,10 +7054,10 @@ function bindSceneControls() {
   $('riverWallSubdiv').addEventListener('input', (e) => { sc.riverWallSubdiv = Math.round(parseFloat(e.target.value)); syncSceneControls(); });
   $('btnRiverTool').addEventListener('click', () => setTool('river'));
   // material de las paredes socavadas (ríos y cascadas)
-  for (const [id, key] of [['riverWall', 'riverWallTex'], ['fallWall', 'fallWallTex'], ['riverBed', 'riverBedTex']]) {
+  for (const [id, key] of [['riverWall', 'riverWallTex'], ['riverArt', 'riverArtTex'], ['riverArtTop', 'riverArtTopTex'], ['riverArtOut', 'riverArtOutTex'], ['fallWall', 'fallWallTex'], ['riverBed', 'riverBedTex']]) {
     $(id + 'Btn').addEventListener('click', () => $(id + 'File').click());
-    $(id + 'File').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) loadTexture(f, key); });
-    $(id + 'Remove').addEventListener('click', () => { state[key] = null; syncSceneControls(); sceneChanged(); });
+    $(id + 'File').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) loadTexture(f, key).then(() => renderRiverPanel()); });
+    $(id + 'Remove').addEventListener('click', () => { state[key] = null; syncSceneControls(); sceneChanged(); renderRiverPanel(); });
   }
   $('btnRiverClear').addEventListener('click', () => { if (!state.rivers.length) return; pushUndo(); state.rivers = []; state.selRiver = null; riversChanged(); });
   // wireframe
@@ -7136,7 +7254,12 @@ function bindSceneControls() {
   pair('trackTexReps', 'trackTexRepsNum', 'trackTexReps', 1, true);
   pair('terrainTexRepX', 'terrainTexRepXNum', 'terrainTexRepX', 0.1, false);
   pair('terrainTexRepY', 'terrainTexRepYNum', 'terrainTexRepY', 0.1, false);
-  pair('riverWallTile', 'riverWallTileNum', 'riverWallTile', 0.5, false); // paredes socavadas de ríos y cascadas
+  pair('riverWallTile', 'riverWallTileNum', 'riverWallTile', 0.5, false); // paredes socavadas de las cascadas
+  pair('riverWallTileX', 'riverWallTileXNum', 'riverWallTileX', 0.1, false); // paredes de los ríos: repetición a lo largo
+  pair('riverWallTileY', 'riverWallTileYNum', 'riverWallTileY', 0.1, false); // y en la altura
+  $('riverWallFit').addEventListener('input', (e) => { $('riverWallFitVal').textContent = `${Math.round(e.target.value)} %`; });
+  $('riverWallFit').addEventListener('change', (e) => { sc.riverWallFit = Math.round(parseFloat(e.target.value)); sceneChanged(); });
+  $('riverWallSnap').addEventListener('change', (e) => { sc.riverWallSnap = e.target.checked; sceneChanged(); });
   $('tunnelTexTile').addEventListener('input', (e) => { state.scene.tunnelTexTile = parseFloat(e.target.value) || 6; $('tunnelTexTileVal').textContent = `${state.scene.tunnelTexTile} m`; sceneChanged(); });
   pair('cutWallTileX', 'cutWallTileXNum', 'cutWallTileX', 0.1, false); // paredes de las secciones socavadas: repetición a lo largo
   pair('cutWallTileY', 'cutWallTileYNum', 'cutWallTileY', 0.1, false); // y en la altura
@@ -7215,7 +7338,7 @@ function bindSceneControls() {
     const { exportGLB } = await import('./export-glb.js');
     toast('Generando escena .glb…');
     try {
-      const { buffer, info } = await exportGLB(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, cutWallFor: (i, kind, part) => app.cutWallOwnTex(i, kind, part), cutArtTop: state.cutArtTopTex, cutArtOut: state.cutArtOutTex, collisionDeck: state.elev.deck ?? 1, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, riverBed: state.riverBedTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas(), triggers: app.triggersWorld(), tunnelTex: (uid, kind) => app.tunnelTexCanvas(uid, kind), assetById: (id) => state.assets.find((a) => a.id === id) || null }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
+      const { buffer, info } = await exportGLB(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, cutWallFor: (i, kind, part) => app.cutWallOwnTex(i, kind, part), cutArtTop: state.cutArtTopTex, cutArtOut: state.cutArtOutTex, collisionDeck: state.elev.deck ?? 1, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, riverArt: state.riverArtTex, riverArtTop: state.riverArtTopTex, riverArtOut: state.riverArtOutTex, riverWallFor: (id, kind, part) => app.riverWallOwnTex(id, kind, part), fallWall: state.fallWallTex, riverBed: state.riverBedTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas(), triggers: app.triggersWorld(), tunnelTex: (uid, kind) => app.tunnelTexCanvas(uid, kind), assetById: (id) => state.assets.find((a) => a.id === id) || null }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
       download('track_scene.glb', buffer, 'model/gltf-binary');
       toast(`Escena exportada: pista ${info.trackTris.toLocaleString('es')} triángulos${info.terrainTris ? `, terreno ${info.terrainTris.toLocaleString('es')}` : ''}${info.hills ? `, ${info.hills} cerro(s)` : ''}${info.tunnels ? `, ${info.tunnels} túnel(es)` : ''}${info.gateTris ? ', pórtico de salida' : ''}${info.items ? `, ${info.items} elementos de pista` : ''}${info.trees ? `, ${info.trees} árboles` : ''}. Todo como objetos separados.`);
     } catch (err) { console.error(err); toastErr('No se pudo exportar la escena: ' + err.message); }
@@ -7229,7 +7352,7 @@ function bindSceneControls() {
     const { exportFBX } = await import('./export-fbx.js');
     toast('Generando escena .fbx…');
     try {
-      const { buffer, info } = await exportFBX(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, cutWallFor: (i, kind, part) => app.cutWallOwnTex(i, kind, part), cutArtTop: state.cutArtTopTex, cutArtOut: state.cutArtOutTex, collisionDeck: state.elev.deck ?? 1, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, fallWall: state.fallWallTex, riverBed: state.riverBedTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas(), triggers: app.triggersWorld(), tunnelTex: (uid, kind) => app.tunnelTexCanvas(uid, kind), assetById: (id) => state.assets.find((a) => a.id === id) || null }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
+      const { buffer, info } = await exportFBX(state.layout, state.result, state.scene, { track: state.trackTex || defaultTrackCanvas(), bridge: defaultBridgeCanvas(), bridgeFor: (i) => app.bridgeTexturesFor(i), barrier: state.barrierTex || defaultBarrierCanvas(), dirt: state.dirtTex || defaultDirtCanvas(), altFor: (r) => app.altTexturesFor(r), cutArt: state.cutArtTex, cutNat: state.cutNatTex, cutWallFor: (i, kind, part) => app.cutWallOwnTex(i, kind, part), cutArtTop: state.cutArtTopTex, cutArtOut: state.cutArtOutTex, collisionDeck: state.elev.deck ?? 1, susp: state.suspTex, suspBarrier: state.suspBarrierTex, suspDirt: state.suspDirtTex, riverWall: state.riverWallTex, riverArt: state.riverArtTex, riverArtTop: state.riverArtTopTex, riverArtOut: state.riverArtOutTex, riverWallFor: (id, kind, part) => app.riverWallOwnTex(id, kind, part), fallWall: state.fallWallTex, riverBed: state.riverBedTex, covered: app.coveredTexCanvas(), deco: decoExportInfo(), terrain: state.terrainTex, grass: state.grassTex, items: state.itemTex, shadow: shadowTexCanvas(), triggers: app.triggersWorld(), tunnelTex: (uid, kind) => app.tunnelTexCanvas(uid, kind), assetById: (id) => state.assets.find((a) => a.id === id) || null }, app.terrainPaintWorld(), app.hillsWorld(), itemInstances());
       download('track_scene.fbx', buffer, 'application/octet-stream');
       toast(`FBX exportado (${(buffer.length / 1048576).toFixed(1)} MB): pista${info.terrainTris ? ', terreno' : ''}${info.hills ? `, ${info.hills} cerro(s)` : ''}${info.tunnels ? `, ${info.tunnels} túnel(es)` : ''}${info.gateTris ? ', pórtico' : ''}${info.items ? `, ${info.items} elementos de pista` : ''}${info.trees ? `, ${info.trees} árboles` : ''}${info.grass ? ', hierba' : ''}. Z arriba, en metros, con texturas incrustadas.`);
     } catch (err) { console.error(err); toastErr('No se pudo exportar el FBX: ' + err.message); }

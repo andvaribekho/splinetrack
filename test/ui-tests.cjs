@@ -58,7 +58,7 @@ async function drag(x0, y0, x1, y1, steps = 3) { await page.mouse.move(x0, y0); 
 /** Nombres de los objetos de la escena exportada, agrupados por su padre. */
 const exportNames = () => ev(async () => {
   const t = window.__tsg, m = await import('/js/export-glb.js');
-  const { root } = await m.buildExportScene(t.state.layout, t.state.result, t.state.scene, { deco: { assetById: (id) => t.app.assetById(id), sets: t.state.decoSets, paintFor: (s) => t.app.decoPaintWorld(s) }, triggers: t.app.triggersWorld(), tunnelTex: (uid, k) => t.app.tunnelTexCanvas(uid, k), assetById: (id) => t.app.assetById(id), cutWallFor: (i, k, p) => t.app.cutWallOwnTex(i, k, p), cutArtTop: t.state.cutArtTopTex, cutArtOut: t.state.cutArtOutTex }, t.app.terrainPaintWorld ? t.app.terrainPaintWorld() : null, t.app.hillsWorld(), null);
+  const { root } = await m.buildExportScene(t.state.layout, t.state.result, t.state.scene, { deco: { assetById: (id) => t.app.assetById(id), sets: t.state.decoSets, paintFor: (s) => t.app.decoPaintWorld(s) }, triggers: t.app.triggersWorld(), tunnelTex: (uid, k) => t.app.tunnelTexCanvas(uid, k), assetById: (id) => t.app.assetById(id), cutWallFor: (i, k, p) => t.app.cutWallOwnTex(i, k, p), cutArtTop: t.state.cutArtTopTex, cutArtOut: t.state.cutArtOutTex, riverArt: t.state.riverArtTex, riverArtTop: t.state.riverArtTopTex, riverArtOut: t.state.riverArtOutTex, riverWallFor: (id, k, p) => t.app.riverWallOwnTex(id, k, p) }, t.app.terrainPaintWorld ? t.app.terrainPaintWorld() : null, t.app.hillsWorld(), null);
   const out = {};
   root.traverse((o) => { if (o !== root && o.name && o.parent) (out[o.parent.name || '?'] = out[o.parent.name || '?'] || []).push(o.name); });
   return out;
@@ -1255,6 +1255,52 @@ test('ríos y lagos: lecho opcional, lago con agua plana, agua posada como el te
   await idle();
   const tSim = await ev(() => window.__tsg.preview.riverData.find((w) => w.id === 1).tris);
   expect(!vis[0] && vis[1] && tSim < tTer, `posado: opciones ${vis}; como el terreno ${tTer} → simplificada ${tSim} triángulos`);
+});
+
+test('paredes de los ríos: lisas o naturales como los socavados (tarjeta, ángulo, texturas por parte, caras exteriores, exportación)', async () => {
+  await reset();
+  await page.click('#btnGenTerrain');
+  await idle();
+  await ev(async () => {
+    const t = window.__tsg, L = t.state.layout, r = L.routes[0];
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (let i = 0; i < r.n; i++) { x0 = Math.min(x0, r.x[i]); x1 = Math.max(x1, r.x[i]); y0 = Math.min(y0, r.y[i]); y1 = Math.max(y1, r.y[i]); }
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, P = (x, y, rr) => { const [a, b] = L.toLayout(x, y); return { x: a, y: b, r: rr / L.scale, e: false }; };
+    const riv = []; for (let q = 0; q <= 1; q += 0.02) riv.push(P(cx - 80 + 160 * q, cy + 15 * Math.sin(q * 6), 5));
+    t.state.rivers = [{ id: 1, kind: 'river', mode: 'carved', depth: 2.5, walls: 'smooth', wallSubdiv: 2, strokes: riv }]; // de un proyecto anterior: pasa a naturales
+    t.app.riversChanged();
+    await t.idle();
+  });
+  await idle();
+  const q = (sel) => `#riverList .item[data-id="1"] ${sel}`;
+  const setSel = (sel, v) => ev(([s, v]) => { const el = document.querySelector(s); el.value = v; el.dispatchEvent(new Event('change', { bubbles: true })); }, [q(sel), v]);
+  const walls = () => ev(() => window.__tsg.preview.wallMeshes.filter((m) => m.userData.riverWall).map((m) => `${m.userData.riverWall}:${m.userData.cutPart}`));
+  const card0 = await ev((s) => [document.querySelector(s + ' .rwalls').value, !document.querySelector(s + ' .rRockBox').hidden, !!document.querySelector(s + ' .rangCv')], '#riverList .item[data-id="1"]');
+  const w0 = await walls();
+  let names = Object.values(await exportNames()).flat();
+  expect(card0[0] === 'nat' && card0[1] && card0[2] && w0.includes('nat:face') && names.includes('rio_01_roca') && !names.includes('terreno_cauces'), `naturales (de «suaves»): tarjeta ${card0}, 3D ${w0}, exportación ${names.filter((n) => /rio|cauce/.test(n))}`);
+  // lisas: la tarjeta cambia, el ángulo y las caras exteriores rehacen la malla
+  await setSel('.rwalls', 'art');
+  await idle();
+  const card1 = await ev((s) => [!document.querySelector(s + ' .rArtBox').hidden, document.querySelectorAll(s + ' img.rthumb').length, +document.querySelector(s + ' .rang').max], '#riverList .item[data-id="1"]');
+  const w1 = await walls();
+  names = Object.values(await exportNames()).flat();
+  expect(card1[0] && card1[1] === 3 && card1[2] === 135 && ['art:face', 'art:top', 'art:out'].every((k) => w1.includes(k)) && names.includes('rio_01_paredes') && !names.includes('rio_01_roca'), `lisas: tarjeta ${card1}, 3D ${w1}, exportación ${names.filter((n) => /rio_/.test(n))}`);
+  await ev((s) => { const el = document.querySelector(s); el.value = 110; el.dispatchEvent(new Event('change', { bubbles: true })); }, q('.rang'));
+  await idle();
+  const ang = await ev(() => window.__tsg.state.rivers[0].artAng);
+  const triOut = () => ev(() => window.__tsg.preview.wallMeshes.filter((m) => m.userData.riverWall === 'art' && m.userData.cutPart === 'out').reduce((a, m) => a + m.geometry.index.count / 3, 0));
+  const o0 = await triOut();
+  await setSel('.router', 'hide');
+  await idle();
+  const o1 = await triOut();
+  expect(ang === 110 && o0 > 0 && o1 === 0, `ángulo ${ang}°; caras exteriores ${o0} → ocultas ${o1}`);
+  // textura propia de la tapa: se exporta aparte
+  await ev(() => { const c = document.createElement('canvas'); c.width = c.height = 8; c.getContext('2d').fillRect(0, 0, 8, 8); window.__tsg.app.setRiverTexture(1, 'wallArtTop', c); });
+  await idle();
+  names = Object.values(await exportNames()).flat();
+  const own = await ev((s) => !document.querySelector(s).disabled, q('.rtexRm[data-kind="wallArtTop"]'));
+  expect(own && names.includes('rio_01_paredes') && names.includes('rio_01_paredes_tapa'), `tapa con textura propia: ${own}, ${names.filter((n) => /rio_/.test(n))}`);
 });
 
 test('tarjetas: la primera vez que se abre una lista desplegable no se cierra (la tarjeta no se vuelve a dibujar)', async () => {

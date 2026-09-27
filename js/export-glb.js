@@ -2,7 +2,7 @@
 // glTF usa Y arriba: se rota la raíz para que Blender / 3ds Max la importen con Z arriba y en metros.
 import * as THREE from 'three';
 import { GLTFExporter } from '../vendor/exporters/GLTFExporter.js';
-import { buildRivers } from './rivers.js';
+import { buildRivers, riverNames } from './rivers.js';
 import { buildTrackMesh, coveredRanges, terrainTint, buildTerrain, buildTrees, buildHills, buildStartGate, buildGrass, makeGround, bridgePillars, suspPillars, buildTriggers } from './scene.js';
 import { pillarGeometry, torchGeometry } from './tunnels.js';
 import { buildEdgeMeshes } from './edges.js';
@@ -113,7 +113,36 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
         }
         for (const q of own) root.add(mesh(`socavado_${nn(q.idx)}_roca`, q.positions, q.indices, q.uvs, cutMat('nat', ownOf(q.idx, 'nat'), q.idx)));
       }
-      if (terrain.wall) root.add(mesh('terreno_cauces', terrain.wall.positions, terrain.wall.indices, terrain.wall.uvs, wallMat('river'))); // lecho y paredes de los ríos
+      // paredes de los ríos socavados (0.78): rio_NN_roca (naturales) y rio_NN_paredes (lisas; _tapa / _exterior si usan otra textura)
+      if (terrain.riverWalls) {
+        const rn = riverNames(riverList), rOwn = (id, kind, part = 'face') => (textures.riverWallFor ? textures.riverWallFor(id, kind, part) : null);
+        const rMats = {};
+        const rMat = (kind, part, cv, own, id) => {
+          const sfx = part === 'top' ? '_tapa' : part === 'out' ? '_exterior' : '';
+          const key = `${kind}${sfx}${own ? ':' + id : ''}`;
+          if (rMats[key]) return rMats[key];
+          const t = tex(cv);
+          if (t) t.wrapS = t.wrapT = THREE.RepeatWrapping;
+          return (rMats[key] = new THREE.MeshStandardMaterial({ name: (kind === 'art' ? 'muro_rio' : 'roca_rio') + sfx + (own ? `_${String(rn.get(id) || id).replace(/^rio_/, '')}` : ''), color: t ? 0xffffff : kind === 'art' ? 0x9c9d98 : 0x6b6158, map: t, roughness: kind === 'art' ? 0.85 : 1, metalness: 0 }));
+        };
+        for (const q of terrain.riverWalls.nat) {
+          const own = rOwn(q.id, 'nat');
+          root.add(mesh(`${rn.get(q.id) || 'rio'}_roca`, q.positions, q.indices, q.uvs, rMat('nat', 'face', own || textures.riverWall, !!own, q.id)));
+        }
+        for (const q of terrain.riverWalls.art) {
+          const nm = rn.get(q.id) || 'rio', ownF = rOwn(q.id, 'art'), ownT = rOwn(q.id, 'art', 'top'), ownO = rOwn(q.id, 'art', 'out');
+          const faceMat = rMat('art', 'face', ownF || textures.riverArt, !!ownF, q.id);
+          // cada parte: su textura propia → la general de esa parte → la de la cara interior (mismo material, mismo objeto)
+          const partMat = (part, ownP, gen) => (ownP ? rMat('art', part, ownP, true, q.id) : gen ? rMat('art', part, gen, false, q.id) : faceMat);
+          const mt = partMat('top', ownT, textures.riverArtTop), mo = partMat('out', ownO, textures.riverArtOut);
+          if (mt === faceMat && mo === faceMat) {
+            const I = [...q.sub.face, ...q.sub.top, ...q.sub.out];
+            if (I.length) root.add(mesh(`${nm}_paredes`, q.positions, I, q.uvs, faceMat));
+            continue;
+          }
+          for (const [part, sfx, m] of [['face', '', faceMat], ['top', '_tapa', mt], ['out', '_exterior', mo]]) if (q.sub[part].length) root.add(mesh(`${nm}_paredes${sfx}`, q.positions, q.sub[part], q.uvs, m));
+        }
+      }
       // agua (playa / montaña): plano al nivel del mar
       if (terrain.waterLevel != null) {
         const b = terrain.bounds, mg = 400;

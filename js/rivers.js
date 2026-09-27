@@ -8,7 +8,7 @@ import Delaunator from '../vendor/delaunator.js';
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const smooth = (a, b, v) => { const t = clamp((v - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
 
-export const RIVER_DEFAULTS = { mode: 'carved', depth: 2, walls: 'smooth', wallSubdiv: 2 };
+export const RIVER_DEFAULTS = { mode: 'carved', depth: 2, walls: 'nat', wallSubdiv: 2 };
 /** Subdivisiones extra → multiplicador de polígonos por m² (cada lado se divide n + 1 veces). */
 export function subdivFactor(n) { const k = Math.max(0, Math.round(n ?? 1)); return (k + 1) * (k + 1); }
 
@@ -25,16 +25,40 @@ function noise2(x, y, s) {
  * Campo de un río: distancia con signo al borde (sd > 0 dentro) en una grilla, y la profundidad del socavado.
  * Devuelve null si no tiene toques. {sd(x,y), carve(x,y), inside(x,y), bounds, cell, rMed, wallW, river}
  */
+/** Ángulo de las paredes de los ríos socavados (grados desde el lecho, como la pendiente de un talud; 90 = vertical). */
+export const RIVER_ANGLES = { art: { def: 90, min: 45, max: 135 }, nat: { def: 71, min: 45, max: 85 } };
+/**
+ * Paredes de un río socavado (0.78, como los tramos socavados): 'art' (lisas, malla extruida desde el contorno) o 'nat'
+ * (roca del terreno). Los tipos anteriores («suaves», «de roca») pasan a naturales.
+ */
+export function riverWallsOf(rv) {
+  const type = rv && rv.walls === 'art' ? 'art' : 'nat';
+  const R = RIVER_ANGLES[type];
+  const a0 = rv ? (type === 'art' ? rv.artAng : rv.natAng) ?? rv.wallAng : null; // un ángulo por tipo (como los tramos)
+  const ang = clamp(Number.isFinite(a0) ? a0 : R.def, R.min, R.max);
+  const st = rv && (rv.rockStyle === 'sharp' || rv.rockStyle === 'strata') ? rv.rockStyle : 'irregular';
+  return {
+    type, ang, lean: Math.abs(ang - 90) < 1e-6 ? 0 : 1 / Math.tan((ang * Math.PI) / 180),
+    width: clamp(Number.isFinite(rv && rv.wallW) ? rv.wallW : 0.3, 0.1, 3),
+    outer: rv && (rv.wallOuter === 'buried' || rv.wallOuter === 'hide') ? rv.wallOuter : 'show',
+    style: st, rough: clamp(Number.isFinite(rv && rv.rockRough) ? rv.rockRough : 25, 0, 100), size: clamp(Number.isFinite(rv && rv.rockSize) ? rv.rockSize : 0.9, 0.3, 8),
+    rockTouched: !!(rv && (Number.isFinite(rv.rockRough) || Number.isFinite(rv.rockSize) || rv.rockStyle)),
+  };
+}
+
 export function riverField(rv) {
   const adds = (rv.strokes || []).filter((q) => !q.e);
   if (!adds.length) return null;
-  const key = JSON.stringify([rv.mode, rv.depth, rv.walls, rv.strokes]);
+  const RW = rv.kind === 'fall' ? null : riverWallsOf(rv);
+  const key = JSON.stringify([rv.mode, rv.depth, rv.walls, rv.strokes, RW && [RW.ang, RW.style, RW.rough, RW.size]]);
   const hit = cache.get(rv.id + ':' + rv.kind);
-  if (hit && hit.key === key) { hit.field.river = rv; return hit.field; } // la forma no cambió (sí pueden sus opciones)
+  if (hit && hit.key === key) { hit.field.river = rv; hit.field.walls = RW; return hit.field; } // la forma no cambió (sí pueden sus opciones: ancho y caras exteriores de las lisas)
   const rs = adds.map((q) => q.r).sort((a, b) => a - b);
   const rMed = rs[rs.length >> 1], rMin = rs[0];
-  const rock = rv.walls === 'rock';
-  const wallW = rock ? Math.max(0.25, 0.1 * rMed) : Math.max(0.8, 0.6 * rMed);
+  // cascadas: paredes suaves o de roca (como antes); ríos: ancho de la pared = lo que avanza la roca al bajar
+  const rock = !RW && rv.walls === 'rock';
+  const depth0 = Math.max(0.1, rv.depth ?? 2);
+  const wallW = RW ? (RW.type === 'nat' ? depth0 / Math.tan((RW.ang * Math.PI) / 180) : 0) : rock ? Math.max(0.25, 0.1 * rMed) : Math.max(0.8, 0.6 * rMed);
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const q of adds) { x0 = Math.min(x0, q.x - q.r); x1 = Math.max(x1, q.x + q.r); y0 = Math.min(y0, q.y - q.r); y1 = Math.max(y1, q.y + q.r); }
   let c = clamp(rMin / 5, 0.25, 2);
@@ -74,7 +98,29 @@ export function riverField(rv) {
     const n = noise2(x / 1.7, y / 1.7, seed) - 0.5;
     return smooth(0, wallW, s + n * 0.35 * rMed * 0.5);
   };
-  const carve = rv.mode === 'carved'
+  // ríos (0.78): lisas = el cauce entero hasta el lecho (la pared es una malla aparte); naturales = roca en pendiente
+  // (ángulo) con relieve según estilo, rugosidad y tamaño de las rocas. D = profundidad total (en los lagos, hasta su
+  // nivel de lecho). La roca nunca baja del lecho ni sube del suelo natural, y su borde de arriba y su pie quedan limpios.
+  const riverCarve = RW ? (x, y, D = depth) => {
+    if (x < x0 || y < y0 || x > x1 || y > y1) return 0;
+    const s = sd(x, y);
+    if (RW.type === 'art') return s > 0 ? D : 0;
+    if (s <= 0) return 0;
+    const tg = Math.tan((RW.ang * Math.PI) / 180), k = RW.rough / 25, sz = RW.size, sc = sz * (2.3 / 0.9);
+    const n = noise2(x / sc, y / sc, seed + 3), n2 = noise2(x / sz + 31, y / sz - 17, seed + 5);
+    const c0 = Math.min(D, s * tg * (1 + 0.48 * (n - 0.5) * Math.min(2, k)));
+    let hb = D - c0; // altura sobre el lecho
+    const ramp = (v) => clamp((v - 0.3) / 0.5, 0, 1), fade = Math.min(ramp(s * tg), ramp(hb));
+    if (RW.style === 'sharp') {
+      const r1 = 1 - Math.abs(2 * n2 - 1), n3 = noise2(x / (sz * 0.45) + 7, y / (sz * 0.45) - 3, seed + 7), r2 = 1 - Math.abs(2 * n3 - 1);
+      hb += (r1 * r1 * 1.3 + r2 * r2 * 0.45 - 0.62) * 1.5 * k * fade;
+    } else if (RW.style === 'strata') {
+      const hL = Math.max(0.35, sz * 1.1), t = hb / hL, fr = t - Math.floor(t);
+      hb += (hL * (Math.floor(t) + smooth(0.55, 1, fr)) - hb) * Math.min(1, k) * fade + (n2 - 0.5) * 0.35 * k * fade;
+    } else hb += (n2 - 0.5) * 1.2 * k * fade;
+    return clamp(D - hb, 0, D);
+  } : null;
+  const carve = rv.mode === 'carved' && riverCarve ? riverCarve : rv.mode === 'carved'
     ? (x, y) => {
       if (x < x0 || y < y0 || x > x1 || y > y1) return 0;
       const s = sd(x, y);
@@ -85,7 +131,7 @@ export function riverField(rv) {
       return depth * p * bed;
     }
     : () => 0;
-  const field = { sd, carve, inside: (x, y) => sd(x, y) > 0, bounds: { x0, y0, x1, y1 }, cell: c, rMed, wallW, depth, river: rv, grid: { F, nx, ny, x0, y0, c }, rock };
+  const field = { sd, carve, inside: (x, y) => sd(x, y) > 0, bounds: { x0, y0, x1, y1 }, cell: c, rMed, wallW, depth, river: rv, grid: { F, nx, ny, x0, y0, c }, rock, walls: RW };
   // contornos (memorizados por nivel) y forma (para saber si es un lago)
   const cont = new Map();
   field.contours = (iso, tol = 0.15, maxSeg = null) => {
@@ -410,7 +456,11 @@ export function riverMeshes(T, F, skip, levels = null) {
   if (carved) {
     // el agua llega hasta el borde de arriba (queda bajo las paredes, tapada por el terreno): así no hay rendijas entre el
     // agua y la pared aunque la roca sea irregular; el lecho llega bajo el pie de las paredes
-    const wIso = 0.03, bIso = Math.max(0, F.wallW - 0.3);
+    // lisas: el agua y el lecho llegan hasta la cara aunque esté inclinada (si cuelga, pasan bajo ella; si se abre, llegan
+    // bajo la tapa y quedan tapados); naturales: el lecho llega bajo el pie de la roca
+    const art = F.walls && F.walls.type === 'art', k = art ? F.walls.lean : 0;
+    const wIso = art ? Math.min(0.03, k * (0.3 * F.depth + 0.3) - 0.05) : 0.03;
+    const bIso = art ? Math.min(0, k * (F.depth + 0.5)) - 0.3 : Math.max(0, F.wallW - 0.3);
     const flat = lake && levels;
     res.flat = !!flat;
     const zW = flat ? () => levels.Lw : (x, y) => origAt(x, y) - 0.3 * F.depth;

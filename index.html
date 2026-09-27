@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Track Spline Generator v0.77</title>
+  <title>Track Spline Generator v0.78</title>
   <link rel="stylesheet" href="styles.css">
   <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.77</span></div>
+    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.78</span></div>
     <label class="proj-name-wrap" title="Nombre del proyecto: se usa al guardar (<nombre>.tsg.json) y en los autoguardados (<nombre>_auto_…)"><input id="projectName" class="proj-name" value="pista" spellcheck="false" maxlength="80"><span class="small muted" id="autosaveState"></span></label>
     <div class="top-actions">
       <button id="btnNew" title="Empezar de cero">Nuevo</button>
@@ -514,15 +514,27 @@
 
       <section class="panel" data-panel="rivers">
         <h2>Ríos y cascadas <span class="badge" id="riverCount">0</span></h2>
-        <p class="hint">Con <b>Ríos y cascadas</b> (barra superior) pintas ríos sobre el terreno; con un cerro seleccionado, lo que pintes sobre él es una cascada de ese cerro. Si empiezas sobre un río, lo extiendes, y si el trazo se abre, se bifurca. <b>Posado</b>: solo el agua sobre la superficie. <b>Socavado</b>: la superficie se hunde (profundidad, paredes suaves o de roca y su densidad de geometría) y el agua queda dentro del cauce. Alt o clic derecho borra.</p>
+        <p class="hint">Con <b>Ríos y cascadas</b> (barra superior) pintas ríos sobre el terreno; con un cerro seleccionado, lo que pintes sobre él es una cascada de ese cerro. Si empiezas sobre un río, lo extiendes, y si el trazo se abre, se bifurca. <b>Posado</b>: solo el agua sobre la superficie. <b>Socavado</b>: la superficie se hunde (profundidad y paredes lisas o naturales, como los tramos socavados; las cascadas, suaves o de roca) y el agua queda dentro del cauce. Alt o clic derecho borra.</p>
         <div class="row gap"><button id="btnRiverTool">Pintar ríos…</button><button id="btnRiverClear">Borrar todos</button></div>
         <div id="riverList" class="list"></div>
         <p class="hint" id="riverInfo"></p>
-        <h3 class="subhead" id="riverWallHead">Material de las paredes socavadas</h3>
-        <p class="hint">El lecho y las paredes de los cauces socavados usan su propio material (roca por defecto): <code>cauce_rio</code> en los ríos (objeto <code>terreno_cauces</code>) y <code>cauce_cascada</code> en las cascadas (<code>cerro_NN_cauce</code>).</p>
-        <div class="row gap"><span class="small" style="min-width:62px">Ríos</span><button id="riverWallBtn">Cargar textura…</button><button id="riverWallRemove" disabled>Por defecto</button><img id="riverWallThumb" class="thumb" hidden alt=""></div>
+        <h3 class="subhead" id="riverWallHead">Paredes de los ríos socavados</h3>
+        <p class="hint">Como en los tramos socavados: <b>Lisas</b> (una malla extruida desde el contorno pintado, con tapa y cara exterior) o <b>Naturales</b> (el mismo terreno en roca, con talud). Texturas generales: cada río puede tener las suyas en su tarjeta. Se exportan como <code>rio_NN_paredes</code> (con <code>_tapa</code> y <code>_exterior</code> si usan otra textura) y <code>rio_NN_roca</code>.</p>
+        <div class="row gap"><span class="small" style="min-width:74px">Lisas</span><button id="riverArtBtn">Cargar textura…</button><button id="riverArtRemove" disabled>Por defecto</button><img id="riverArtThumb" class="thumb" hidden alt=""></div>
+        <input id="riverArtFile" type="file" accept="image/*" hidden>
+        <div class="row gap" style="margin-top:6px"><span class="small" style="min-width:74px">Lisas: tapa</span><button id="riverArtTopBtn">Cargar textura…</button><button id="riverArtTopRemove" disabled>Como la cara interior</button><img id="riverArtTopThumb" class="thumb" hidden alt=""></div>
+        <input id="riverArtTopFile" type="file" accept="image/*" hidden>
+        <div class="row gap" style="margin-top:6px"><span class="small" style="min-width:74px">Lisas: exterior</span><button id="riverArtOutBtn">Cargar textura…</button><button id="riverArtOutRemove" disabled>Como la cara interior</button><img id="riverArtOutThumb" class="thumb" hidden alt=""></div>
+        <input id="riverArtOutFile" type="file" accept="image/*" hidden>
+        <div class="row gap" style="margin-top:6px"><span class="small" style="min-width:74px">Naturales</span><button id="riverWallBtn">Cargar textura…</button><button id="riverWallRemove" disabled>Por defecto</button><img id="riverWallThumb" class="thumb" hidden alt=""></div>
         <input id="riverWallFile" type="file" accept="image/*" hidden>
-        <div class="row gap" style="margin-top:6px"><span class="small" style="min-width:62px">Cascadas</span><button id="fallWallBtn">Cargar textura…</button><button id="fallWallRemove" disabled>Por defecto</button><img id="fallWallThumb" class="thumb" hidden alt=""></div>
+        <div class="field"><label>Repetición a lo largo (X) <span class="val"><input type="number" id="riverWallTileXNum" min="0.1" step="0.5" style="width:56px"> m</span></label><input type="range" id="riverWallTileX" min="0.5" max="30" step="0.5"></div>
+        <div class="field"><label>Repetición en la altura (Y) <span class="val"><input type="number" id="riverWallTileYNum" min="0.1" step="0.5" style="width:56px"> m</span></label><input type="range" id="riverWallTileY" min="0.5" max="30" step="0.5"></div>
+        <div class="field" title="0 %: la textura en metros exactos (nunca se deforma). 100 %: termina justo en el borde de arriba (se estira donde la pared cambia de alto)"><label>Adaptación a la altura <span class="val" id="riverWallFitVal"></span></label><input type="range" id="riverWallFit" min="0" max="100" step="1"></div>
+        <label class="check small" title="Cambia apenas el largo de cada repetición para que en cada contorno entre un número entero"><input type="checkbox" id="riverWallSnap"> Ajustar repeticiones al contorno</label>
+        <h3 class="subhead">Paredes de las cascadas</h3>
+        <p class="hint">Las cascadas socavadas mantienen sus paredes suaves o de roca, con el material <code>cauce_cascada</code> (<code>cerro_NN_cauce</code>).</p>
+        <div class="row gap"><span class="small" style="min-width:74px">Cascadas</span><button id="fallWallBtn">Cargar textura…</button><button id="fallWallRemove" disabled>Por defecto</button><img id="fallWallThumb" class="thumb" hidden alt=""></div>
         <input id="fallWallFile" type="file" accept="image/*" hidden>
         <div class="field"><label>Repetición de la textura <span class="val"><input type="number" id="riverWallTileNum" min="0.5" step="0.5" style="width:56px"> m</span></label><input type="range" id="riverWallTile" min="0.5" max="30" step="0.5"></div>
         <h3 class="subhead">Lecho de los ríos socavados</h3>
@@ -742,7 +754,7 @@
             <select id="riverMode" style="font-size:calc(12px * var(--fs, 1))" title="Geometría del río o cascada nuevo"><option value="surface">Posado</option><option value="carved">Socavado</option></select>
             <span id="riverCarvedBox" class="row" style="gap:6px">
               <label class="small">Prof. <input type="range" id="riverDepth" min="0.2" max="20" step="0.1" style="width:70px"> <span class="val" id="riverDepthVal"></span></label>
-              <select id="riverWalls" style="font-size:calc(12px * var(--fs, 1))" title="Paredes del cauce"><option value="smooth">Paredes suaves</option><option value="rock">Paredes de roca</option></select>
+              <select id="riverWalls" style="font-size:calc(12px * var(--fs, 1))" title="Paredes del cauce de los ríos nuevos (las cascadas empiezan con paredes suaves)"><option value="nat">Paredes naturales</option><option value="art">Paredes lisas</option></select>
               <label class="small" title="Subdivisiones extra de las paredes socavadas">Dens. paredes <input type="range" id="riverWallSubdiv" min="0" max="6" step="1" style="width:56px"> <span class="val" id="riverWallSubdivVal"></span></label>
             </span>
             <span class="small muted">cerro seleccionado = cascada</span>

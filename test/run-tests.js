@@ -5,14 +5,14 @@ import { computeElevation } from '../js/elevation.js';
 import { traceImage } from '../js/trace.js';
 import { exportBlender, exportMax, exportJSON, exportOBJ, routeSamples, bezierKnots, bezierError } from '../js/export.js';
 import { rasterize } from './raster.js';
-import { bridgePillars, buildTerrain, buildTrees, buildTrackMesh, trackRows, buildDecoInstances, coveredRanges, isCovered, buildHills, buildStartGate, buildGrass, makeGround, suspPillars, pillarBlocked } from '../js/scene.js';
+import { bridgePillars, buildTerrain, buildTrees, buildTrackMesh, trackRows, buildDecoInstances, coveredRanges, isCovered, buildHills, buildStartGate, buildGrass, makeGround, suspPillars, pillarBlocked, riverUVOf } from '../js/scene.js';
 import { edgeSamples } from '../js/export.js';
 import { computeItems, defaultGroup, itemAt } from '../js/items.js';
 import { nearestOnSamples } from '../js/geometry.js';
 import { buildEdgeMeshes } from '../js/edges.js';
 import { buildCollisionMeshes } from '../js/collision.js';
 import { edgeExtents, dirtWidthAt, edgeParams, convexHull2, frameAt, hillFieldOne } from '../js/tunnels.js';
-import { buildRivers, riverField } from '../js/rivers.js';
+import { buildRivers, riverField, riverWallsOf } from '../js/rivers.js';
 import { buildTriggers, sculptField, bakeTreeList, bakeDecoList, moveTree, treeConeVerts, vegPlace } from '../js/scene.js';
 import { treeModelItems, decoSetItems } from '../js/deco.js';
 import { buildShadows, shadowCasters, sunShadowDir } from '../js/shadows.js';
@@ -635,8 +635,10 @@ for (const [key, s] of Object.entries(SAMPLES)) {
   const d0 = T.sample(cx - 30, cy - 20) - TR.sample(cx - 30, cy - 20);
   check(d0 > 2.4 && d0 < 3.6, `río socavado: hunde el terreno (${d0.toFixed(2)} m)`);
   check(Math.abs(T.sample(cx - 30, cy + 20) - TR.sample(cx - 30, cy + 20)) < 0.3, 'río socavado: fuera del cauce no cambia');
-  check(TR.wall && TR.wall.tris > 20 && TR.baseIndices.length + TR.wall.indices.length === TR.indices.length, `río socavado: lecho y paredes aparte (${TR.wall && TR.wall.tris} triángulos)`);
-  check(!T.wall, 'sin ríos socavados no hay malla de cauces');
+  // (0.78: «de roca» pasa a paredes naturales: la roca va en su parte por río)
+  const rk = TR.riverWalls && TR.riverWalls.nat[0];
+  check(rk && rk.id === 1 && rk.tris > 20 && TR.baseIndices.length + rk.indices.length <= TR.indices.length, `río socavado: roca de las paredes aparte (${rk && rk.tris} triángulos)`);
+  check(!T.riverWalls, 'sin ríos socavados no hay paredes de ríos');
   const RW = buildRivers(TR, null, [rv]);
   check(RW.length === 1 && RW[0].tris > 10 && RW[0].name === 'rio_01', `río: malla de agua (${RW.length && RW[0].tris} triángulos)`);
   if (RW.length) {
@@ -1155,6 +1157,58 @@ for (const [key, s] of Object.entries(SAMPLES)) {
     let below = 0, missS = 0;
     for (const [x, y] of pts) { const zw = zOn(WS, x, y); if (zw == null) { missS++; continue; } if (zw < T.sample(x, y) + 0.12 - 0.05 - 0.02) below++; }
     check(WS.tris < W.tris && below === 0 && missS <= 2, `río posado simplificado: ${WS.tris} triángulos (como el terreno ${W.tris}); nunca más de 5 cm bajo lo pedido (${below}), cubre (${missS} sin agua)`);
+  }
+  // 0.78: paredes de los ríos como las de los tramos socavados: lisas (malla extruida desde el contorno) o naturales (roca)
+  {
+    const triNz = (P, I, t) => { const [a, b, c] = [I[t], I[t + 1], I[t + 2]]; const ux = P[b * 3] - P[a * 3], uy = P[b * 3 + 1] - P[a * 3 + 1], uz = P[b * 3 + 2] - P[a * 3 + 2], vx = P[c * 3] - P[a * 3], vy = P[c * 3 + 1] - P[a * 3 + 1], vz = P[c * 3 + 2] - P[a * 3 + 2]; const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx, l = Math.hypot(nx, ny, nz); return l ? { nz: nz / l, area: l / 2 } : null; };
+    const median = (a) => { const b = [...a].sort((p, q) => p - q); return b.length ? b[b.length >> 1] : NaN; };
+    const centIn = (T, F, thr, I = T.baseIndices) => { const P = T.positions; let n = 0; for (let t = 0; t < I.length; t += 3) { const mx = (P[I[t] * 3] + P[I[t + 1] * 3] + P[I[t + 2] * 3]) / 3, my = (P[I[t] * 3 + 1] + P[I[t + 1] * 3 + 1] + P[I[t + 2] * 3 + 1]) / 3; if (F.sd(mx, my) > thr) n++; } return n; };
+    const base = { id: 1, kind: 'river', mode: 'carved', depth: 2.5, wallSubdiv: 2, strokes: riverS, bed: true };
+    // lisas a 90°: el terreno de adentro se corta entero; agua y lecho llegan a la pared; la tapa no queda bajo el terreno
+    const art = { ...base, walls: 'art', artAng: 90 };
+    const { T, W, F } = run(art);
+    const A = T.riverWalls && T.riverWalls.art[0];
+    check(A && A.id === 1 && A.sub.face.length && A.sub.top.length && A.sub.out.length && !T.riverWalls.nat.length, `río con paredes lisas: cara ${A && A.sub.face.length / 3}, tapa ${A && A.sub.top.length / 3}, exterior ${A && A.sub.out.length / 3} triángulos`);
+    const inside = centIn(T, F, 0.2);
+    check(inside === 0, `paredes lisas: nada del terreno dentro del contorno (${inside} triángulos a más de 20 cm)`);
+    let gapW = 0, gapB = 0, nRim = 0;
+    for (const [x, y] of samplesIn(F, 0.02, 600)) { if (F.sd(x, y) > 0.5) continue; nRim++; if (zOn(W, x, y) == null) gapW++; if (zOn(W.bed, x, y) == null) gapB++; }
+    check(nRim > 20 && gapW === 0 && gapB === 0, `paredes lisas: agua y lecho llegan hasta la pared (${nRim} puntos junto al borde: ${gapW} sin agua, ${gapB} sin lecho)`);
+    const topM = { positions: A.positions, indices: A.sub.top }, baseM = { positions: T.positions, indices: T.baseIndices };
+    let poke = 0, nCap = 0;
+    for (const [x, y] of samplesIn({ ...F, sd: (a, b) => -Math.abs(F.sd(a, b) + 0.15) }, -0.1, 400)) { const zt = zOn(topM, x, y), zg = zOn(baseM, x, y); if (zt == null || zg == null) continue; nCap++; if (zg > zt + 0.02) poke++; }
+    check(nCap > 20 && poke === 0, `paredes lisas: el terreno no atraviesa la tapa (${poke} de ${nCap})`);
+    // inclinación: la cara interior con el ángulo pedido (también colgando sobre el agua)
+    for (const ang of [60, 120]) {
+      const { T: Ta } = run({ ...art, artAng: ang });
+      const Aa = Ta.riverWalls.art[0], I = Aa.sub.face, got = [];
+      for (let t = 0; t < I.length; t += 3) { const q = triNz(Aa.positions, I, t); if (q && q.area > 0.05 && Math.abs(q.nz) < 0.97) got.push((Math.acos(Math.abs(q.nz)) * 180) / Math.PI); }
+      const m = median(got), want = ang > 90 ? 180 - ang : ang;
+      check(Math.abs(m - want) < 4, `paredes lisas a ${ang}°: la cara queda a ${m.toFixed(1)}° de la horizontal (≈ ${want}°)`);
+    }
+    // caras exteriores: ocultar las enterradas o todas baja los triángulos
+    const trisOf = (rv) => { const q = run(rv).T.riverWalls.art[0]; return q.sub.face.length / 3 + q.sub.top.length / 3 + q.sub.out.length / 3; };
+    const tShow = trisOf(art), tBur = trisOf({ ...art, wallOuter: 'buried' }), tHide = trisOf({ ...art, wallOuter: 'hide' });
+    check(tHide <= tBur && tBur < tShow && tHide < tShow, `paredes lisas: caras exteriores ${tShow} → ocultar enterradas ${tBur} → ocultar todas ${tHide} triángulos`);
+    // naturales (roca) a 45° y 85°: nada del pasto sobre el cauce; la textura no se estira
+    for (const ang of [45, 85]) {
+      const nat = { ...base, walls: 'nat', natAng: ang };
+      const { T: Tn, F: Fn } = run(nat);
+      const R = Tn.riverWalls.nat[0];
+      const grass = centIn(Tn, Fn, 0.4);
+      const rat = [];
+      const P = R.positions, U = R.uvs, I = R.indices, UV = riverUVOf(nat, sp);
+      for (let t = 0; t < I.length; t += 3) {
+        const q = triNz(P, I, t); if (!q || q.area < 0.02) continue;
+        const [a, b, c] = [I[t], I[t + 1], I[t + 2]];
+        const au = Math.abs((U[b * 2] - U[a * 2]) * (U[c * 2 + 1] - U[a * 2 + 1]) - (U[c * 2] - U[a * 2]) * (U[b * 2 + 1] - U[a * 2 + 1])) / 2 * UV.x * UV.y;
+        rat.push(au / q.area);
+      }
+      const m = median(rat);
+      check(R && R.tris > 20 && grass === 0 && m > 0.8 && m < 1.25, `paredes naturales a ${ang}°: roca ${R && R.tris} triángulos, pasto sobre el cauce ${grass}, textura sin estirar (área UV/área ${m.toFixed(2)})`);
+    }
+    // proyectos anteriores: «suaves» y «de roca» pasan a naturales; las cascadas no cambian
+    check(riverWallsOf({ walls: 'smooth' }).type === 'nat' && riverWallsOf({ walls: 'rock' }).type === 'nat' && riverWallsOf({}).type === 'nat' && riverField({ id: 7, kind: 'fall', mode: 'carved', depth: 2, walls: 'rock', strokes: riverS }).walls == null, 'ríos anteriores: paredes suaves o de roca → naturales (las cascadas siguen igual)');
   }
 }
 
