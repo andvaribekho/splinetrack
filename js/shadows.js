@@ -31,6 +31,16 @@ export function sunShadowDir(sp) {
   return { dx: -x / l, dy: -y / l, perM };
 }
 
+/** ¿Alguna sombra va proyectada según el sol? (la general, un grupo de árboles o un set de decoración) */
+export function shadowUsesSun(sp, sets = []) {
+  if (!sp) return false;
+  if (sp.shadowMode === 'sun') return true;
+  const sel = sp.treeGroupSel | 0;
+  const groups = [sp, ...(Array.isArray(sp.treeGroups) ? sp.treeGroups.filter((_, i) => i !== sel) : [])];
+  if (groups.some((g) => g && g.trees !== false && g.treeShadow && g.treeShadowMode === 'sun')) return true;
+  return (sets || []).some((q) => q && q.shadow && q.shadowMode === 'sun');
+}
+
 /** Dirección hacia el sol (unitaria, 3D) para la luz de la vista previa. */
 export function sunVector(sp) {
   const x = sp.sunX ?? SHADOW_DEFAULTS.sunX, y = sp.sunY ?? SHADOW_DEFAULTS.sunY;
@@ -45,13 +55,14 @@ export function sunVector(sp) {
  */
 export function shadowCasters(sp, trees, decoRes, assetOf) {
   const out = [];
-  if (sp.treeShadow && trees) for (const t of trees) out.push({ x: t.x, y: t.y, r: t.r * Math.max(t.ex || 1, t.ey || 1), h: t.h });
+  // cada árbol puede traer su grupo: sh (proyecta sombra) y shm (posición: 'global' | 'center' | 'sun')
+  if (trees) for (const t of trees) if (t.sh ?? sp.treeShadow) out.push({ x: t.x, y: t.y, r: t.r * Math.max(t.ex || 1, t.ey || 1), h: t.h, mode: t.shm ?? sp.treeShadowMode });
   for (const { set, items } of decoRes || []) {
     if (!set.shadow) continue;
     for (const it of items) {
       const A = assetOf ? assetOf(it.asset) : null;
       const sz = A && A.size ? A.size : [1, 1, 1], sc = it.scale || 1;
-      out.push({ x: it.x, y: it.y, r: Math.max(0.1, (Math.max(sz[0] * (it.sx ?? 1), sz[1] * (it.sy ?? 1)) / 2) * sc), h: Math.max(0.1, sz[2] * (it.sz ?? 1) * sc) });
+      out.push({ x: it.x, y: it.y, r: Math.max(0.1, (Math.max(sz[0] * (it.sx ?? 1), sz[1] * (it.sy ?? 1)) / 2) * sc), h: Math.max(0.1, sz[2] * (it.sz ?? 1) * sc), mode: set.shadowMode });
     }
   }
   return out;
@@ -119,7 +130,9 @@ export function buildShadows(layout, elev, spIn, ground, casters, opts = {}) {
   const gz = (x, y) => (ground ? ground.sample(x, y) : 0);
   const surf = (x, y) => { const a = gz(x, y), b = road(x, y); return b > a - 0.3 ? Math.max(a, b) : a; }; // la calzada manda si está encima (o casi) del suelo
   const baseAt = opts.baseAt || null;
-  const sun = sp.shadowMode === 'sun' ? sunShadowDir(sp) : null;
+  const sunDir = sunShadowDir(sp);
+  // posición de cada sombra: la del objeto (grupo de árboles o set) o, si es «global», la general
+  const modeOf = (c) => (c.mode === 'center' || c.mode === 'sun' ? c.mode : sp.shadowMode);
   const maxTris = Math.max(2, Math.round(sp.shadowMaxTris || 2));
   const tol = Math.max(0.005, sp.shadowTol ?? 0.05);
   const lift = sp.shadowLift ?? 0.04;
@@ -128,6 +141,7 @@ export function buildShadows(layout, elev, spIn, ground, casters, opts = {}) {
   const hist = {};
   for (const c of casters) {
     const R = c.r * size;
+    const sun = modeOf(c) === 'sun' ? sunDir : null;
     let cx = c.x, cy = c.y, ux = 1, uy = 0, len = 2 * R;
     if (sun) {
       // sombra proyectada: desde el pie del objeto hacia el lado contrario del sol, con su largo según la altura del sol

@@ -100,6 +100,12 @@ export const DEFAULT_SCENE = {
   treeTilt: 0, // 0 = vertical, 100 = alineado con la normal del suelo
   treeSingle: true, // «single mesh»: los árboles se exportan como una sola malla; sin marcar se editan uno a uno
   treeBake: null, // lista fija de árboles (editados a mano): [[lx, ly, alto/escala, radio/escala, giro, ex, ey, n.º original], …] en coordenadas del mapa
+  treeShadowMode: 'global', // posición de su sombra: 'global' (la de «Planos de sombra») | 'center' | 'sun'
+  // grupos de árboles / de hierba (0.84): el grupo activo vive en las claves de arriba; los demás, en treeGroups[i]
+  treeGroups: null, // [{id, name, …TREE_GROUP_KEYS}] (null = un solo grupo)
+  treeGroupSel: 0,
+  grassGroups: null, // [{id, name, …GRASS_GROUP_KEYS}]
+  grassGroupSel: 0,
   // hierba (dos planos cruzados con textura con transparencia)
   grass: false,
   grassSide: 'both',
@@ -111,6 +117,7 @@ export const DEFAULT_SCENE = {
   grassOnTops: false,
   grassHillDensity: 60, // matas por 1000 m² sobre cerros
   grassTilt: 60,
+  grassSingle: true, // «single mesh» de la hierba al exportar (sin marcar: un objeto por mata)
   // borde (glow) de los nitro strips: paredes sin espesor, una cara, sin techo
   stripBorder: false,
   stripBorderHeight: 0.8, // m
@@ -2247,6 +2254,15 @@ function scatter(layout, elev, sp, ground, o) {
   const placed = new SpatialGrid(Math.max(2, o.minSpace * 3));
   const out = [];
   const tilt = clamp(o.tilt ?? 0, 0, 100) / 100;
+  // lo ya puesto por otros grupos (árboles de otro grupo, hierba de otro grupo): no se encima
+  let avoid = null;
+  if (o.avoid && o.avoid.length) {
+    let mr = 0;
+    for (const a of o.avoid) mr = Math.max(mr, a.r || 0);
+    const G = new SpatialGrid(Math.max(2, (mr + (o.avoidR || 0)) * 2));
+    for (const a of o.avoid) G.insert(a.x, a.y, a);
+    avoid = { G, reach: mr + (o.avoidR || 0) };
+  }
   const tryPlace = (x, y, zFallback) => {
     let ok = true;
     g.query(x, y, maxW / 2 + o.clear, (p) => { if (ok && Math.hypot(p.x - x, p.y - y) < p.ew / 2 + o.clear) ok = false; });
@@ -2264,6 +2280,8 @@ function scatter(layout, elev, sp, ground, o) {
     });
     if (!ok) return;
     placed.query(x, y, o.minSpace, (t) => { if (ok && Math.hypot(t.x - x, t.y - y) < o.minSpace) ok = false; });
+    if (!ok) return;
+    if (avoid) avoid.G.query(x, y, avoid.reach, (a) => { if (ok && Math.hypot(a.x - x, a.y - y) < (a.r || 0) + (o.avoidR || 0)) ok = false; });
     if (!ok) return;
     let where = 'terrain';
     if (ground && ground.classify) {
@@ -2492,8 +2510,9 @@ export function bakeDecoList(layout, inst) {
  * Árboles (conos) a los costados de la pista y, opcionalmente, en laderas y cimas de cerros.
  * Con sp.treeBake (lista fija editada a mano) se usan esas posiciones, apoyadas en el suelo actual.
  */
-export function buildTrees(layout, elev, spIn = {}, ground = null) {
+export function buildTrees(layout, elev, spIn = {}, ground = null, avoid = null) {
   const sp = { ...DEFAULT_SCENE, ...spIn };
+  const seed = (sp.treeSeed | 0) + (sp.vegGroup | 0) * 7919; // cada grupo, su propia distribución (el primero, la de siempre)
   let trees;
   if (Array.isArray(sp.treeBake)) {
     const zf = ground ? null : roadZFallback(layout, elev, sp);
@@ -2504,11 +2523,12 @@ export function buildTrees(layout, elev, spIn = {}, ground = null) {
     });
   } else {
     const pts = scatter(layout, elev, sp, ground, {
-      seed: sp.treeSeed, density: sp.treeDensity, side: sp.treeSide, offset: sp.treeOffset, spread: sp.treeSpread,
+      seed, density: sp.treeDensity, side: sp.treeSide, offset: sp.treeOffset, spread: sp.treeSpread,
       minSpace: 3.2 * sp.treeScale, clear: 1.5 + 2.6 * sp.treeScale,
       onSlopes: sp.treeOnSlopes, onTops: sp.treeOnTops, hillDensity: sp.treeHillDensity, tilt: sp.treeTilt,
+      avoid, avoidR: 2 * sp.treeScale,
     });
-    const rand = rng((sp.treeSeed ^ 0x9e3779b9) >>> 0);
+    const rand = rng((seed ^ 0x9e3779b9) >>> 0);
     trees = pts.map((p, i) => {
       const h = 9 * sp.treeScale * (0.75 + 0.5 * rand());
       const rad = h * (0.26 + 0.06 * rand());
@@ -2535,14 +2555,16 @@ export function buildTrees(layout, elev, spIn = {}, ground = null) {
 }
 
 /** Hierba: dos planos cruzados por mata, con UV para una textura con transparencia. Normales hacia arriba (luz pareja). */
-export function buildGrass(layout, elev, spIn = {}, ground = null) {
+export function buildGrass(layout, elev, spIn = {}, ground = null, avoid = null) {
   const sp = { ...DEFAULT_SCENE, ...spIn };
+  const seed = (sp.treeSeed | 0) + (sp.vegGroup | 0) * 7919;
   const pts = scatter(layout, elev, sp, ground, {
-    seed: (sp.treeSeed * 31 + 7) >>> 0, density: sp.grassDensity, side: sp.grassSide, offset: sp.grassOffset, spread: sp.grassSpread,
+    seed: (seed * 31 + 7) >>> 0, density: sp.grassDensity, side: sp.grassSide, offset: sp.grassOffset, spread: sp.grassSpread,
     minSpace: 0.55 * sp.grassScale, clear: 0.4,
     onSlopes: sp.grassOnSlopes, onTops: sp.grassOnTops, hillDensity: sp.grassHillDensity, tilt: sp.grassTilt,
+    avoid, avoidR: 0.45 * sp.grassScale,
   });
-  const rand = rng((sp.treeSeed * 131 + 3) >>> 0);
+  const rand = rng((seed * 131 + 3) >>> 0);
   const n = pts.length;
   const pos = new Float32Array(n * 8 * 3), nor = new Float32Array(n * 8 * 3), uv = new Float32Array(n * 8 * 2);
   const idx = new Uint32Array(n * 12);
@@ -2575,6 +2597,67 @@ export function buildGrass(layout, elev, spIn = {}, ground = null) {
     }
   }
   return { positions: pos, normals: nor, uvs: uv, indices: idx, count: n, tris: n * 4, insts };
+}
+
+// ---------- grupos de árboles y de hierba (0.84) ----------
+/** Claves propias de cada grupo de árboles / de hierba (la semilla es común: cada grupo la desplaza). */
+export const TREE_GROUP_KEYS = ['trees', 'treeSide', 'treeDensity', 'treeScale', 'treeOffset', 'treeSpread', 'treeOnSlopes', 'treeOnTops', 'treeHillDensity', 'treeTilt', 'treeAssets', 'treeShadow', 'treeShadowMode', 'treeSingle', 'treeBake'];
+export const GRASS_GROUP_KEYS = ['grass', 'grassSide', 'grassDensity', 'grassScale', 'grassOffset', 'grassSpread', 'grassOnSlopes', 'grassOnTops', 'grassHillDensity', 'grassTilt', 'grassAssets', 'grassSingle'];
+export const vegGroupKeys = (kind) => (kind === 'grass' ? GRASS_GROUP_KEYS : TREE_GROUP_KEYS);
+const cloneVal = (v) => (v && typeof v === 'object' ? JSON.parse(JSON.stringify(v)) : v);
+/**
+ * Parámetros de cada grupo ('tree' | 'grass'): [{...sp con las claves del grupo, vegGroup: i, vegGroupName}].
+ * El grupo activo (treeGroupSel) toma las claves de sp; los demás, las suyas (o las por defecto).
+ */
+export function vegGroups(spIn, kind = 'tree') {
+  const sp = { ...DEFAULT_SCENE, ...spIn };
+  const keys = vegGroupKeys(kind);
+  const arr = Array.isArray(sp[kind + 'Groups']) && sp[kind + 'Groups'].length ? sp[kind + 'Groups'] : [null];
+  const sel = clamp(sp[kind + 'GroupSel'] | 0, 0, arr.length - 1);
+  return arr.map((g, i) => {
+    const o = { ...sp, vegGroup: i, vegGroupName: (g && g.name) || null };
+    if (i !== sel && g) for (const k of keys) o[k] = g[k] !== undefined ? g[k] : DEFAULT_SCENE[k];
+    return o;
+  });
+}
+/** Nombre de objeto (exportación) del grupo i: el primero conserva el de siempre («arboles»), los demás «arboles_2»… */
+export function vegGroupSuffix(i) { return i > 0 ? `_${i + 1}` : ''; }
+/** Guarda el grupo activo en su lugar y pone el grupo i en las claves de sp (modifica sp). */
+export function selectVegGroupIn(sp, kind, i) {
+  const keys = vegGroupKeys(kind);
+  const arr = sp[kind + 'Groups'];
+  if (!Array.isArray(arr) || !arr[i]) return false;
+  const cur = clamp(sp[kind + 'GroupSel'] | 0, 0, arr.length - 1);
+  if (cur === i) return false;
+  for (const k of keys) arr[cur][k] = cloneVal(sp[k] !== undefined ? sp[k] : DEFAULT_SCENE[k]);
+  for (const k of keys) sp[k] = cloneVal(arr[i][k] !== undefined ? arr[i][k] : DEFAULT_SCENE[k]);
+  sp[kind + 'GroupSel'] = i;
+  return true;
+}
+/**
+ * Árboles de todos los grupos (en orden; cada grupo esquiva a los anteriores): [{g, sp, TR}] con TR = buildTrees().
+ * Cada árbol lleva g (grupo), sh (proyecta sombra) y shm (posición de la sombra).
+ */
+export function buildTreeGroups(layout, elev, spIn = {}, ground = null) {
+  const out = [], avoid = [];
+  for (const g of vegGroups(spIn, 'tree')) {
+    if (!g.trees) continue;
+    const TR = buildTrees(layout, elev, g, ground, avoid.length ? avoid.slice() : null);
+    for (const t of TR.trees) { t.g = g.vegGroup; t.sh = !!g.treeShadow; t.shm = g.treeShadowMode || 'global'; avoid.push({ x: t.x, y: t.y, r: t.r * Math.max(t.ex || 1, t.ey || 1) }); }
+    out.push({ g: g.vegGroup, sp: g, TR });
+  }
+  return out;
+}
+/** Hierba de todos los grupos (cada grupo esquiva a los anteriores): [{g, sp, GR}] con GR = buildGrass(). */
+export function buildGrassGroups(layout, elev, spIn = {}, ground = null) {
+  const out = [], avoid = [];
+  for (const g of vegGroups(spIn, 'grass')) {
+    if (!g.grass) continue;
+    const GR = buildGrass(layout, elev, g, ground, avoid.length ? avoid.slice() : null);
+    for (const it of GR.insts) avoid.push({ x: it.x, y: it.y, r: it.w / 2 });
+    out.push({ g: g.vegGroup, sp: g, GR });
+  }
+  return out;
 }
 
 /**

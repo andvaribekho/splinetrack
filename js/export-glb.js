@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { GLTFExporter } from '../vendor/exporters/GLTFExporter.js';
 import { buildRivers, riverNames } from './rivers.js';
 import { buildSigns, SIGN_NAMES } from './signs.js';
-import { buildTrackMesh, coveredRanges, terrainTint, buildTerrain, buildTrees, buildHills, buildStartGate, buildGrass, makeGround, bridgePillars, suspPillars, buildTriggers } from './scene.js';
+import { buildTrackMesh, coveredRanges, terrainTint, buildTerrain, buildTreeGroups, buildGrassGroups, vegGroupSuffix, buildHills, buildStartGate, makeGround, bridgePillars, suspPillars, buildTriggers } from './scene.js';
 import { pillarGeometry, torchGeometry } from './tunnels.js';
 import { buildEdgeMeshes } from './edges.js';
 import { buildCollisionMeshes } from './collision.js';
@@ -433,24 +433,25 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
   const hasAsset = (id) => !!byId(id);
   const putItems = (grp, items, prefix) => items.forEach((it, i) => { const A = byId(it.asset); if (A) grp.add(assetObject(A, it, `${prefix}_${String(i + 1).padStart(4, '0')}`)); });
   let shadowTrees = null;
-  if (sp.trees) {
-    const tr = buildTrees(layout, elev, sp, ground);
-    shadowTrees = tr.trees;
-    treeCount = tr.count;
-    const tItems = treeModelItems(tr.trees, sp.treeAssets, hasAsset);
-    const single = sp.treeSingle !== false; // «single mesh»: todos los árboles en una malla (una por material con modelos)
+  // árboles: un grupo de objetos por grupo de árboles («arboles», «arboles_2»…)
+  for (const { g: gi, sp: gsp, TR: tr } of buildTreeGroups(layout, elev, sp, ground)) {
+    const sfx = vegGroupSuffix(gi);
+    shadowTrees = (shadowTrees || []).concat(tr.trees);
+    treeCount += tr.count;
+    const tItems = treeModelItems(tr.trees, gsp.treeAssets, hasAsset);
+    const single = gsp.treeSingle !== false; // «single mesh»: todos los árboles del grupo en una malla (una por material con modelos)
     if (tItems) { // árboles con modelos: un objeto por árbol (pivote del modelo) o combinados
       const grp = new THREE.Group();
-      grp.name = 'arboles';
+      grp.name = `arboles${sfx}`;
       root.add(grp);
-      if (single) for (const m of mergedAssetMeshes(byId, tItems, 'arboles_malla')) grp.add(m);
-      else putItems(grp, tItems, 'arbol');
+      if (single) for (const m of mergedAssetMeshes(byId, tItems, `arboles${sfx}_malla`)) grp.add(m);
+      else putItems(grp, tItems, `arbol${sfx}`);
     } else if (tr.count) {
       const grp = new THREE.Group();
-      grp.name = 'arboles';
+      grp.name = `arboles${sfx}`;
       root.add(grp);
-      const mat = new THREE.MeshStandardMaterial({ name: 'arbol', color: 0x2e6b34, roughness: 0.9, flatShading: true });
-      if (single) grp.add(mesh('arboles_malla', tr.positions, tr.indices, null, mat));
+      const mat = new THREE.MeshStandardMaterial({ name: `arbol${sfx}`, color: 0x2e6b34, roughness: 0.9, flatShading: true });
+      if (single) grp.add(mesh(`arboles${sfx}_malla`, tr.positions, tr.indices, null, mat));
       else {
         const geo = unitCone(8);
         tr.trees.forEach((t, i) => {
@@ -459,7 +460,7 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
           g.scale(t.r * (t.ex || 1), t.r * (t.ey || 1), t.h);
           g.computeVertexNormals();
           const m = new THREE.Mesh(g, mat);
-          m.name = `arbol_${String(i + 1).padStart(4, '0')}`;
+          m.name = `arbol${sfx}_${String(i + 1).padStart(4, '0')}`;
           m.position.set(...t.basePos);
           // inclinación según el suelo y giro aleatorio sobre su eje: rotación del objeto (geometría recta en su espacio local)
           m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3(...t.up)).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), t.yaw || 0));
@@ -551,25 +552,48 @@ export async function buildExportScene(layout, elev, sp, textures = {}, paint = 
   }
   // hierba: una sola malla (planos cruzados) con textura recortada por transparencia
   let grassCount = 0;
-  if (sp.grass) {
-    const gr = buildGrass(layout, elev, sp, ground);
-    grassCount = gr.count;
-    const gItems = grassModelItems(gr.insts, sp.grassAssets, hasAsset);
+  let grassMat = null;
+  for (const { g: gi, sp: gsp, GR: gr } of buildGrassGroups(layout, elev, sp, ground)) {
+    const sfx = vegGroupSuffix(gi);
+    grassCount += gr.count;
+    const single = gsp.grassSingle !== false; // «single mesh»: una malla por grupo; sin marcar, un objeto por mata
+    const gItems = grassModelItems(gr.insts, gsp.grassAssets, hasAsset);
     if (gItems) {
       const grp = new THREE.Group();
-      grp.name = 'hierba';
+      grp.name = `hierba${sfx}`;
       root.add(grp);
-      putItems(grp, gItems, 'hierba');
+      if (single) for (const m of mergedAssetMeshes(byId, gItems, `hierba${sfx}_malla`)) grp.add(m);
+      else putItems(grp, gItems, `hierba${sfx}`);
     } else if (gr.count) {
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.BufferAttribute(gr.positions, 3));
-      g.setAttribute('normal', new THREE.BufferAttribute(gr.normals, 3));
-      g.setAttribute('uv', new THREE.BufferAttribute(gr.uvs, 2));
-      g.setIndex(new THREE.BufferAttribute(gr.indices, 1));
-      const gt = tex(textures.grass || makeGrassCanvas());
-      const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ name: 'hierba', map: gt, alphaTest: 0.5, side: THREE.DoubleSide, roughness: 1, metalness: 0 }));
-      m.name = 'hierba';
-      root.add(m);
+      if (!grassMat) grassMat = new THREE.MeshStandardMaterial({ name: 'hierba', map: tex(textures.grass || makeGrassCanvas()), alphaTest: 0.5, side: THREE.DoubleSide, roughness: 1, metalness: 0 });
+      if (single) {
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.BufferAttribute(gr.positions, 3));
+        g.setAttribute('normal', new THREE.BufferAttribute(gr.normals, 3));
+        g.setAttribute('uv', new THREE.BufferAttribute(gr.uvs, 2));
+        g.setIndex(new THREE.BufferAttribute(gr.indices, 1));
+        const m = new THREE.Mesh(g, grassMat);
+        m.name = `hierba${sfx}`;
+        root.add(m);
+      } else { // un objeto por mata (8 vértices, 4 triángulos), con el origen en su base
+        const grp = new THREE.Group();
+        grp.name = `hierba${sfx}`;
+        root.add(grp);
+        for (let c = 0; c < gr.count; c++) {
+          const it = gr.insts[c], ox = it.x, oy = it.y, oz = it.z;
+          const P = new Float32Array(24);
+          for (let v = 0; v < 8; v++) { P[v * 3] = gr.positions[(c * 8 + v) * 3] - ox; P[v * 3 + 1] = gr.positions[(c * 8 + v) * 3 + 1] - oy; P[v * 3 + 2] = gr.positions[(c * 8 + v) * 3 + 2] - oz; }
+          const g = new THREE.BufferGeometry();
+          g.setAttribute('position', new THREE.BufferAttribute(P, 3));
+          g.setAttribute('normal', new THREE.BufferAttribute(gr.normals.slice(c * 24, c * 24 + 24), 3));
+          g.setAttribute('uv', new THREE.BufferAttribute(gr.uvs.slice(c * 16, c * 16 + 16), 2));
+          g.setIndex([0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7]);
+          const m = new THREE.Mesh(g, grassMat);
+          m.name = `hierba${sfx}_${String(c + 1).padStart(4, '0')}`;
+          m.position.set(ox, oy, oz);
+          grp.add(m);
+        }
+      }
     }
   }
   // sets de decoración: decoracion/<set>/<set>_malla («single mesh») o <set>_0001… (cubos de color o modelos), pivote en la base

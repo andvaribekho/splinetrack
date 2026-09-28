@@ -3,13 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Track Spline Generator v0.83</title>
+  <title>Track Spline Generator v0.84</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2317191f'/%3E%3Cpath d='M14 46C8 36 12 20 24 16s20 6 26 2 4 14-4 18-16 2-18 8-10 8-14 2z' fill='none' stroke='%23ff9a2e' stroke-width='7' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M14 46C8 36 12 20 24 16s20 6 26 2 4 14-4 18-16 2-18 8-10 8-14 2z' fill='none' stroke='%2317191f' stroke-width='1.5' stroke-dasharray='3 4'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="styles.css">
   <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.83</span></div>
+    <div class="brand">Track Spline Generator <span class="ver" id="appVersion">v0.84</span></div>
     <label class="proj-name-wrap" title="Nombre del proyecto: se usa al guardar (<nombre>.tsg.json) y en los autoguardados (<nombre>_auto_…)"><input id="projectName" class="proj-name" value="pista" spellcheck="false" maxlength="80"><span class="small muted" id="autosaveState"></span></label>
     <div class="top-actions">
       <button id="btnNew" title="Empezar de cero">Nuevo</button>
@@ -178,7 +179,7 @@
         <div id="altList" class="list"></div>
       </section>
 
-      <section class="panel" data-panel="elev" data-group="Alturas">
+      <section class="panel" data-panel="elev">
         <h2>Elevación</h2>
         <div class="seg" id="elevMode" role="group" aria-label="Modo de elevación">
           <button data-mode="auto" title="El optimizador arma la elevación: colinas automáticas, rampas en los cruces, pendiente y radios dentro del límite. Las alturas fijadas (puntos naranjos) son pedidos">Automático</button>
@@ -321,107 +322,6 @@
         </div>
         <p class="hint">Los atajos tienen sus propios bordes: en su tarjeta de <b>Rutas alternativas</b>.</p>
         <p class="hint" id="edgesInfo"></p>
-      </section>
-
-      <section class="panel" data-panel="gate" data-group="Juego">
-        <h2>Meta y pórtico de salida</h2>
-        <div class="row gap"><button id="btnStartTool" class="side-tool" data-tool="start" title="Clic sobre la pista (en el mapa) para mover la línea de meta">Mover la meta…</button></div>
-        <label class="check"><input type="checkbox" id="startGate"> Pórtico en el punto de partida</label>
-        <div class="field"><label>Texto del cartel</label><input type="text" id="startText" maxlength="24" style="width:100%"></div>
-        <div class="field"><label>Altura libre <span class="val" id="startGateHeightVal"></span></label><input type="range" id="startGateHeight" min="4" max="15" step="0.5"></div>
-        <p class="hint">Se ubica en la línea de meta de la ruta principal (botón «Mover la meta…» y luego clic sobre la pista en el mapa). Se exporta en el .glb con el pivote en la base, al centro de la calzada.</p>
-      </section>
-
-      <section class="panel" data-panel="items">
-        <h2>Elementos de pista</h2>
-        <p class="hint">Charcos, turbo pads y nitro strips, en grupos, y la señalética de las curvas (al final). Clic en un elemento (mapa o 3D, con «Navegar») para seleccionarlo; arrástralo en el mapa o con el gizmo en 3D. Siempre queda sobre la pista y paralelo a su superficie.</p>
-        <div class="item-sel" id="itemSelInfo"></div>
-        <h3 class="subhead">Charcos (water puddles)</h3>
-        <div id="groups-puddle" class="list"></div>
-        <button id="btnNewPuddle">+ Nuevo grupo de charcos</button>
-        <div class="field"><label>Textura de los charcos (UV planas)</label>
-          <div class="row gap"><img id="itemTexThumb-puddle" class="thumb checker" alt=""><button id="btnItemTex-puddle">Cargar…</button><button id="btnItemTexRemove-puddle">Por defecto</button><input type="file" id="fileItemTex-puddle" accept="image/*" hidden></div>
-        </div>
-
-        <h3 class="subhead">Turbo pads</h3>
-        <div id="groups-pad" class="list"></div>
-        <button id="btnNewPad">+ Nuevo grupo de turbo pads</button>
-        <div class="field"><label>Textura de los turbo pads (u hacia adelante)</label>
-          <div class="row gap"><img id="itemTexThumb-pad" class="thumb checker" alt=""><button id="btnItemTex-pad">Cargar…</button><button id="btnItemTexRemove-pad">Por defecto</button><input type="file" id="fileItemTex-pad" accept="image/*" hidden></div>
-        </div>
-
-        <h3 class="subhead">Nitro strips</h3>
-        <div id="groups-strip" class="list"></div>
-        <button id="btnNewStrip">+ Nuevo grupo de nitro strips</button>
-        <div class="field"><label>Textura de los nitro strips (u a lo ancho, v a lo largo)</label>
-          <div class="row gap"><img id="itemTexThumb-strip" class="thumb checker" alt=""><button id="btnItemTex-strip">Cargar…</button><button id="btnItemTexRemove-strip">Por defecto</button><input type="file" id="fileItemTex-strip" accept="image/*" hidden></div>
-        </div>
-        <label class="check"><input type="checkbox" id="stripBorder"> Borde en los nitro strips (glow)</label>
-        <div class="field" id="stripBorderBox"><label>Altura del borde <span class="val"><input type="number" id="stripBorderHeightNum" min="0.05" max="20" step="0.05" style="width:60px"> m</span></label><input type="range" id="stripBorderHeight" min="0.05" max="5" step="0.05"></div>
-        <div class="field" id="stripBorderTexBox"><label>Textura del borde (v = 0 abajo, 1 arriba; usa transparencia)</label>
-          <div class="row gap"><img id="itemTexThumb-border" class="thumb checker" alt=""><button id="btnItemTex-border">Cargar…</button><button id="btnItemTexRemove-border">Por defecto</button><input type="file" id="fileItemTex-border" accept="image/*" hidden></div>
-        </div>
-        <p class="hint">El borde son paredes sin espesor que suben desde el contorno de cada franja, con una sola cara hacia afuera y sin techo. Todos los nitro strips comparten el mismo borde.</p>
-
-        <h3 class="subhead" id="signsHead">Señalética de curvas</h3>
-        <p class="hint">Carteles antes de las curvas de la ruta principal, según el sentido de marcha (si lo inviertes, se rehacen): <b>curva a la derecha</b>, <b>a la izquierda</b>, <b>rotonda</b> (una curva que gira mucho: horquilla o rizo) y <b>camino zigzagueante</b> (curvas alternadas seguidas). Cada cartel son 2 planos, el poste y el cartel, y cada tipo tiene su textura (recortada por la transparencia). Se exportan en el grupo <code>senaletica</code>: <code>senal_curva_der</code>, <code>senal_curva_izq</code>, <code>senal_rotonda</code>, <code>senal_zigzag</code> y sus postes (<code>_postes</code>).</p>
-        <label class="check"><input type="checkbox" id="signs"> Carteles en las curvas</label>
-        <div id="signBox">
-        <h4 class="mini">Qué es una curva</h4>
-        <div class="field" title="Solo llevan cartel las curvas más cerradas que este radio"><label>Radio menor a <span class="val"><input type="number" id="signRadiusNum" min="10" max="500" step="1" style="width:58px"> m</span></label><input type="range" id="signRadius" min="10" max="300" step="1"></div>
-        <div class="field" title="Una curva que gira menos (aunque sea cerrada) no lleva cartel"><label>Giro mínimo <span class="val"><input type="number" id="signMinTurnNum" min="5" max="180" step="1" style="width:58px"> °</span></label><input type="range" id="signMinTurn" min="5" max="180" step="1"></div>
-        <div class="field" title="Curvas alternadas (derecha–izquierda…) más cerca que esto forman un camino zigzagueante: un solo grupo de carteles antes de la primera"><label>Zigzag: curvas alternadas a menos de <span class="val"><input type="number" id="signZigGapNum" min="0" max="300" step="1" style="width:58px"> m</span></label><input type="range" id="signZigGap" min="0" max="150" step="1"></div>
-        <div class="field" title="Una curva que gira esto o más (horquilla, rizo) lleva el cartel de rotonda"><label>Rotonda: giro desde <span class="val"><input type="number" id="signRoundTurnNum" min="90" max="720" step="5" style="width:58px"> °</span></label><input type="range" id="signRoundTurn" min="90" max="360" step="5"></div>
-        <h4 class="mini">Colocación</h4>
-        <div class="field" title="Desde la entrada de la curva hacia atrás hasta el primer cartel"><label>Distancia antes de la curva <span class="val"><input type="number" id="signDistNum" min="0" max="500" step="1" style="width:58px"> m</span></label><input type="range" id="signDist" min="0" max="200" step="1"></div>
-        <div class="field"><label>Cantidad por curva <span class="val"><input type="number" id="signCountNum" min="1" max="20" step="1" style="width:58px"> </span></label><input type="range" id="signCount" min="1" max="10" step="1"></div>
-        <div class="field"><label>Separación entre carteles <span class="val"><input type="number" id="signSepNum" min="0.5" max="200" step="0.5" style="width:58px"> m</span></label><input type="range" id="signSep" min="0.5" max="60" step="0.5"></div>
-        <div class="field"><label>Lado</label><select id="signSide" title="Según el sentido de marcha. Automático: por fuera de la curva (el conductor lo tiene de frente al llegar)"><option value="auto">Automático (por fuera de la curva)</option><option value="right">Derecha</option><option value="left">Izquierda</option><option value="both">Ambos lados</option></select></div>
-        <div class="field" title="Más allá del camino de tierra y la barrera"><label>Separación del borde <span class="val"><input type="number" id="signOffsetNum" min="0" max="20" step="0.1" style="width:58px"> m</span></label><input type="range" id="signOffset" min="0" max="10" step="0.1"></div>
-        <div class="field" title="Por defecto cada cartel mira al auto que llega; esto lo gira a mano (positivo: antihorario visto desde arriba)"><label>Giro <span class="val"><input type="number" id="signYawNum" min="-180" max="180" step="1" style="width:58px"> °</span></label><input type="range" id="signYaw" min="-180" max="180" step="1"></div>
-        <div class="field" title="Altura del centro del cartel sobre el suelo"><label>Altura <span class="val"><input type="number" id="signHeightNum" min="0.3" max="10" step="0.05" style="width:58px"> m</span></label><input type="range" id="signHeight" min="0.3" max="6" step="0.05"></div>
-        <div class="field" title="Ancho y alto del cartel"><label>Tamaño <span class="val"><input type="number" id="signSizeNum" min="0.1" max="6" step="0.05" style="width:58px"> m</span></label><input type="range" id="signSize" min="0.1" max="3" step="0.05"></div>
-        <label class="check small" title="Sin la copia trasera: el cartel solo se ve de frente (4 triángulos en vez de 8). Desmarcado, cada plano lleva una copia 1 cm más atrás con las caras hacia atrás, y por detrás se ve la misma imagen, legible"><input type="checkbox" id="signOneSided"> One sided (solo de frente)</label>
-        <h4 class="mini">Texturas</h4>
-        <div class="row gap"><span class="small" style="min-width:86px">Curva derecha</span><button id="signTexRightBtn">Cargar textura…</button><button id="signTexRightRemove" disabled>Por defecto</button><img id="signTexRightThumb" class="thumb checker" alt=""></div>
-        <input id="signTexRightFile" type="file" accept="image/*" hidden>
-        <div class="row gap" style="margin-top:6px"><span class="small" style="min-width:86px">Curva izquierda</span><button id="signTexLeftBtn">Cargar textura…</button><button id="signTexLeftRemove" disabled>Por defecto</button><img id="signTexLeftThumb" class="thumb checker" alt=""></div>
-        <input id="signTexLeftFile" type="file" accept="image/*" hidden>
-        <div class="row gap" style="margin-top:6px"><span class="small" style="min-width:86px">Rotonda</span><button id="signTexRoundBtn">Cargar textura…</button><button id="signTexRoundRemove" disabled>Por defecto</button><img id="signTexRoundThumb" class="thumb checker" alt=""></div>
-        <input id="signTexRoundFile" type="file" accept="image/*" hidden>
-        <div class="row gap" style="margin-top:6px"><span class="small" style="min-width:86px">Zigzag</span><button id="signTexZigzagBtn">Cargar textura…</button><button id="signTexZigzagRemove" disabled>Por defecto</button><img id="signTexZigzagThumb" class="thumb checker" alt=""></div>
-        <input id="signTexZigzagFile" type="file" accept="image/*" hidden>
-        <div class="row gap" style="margin-top:6px"><span class="small" style="min-width:86px">Poste</span><button id="signTexPostBtn">Cargar textura…</button><button id="signTexPostRemove" disabled>Por defecto</button><img id="signTexPostThumb" class="thumb checker" alt=""></div>
-        <input id="signTexPostFile" type="file" accept="image/*" hidden>
-        <h4 class="mini">Curvas detectadas <span class="badge" id="signCurveCount">0</span></h4>
-        <p class="hint">En cada una puedes dejar el tipo automático o forzarlo (se recuerda por su lugar en el mapa, aunque cambies el sentido o edites la pista).</p>
-        <div id="signCurveList" class="list"></div>
-        <div class="meta" id="signInfo"></div>
-        </div>
-      </section>
-
-      <section class="panel" data-panel="triggers" data-group="Juego">
-        <h2>Triggers</h2>
-        <p class="hint">Cubos invisibles de todo el ancho de la pista (calzada, camino de tierra y barrera) que se exportan en el grupo <code>triggers</code> para que el motor sepa cuándo el auto pasa por ahí (por ejemplo, para cambiar su iluminación al entrar a un túnel). En la vista 3D se ven semitransparentes; al exportar su material «trigger» es invisible y los extras (glTF) dicen de qué trigger se trata.</p>
-        <label class="check"><input type="checkbox" id="tunnelTriggers"> Triggers en la entrada y la salida de los túneles</label>
-        <div class="field" id="tunnelTrigBox"><label>Profundidad <span class="val" id="triggerDepthVal"></span></label><input type="range" id="triggerDepth" min="0.2" max="10" step="0.1">
-          <label>Alto <span class="val" id="triggerHeightVal"></span></label><input type="range" id="triggerHeight" min="1" max="30" step="0.5"></div>
-        <p class="hint">Se llaman <code>trigger_tunel_NN_entrada</code> y <code>trigger_tunel_NN_salida</code> (según el sentido de marcha).</p>
-        <label class="check"><input type="checkbox" id="showTriggers"> Mostrar los triggers en la vista 3D</label>
-        <h3 class="subhead">Triggers propios</h3>
-        <div class="row gap"><button id="btnTriggerNew" title="Clic en la pista (mapa 2D) para ubicarlo; después se arrastra con Navegar">+ Nuevo trigger</button><span class="small muted" id="triggerPlaceHint" hidden>clic en la pista para ubicarlo · Esc cancela</span></div>
-        <div id="triggerList" class="list"></div>
-      </section>
-
-      <section class="panel" data-panel="sky">
-        <h2>Cielo (cámara de juego)</h2>
-        <div class="row gap">
-          <button id="btnSkyLoad" title="Imagen panorámica equirectangular (2:1) o cualquier imagen de cielo">Cargar cielo…</button>
-          <button id="btnSkyReset" title="Volver al cielo de día por defecto">Cielo por defecto</button>
-          <img id="skyThumb" class="thumb wide-thumb" alt="">
-        </div>
-        <input id="fileSky" type="file" accept="image/*" hidden>
-        <p class="hint">Solo se ve en la cámara de juego. Lo ideal es un panorama equirectangular (el doble de ancho que de alto).</p>
       </section>
 
       <section class="panel" data-panel="terrain" data-group="Terreno">
@@ -609,13 +509,18 @@
         <div class="collapsible" id="treesBlock">
         <div class="coll-head" title="Clic para mostrar u ocultar"><span class="coll-arrow">▾</span><h3 class="subhead">Árboles</h3></div>
         <div class="coll-body">
+        <div class="veg-groups" id="treeGroupsBox">
+          <div class="grp-tabs" id="treeGroupTabs" role="tablist" aria-label="Grupos de árboles"></div>
+          <div class="row gap grp-edit" id="treeGroupEdit"><input id="treeGroupName" class="grp-name" maxlength="40" spellcheck="false" title="Nombre del grupo (solo para reconocerlo; al exportar el primero es «arboles» y los demás «arboles_2», «arboles_3»…)"><button id="btnTreeGroupDel" title="Quitar este grupo de árboles">Quitar grupo</button></div>
+          <button id="btnTreeGroupNew" class="wide" title="Otro grupo de árboles con sus propios parámetros (lado, densidad, escala, modelos, sombra…); sus árboles esquivan a los de los grupos anteriores">+ Nuevo grupo de árboles</button>
+        </div>
         <label class="check"><input type="checkbox" id="trees"> Agregar árboles (conos)</label>
         <label class="check" title="Marcado: todos los árboles son una sola malla (vista y exportación). Sin marcar: la distribución actual queda fija y cada árbol se elige (mapa o 3D), se mueve en planta (sigue apoyado en el suelo) o se borra; al volver a marcarlo se juntan otra vez en una malla, con lo editado"><input type="checkbox" id="treeSingle"> Single mesh</label>
         <div id="treeEditBox" class="veg-edit" hidden>
           <p class="hint" id="treeEditInfo"></p>
           <div class="row gap"><button id="btnTreeDel" disabled>Borrar el seleccionado</button><button id="btnTreeReset" title="Descarta lo editado a mano y vuelve a la distribución automática (densidad, distancia, semilla…)">Restablecer</button></div>
         </div>
-        <div class="field">
+        <div class="field tdist">
           <label>Lado</label>
           <select id="treeSide">
             <option value="both">Ambos lados</option>
@@ -623,24 +528,31 @@
             <option value="right">Solo a la derecha</option>
           </select>
         </div>
-        <div class="field"><label>Densidad (por 100 m y por lado) <span class="val" id="treeDensityVal"></span></label><input type="range" id="treeDensity" min="0.5" max="40" step="0.5"></div>
+        <div class="field tdist"><label>Densidad (por 100 m y por lado) <span class="val" id="treeDensityVal"></span></label><input type="range" id="treeDensity" min="0.5" max="40" step="0.5"></div>
         <div class="field"><label>Escala <span class="val" id="treeScaleVal"></span></label><input type="range" id="treeScale" min="0.3" max="3" step="0.05"></div>
-        <div class="field"><label>Distancia al borde <span class="val" id="treeOffsetVal"></span></label><input type="range" id="treeOffset" min="1" max="40" step="0.5"></div>
-        <div class="field"><label>Dispersión <span class="val" id="treeSpreadVal"></span></label><input type="range" id="treeSpread" min="0" max="60" step="1"></div>
-        <div class="field">
+        <div class="field tdist"><label>Distancia al borde <span class="val" id="treeOffsetVal"></span></label><input type="range" id="treeOffset" min="1" max="40" step="0.5"></div>
+        <div class="field tdist"><label>Dispersión <span class="val" id="treeSpreadVal"></span></label><input type="range" id="treeSpread" min="0" max="60" step="1"></div>
+        <div class="field tdist">
           <label>También sobre cerros</label>
           <div class="row gap"><label class="check small"><input type="checkbox" id="treeOnSlopes"> En laderas</label><label class="check small"><input type="checkbox" id="treeOnTops"> En la cima</label></div>
         </div>
-        <div class="field" id="treeHillBox"><label>Densidad en cerros (por 1000 m²) <span class="val" id="treeHillDensityVal"></span></label><input type="range" id="treeHillDensity" min="0" max="40" step="0.5"></div>
+        <div class="field tdist" id="treeHillBox"><label>Densidad en cerros (por 1000 m²) <span class="val" id="treeHillDensityVal"></span></label><input type="range" id="treeHillDensity" min="0" max="40" step="0.5"></div>
         <div class="field"><label>Inclinación según el suelo <span class="val" id="treeTiltVal"></span></label><input type="range" id="treeTilt" min="0" max="100" step="1"></div>
         <div class="field"><label>Modelos para los árboles <span class="val small muted">(de la biblioteca de Decoración; sin elegir = conos)</span></label><div id="treeAssetList" class="asset-chips"></div></div>
-        <label class="check" title="Cada árbol lleva un plano de sombra (se generan con «Planos de sombra»)"><input type="checkbox" id="treeShadow"> Proyectar sombra</label>
+        <div class="row gap" style="flex-wrap:wrap"><label class="check" title="Cada árbol del grupo lleva un plano de sombra (se generan con «Planos de sombra»)"><input type="checkbox" id="treeShadow"> Proyectar sombra</label>
+          <select id="treeShadowMode" title="Dónde va la sombra de estos árboles"><option value="global">Como la general</option><option value="center">Centrada en el árbol</option><option value="sun">Proyectada según el sol</option></select></div>
         <p class="hint" id="treesInfo"></p>
         </div></div>
         <div class="collapsible" id="grassBlock">
         <div class="coll-head" title="Clic para mostrar u ocultar"><span class="coll-arrow">▾</span><h3 class="subhead">Hierba</h3></div>
         <div class="coll-body">
+        <div class="veg-groups" id="grassGroupsBox">
+          <div class="grp-tabs" id="grassGroupTabs" role="tablist" aria-label="Grupos de hierba"></div>
+          <div class="row gap grp-edit" id="grassGroupEdit"><input id="grassGroupName" class="grp-name" maxlength="40" spellcheck="false" title="Nombre del grupo (solo para reconocerlo; al exportar el primero es «hierba» y los demás «hierba_2», «hierba_3»…)"><button id="btnGrassGroupDel" title="Quitar este grupo de hierba">Quitar grupo</button></div>
+          <button id="btnGrassGroupNew" class="wide" title="Otro grupo de hierba con sus propios parámetros (lado, densidad, escala, modelos…); sus matas esquivan a las de los grupos anteriores">+ Nuevo grupo de hierba</button>
+        </div>
         <label class="check"><input type="checkbox" id="grass"> Agregar hierba (dos planos cruzados)</label>
+        <label class="check" title="Marcado: la hierba del grupo se exporta como una sola malla. Sin marcar: un objeto por mata (hierba_0001…); con miles de matas el archivo y el motor se ponen pesados"><input type="checkbox" id="grassSingle"> Single mesh</label>
         <div class="field">
           <label>Lado</label>
           <select id="grassSide">
@@ -689,12 +601,12 @@
       <section class="panel" data-panel="shadows">
         <h2>Planos de sombra</h2>
         <label class="check" title="Genera un plano con textura de sombra bajo cada árbol o elemento de decoración que tenga «Proyectar sombra» marcado"><input type="checkbox" id="shadows"> Generar planos de sombra</label>
-        <p class="hint">Proyectan sombra los árboles y los sets de decoración que tengan marcada su casilla «Proyectar sombra». Se amoldan al terreno, a los cerros y a la calzada. Al exportar todas las sombras van en una sola malla (<code>sombras</code>).</p>
+        <p class="hint">Proyectan sombra los árboles y los sets de decoración que tengan marcada su casilla «Proyectar sombra»; cada grupo de árboles y cada set elige si su sombra va como la general, centrada o proyectada según el sol. Se amoldan al terreno, a los cerros y a la calzada. Al exportar todas las sombras van en una sola malla (<code>sombras</code>).</p>
         <div id="shadowBody">
         <div class="field" title="Tamaño del plano respecto de la huella del objeto (copa del árbol o base del elemento)"><label>Tamaño <span class="val" id="shadowSizeVal"></span></label><input type="range" id="shadowSize" min="0.3" max="3" step="0.05"></div>
         <div class="field" title="Máximo de triángulos por plano. Cada plano usa la menor cantidad que alcance para seguir la superficie (2 = un solo cuadro)"><label>Máximo de triángulos por plano <span class="val" id="shadowMaxTrisVal"></span></label><input type="range" id="shadowMaxTris" min="2" max="32" step="2"></div>
         <div class="field" title="Cuánto puede separarse el plano de la superficie antes de subdividirlo más"><label>Tolerancia <span class="val" id="shadowTolVal"></span></label><input type="range" id="shadowTol" min="0.01" max="0.5" step="0.01"></div>
-        <div class="field"><label>Posición</label>
+        <div class="field" title="Posición de las sombras que no eligen la suya (cada grupo de árboles y cada set de decoración puede ser «Como la general», «Centrada» o «Proyectada según el sol»)"><label>Posición general</label>
           <select id="shadowMode"><option value="center">Centrada en el objeto (pivote al centro)</option><option value="sun">Proyectada según el sol</option></select></div>
         <div id="sunBox">
           <div class="row gap" style="align-items:flex-start;flex-wrap:nowrap">
@@ -717,6 +629,107 @@
         <p class="hint" id="shadowInfo"></p>
         </div>
       </section>
+      <section class="panel" data-panel="gate" data-group="Juego">
+        <h2>Meta y pórtico de salida</h2>
+        <div class="row gap"><button id="btnStartTool" class="side-tool" data-tool="start" title="Clic sobre la pista (en el mapa) para mover la línea de meta">Mover la meta…</button></div>
+        <label class="check"><input type="checkbox" id="startGate"> Pórtico en el punto de partida</label>
+        <div class="field"><label>Texto del cartel</label><input type="text" id="startText" maxlength="24" style="width:100%"></div>
+        <div class="field"><label>Altura libre <span class="val" id="startGateHeightVal"></span></label><input type="range" id="startGateHeight" min="4" max="15" step="0.5"></div>
+        <p class="hint">Se ubica en la línea de meta de la ruta principal (botón «Mover la meta…» y luego clic sobre la pista en el mapa). Se exporta en el .glb con el pivote en la base, al centro de la calzada.</p>
+      </section>
+
+      <section class="panel" data-panel="items">
+        <h2>Elementos de pista</h2>
+        <p class="hint">Charcos, turbo pads y nitro strips, en grupos, y la señalética de las curvas (al final). Clic en un elemento (mapa o 3D, con «Navegar») para seleccionarlo; arrástralo en el mapa o con el gizmo en 3D. Siempre queda sobre la pista y paralelo a su superficie.</p>
+        <div class="item-sel" id="itemSelInfo"></div>
+        <h3 class="subhead">Charcos (water puddles)</h3>
+        <div id="groups-puddle" class="list"></div>
+        <button id="btnNewPuddle">+ Nuevo grupo de charcos</button>
+        <div class="field"><label>Textura de los charcos (UV planas)</label>
+          <div class="row gap"><img id="itemTexThumb-puddle" class="thumb checker" alt=""><button id="btnItemTex-puddle">Cargar…</button><button id="btnItemTexRemove-puddle">Por defecto</button><input type="file" id="fileItemTex-puddle" accept="image/*" hidden></div>
+        </div>
+
+        <h3 class="subhead">Turbo pads</h3>
+        <div id="groups-pad" class="list"></div>
+        <button id="btnNewPad">+ Nuevo grupo de turbo pads</button>
+        <div class="field"><label>Textura de los turbo pads (u hacia adelante)</label>
+          <div class="row gap"><img id="itemTexThumb-pad" class="thumb checker" alt=""><button id="btnItemTex-pad">Cargar…</button><button id="btnItemTexRemove-pad">Por defecto</button><input type="file" id="fileItemTex-pad" accept="image/*" hidden></div>
+        </div>
+
+        <h3 class="subhead">Nitro strips</h3>
+        <div id="groups-strip" class="list"></div>
+        <button id="btnNewStrip">+ Nuevo grupo de nitro strips</button>
+        <div class="field"><label>Textura de los nitro strips (u a lo ancho, v a lo largo)</label>
+          <div class="row gap"><img id="itemTexThumb-strip" class="thumb checker" alt=""><button id="btnItemTex-strip">Cargar…</button><button id="btnItemTexRemove-strip">Por defecto</button><input type="file" id="fileItemTex-strip" accept="image/*" hidden></div>
+        </div>
+        <label class="check"><input type="checkbox" id="stripBorder"> Borde en los nitro strips (glow)</label>
+        <div class="field" id="stripBorderBox"><label>Altura del borde <span class="val"><input type="number" id="stripBorderHeightNum" min="0.05" max="20" step="0.05" style="width:60px"> m</span></label><input type="range" id="stripBorderHeight" min="0.05" max="5" step="0.05"></div>
+        <div class="field" id="stripBorderTexBox"><label>Textura del borde (v = 0 abajo, 1 arriba; usa transparencia)</label>
+          <div class="row gap"><img id="itemTexThumb-border" class="thumb checker" alt=""><button id="btnItemTex-border">Cargar…</button><button id="btnItemTexRemove-border">Por defecto</button><input type="file" id="fileItemTex-border" accept="image/*" hidden></div>
+        </div>
+        <p class="hint">El borde son paredes sin espesor que suben desde el contorno de cada franja, con una sola cara hacia afuera y sin techo. Todos los nitro strips comparten el mismo borde.</p>
+
+        <h3 class="subhead" id="signsHead">Señalética de curvas</h3>
+        <p class="hint">Carteles antes de las curvas de la ruta principal, según el sentido de marcha (si lo inviertes, se rehacen): <b>curva a la derecha</b>, <b>a la izquierda</b>, <b>rotonda</b> (una curva que gira mucho: horquilla o rizo) y <b>camino zigzagueante</b> (curvas alternadas seguidas). Cada cartel son 2 planos, el poste y el cartel, y cada tipo tiene su textura (recortada por la transparencia). Se exportan en el grupo <code>senaletica</code>: <code>senal_curva_der</code>, <code>senal_curva_izq</code>, <code>senal_rotonda</code>, <code>senal_zigzag</code> y sus postes (<code>_postes</code>).</p>
+        <label class="check"><input type="checkbox" id="signs"> Carteles en las curvas</label>
+        <div id="signBox">
+        <h4 class="mini">Qué es una curva</h4>
+        <div class="field" title="Solo llevan cartel las curvas más cerradas que este radio"><label>Radio menor a <span class="val"><input type="number" id="signRadiusNum" min="10" max="500" step="1" style="width:58px"> m</span></label><input type="range" id="signRadius" min="10" max="300" step="1"></div>
+        <div class="field" title="Una curva que gira menos (aunque sea cerrada) no lleva cartel"><label>Giro mínimo <span class="val"><input type="number" id="signMinTurnNum" min="5" max="180" step="1" style="width:58px"> °</span></label><input type="range" id="signMinTurn" min="5" max="180" step="1"></div>
+        <div class="field" title="Curvas alternadas (derecha–izquierda…) más cerca que esto forman un camino zigzagueante: un solo grupo de carteles antes de la primera"><label>Zigzag: curvas alternadas a menos de <span class="val"><input type="number" id="signZigGapNum" min="0" max="300" step="1" style="width:58px"> m</span></label><input type="range" id="signZigGap" min="0" max="150" step="1"></div>
+        <div class="field" title="Una curva que gira esto o más (horquilla, rizo) lleva el cartel de rotonda"><label>Rotonda: giro desde <span class="val"><input type="number" id="signRoundTurnNum" min="90" max="720" step="5" style="width:58px"> °</span></label><input type="range" id="signRoundTurn" min="90" max="360" step="5"></div>
+        <h4 class="mini">Colocación</h4>
+        <div class="field" title="Desde la entrada de la curva hacia atrás hasta el primer cartel"><label>Distancia antes de la curva <span class="val"><input type="number" id="signDistNum" min="0" max="500" step="1" style="width:58px"> m</span></label><input type="range" id="signDist" min="0" max="200" step="1"></div>
+        <div class="field"><label>Cantidad por curva <span class="val"><input type="number" id="signCountNum" min="1" max="20" step="1" style="width:58px"> </span></label><input type="range" id="signCount" min="1" max="10" step="1"></div>
+        <div class="field"><label>Separación entre carteles <span class="val"><input type="number" id="signSepNum" min="0.5" max="200" step="0.5" style="width:58px"> m</span></label><input type="range" id="signSep" min="0.5" max="60" step="0.5"></div>
+        <div class="field"><label>Lado</label><select id="signSide" title="Según el sentido de marcha. Automático: por fuera de la curva (el conductor lo tiene de frente al llegar)"><option value="auto">Automático (por fuera de la curva)</option><option value="right">Derecha</option><option value="left">Izquierda</option><option value="both">Ambos lados</option></select></div>
+        <div class="field" title="Más allá del camino de tierra y la barrera"><label>Separación del borde <span class="val"><input type="number" id="signOffsetNum" min="0" max="20" step="0.1" style="width:58px"> m</span></label><input type="range" id="signOffset" min="0" max="10" step="0.1"></div>
+        <div class="field" title="Por defecto cada cartel mira al auto que llega; esto lo gira a mano (positivo: antihorario visto desde arriba)"><label>Giro <span class="val"><input type="number" id="signYawNum" min="-180" max="180" step="1" style="width:58px"> °</span></label><input type="range" id="signYaw" min="-180" max="180" step="1"></div>
+        <div class="field" title="Altura del centro del cartel sobre el suelo"><label>Altura <span class="val"><input type="number" id="signHeightNum" min="0.3" max="10" step="0.05" style="width:58px"> m</span></label><input type="range" id="signHeight" min="0.3" max="6" step="0.05"></div>
+        <div class="field" title="Ancho y alto del cartel"><label>Tamaño <span class="val"><input type="number" id="signSizeNum" min="0.1" max="6" step="0.05" style="width:58px"> m</span></label><input type="range" id="signSize" min="0.1" max="3" step="0.05"></div>
+        <label class="check small" title="Sin la copia trasera: el cartel solo se ve de frente (4 triángulos en vez de 8). Desmarcado, cada plano lleva una copia 1 cm más atrás con las caras hacia atrás, y por detrás se ve la misma imagen, legible"><input type="checkbox" id="signOneSided"> One sided (solo de frente)</label>
+        <h4 class="mini">Texturas</h4>
+        <div class="row gap"><span class="small" style="min-width:86px">Curva derecha</span><button id="signTexRightBtn">Cargar textura…</button><button id="signTexRightRemove" disabled>Por defecto</button><img id="signTexRightThumb" class="thumb checker" alt=""></div>
+        <input id="signTexRightFile" type="file" accept="image/*" hidden>
+        <div class="row gap" style="margin-top:6px"><span class="small" style="min-width:86px">Curva izquierda</span><button id="signTexLeftBtn">Cargar textura…</button><button id="signTexLeftRemove" disabled>Por defecto</button><img id="signTexLeftThumb" class="thumb checker" alt=""></div>
+        <input id="signTexLeftFile" type="file" accept="image/*" hidden>
+        <div class="row gap" style="margin-top:6px"><span class="small" style="min-width:86px">Rotonda</span><button id="signTexRoundBtn">Cargar textura…</button><button id="signTexRoundRemove" disabled>Por defecto</button><img id="signTexRoundThumb" class="thumb checker" alt=""></div>
+        <input id="signTexRoundFile" type="file" accept="image/*" hidden>
+        <div class="row gap" style="margin-top:6px"><span class="small" style="min-width:86px">Zigzag</span><button id="signTexZigzagBtn">Cargar textura…</button><button id="signTexZigzagRemove" disabled>Por defecto</button><img id="signTexZigzagThumb" class="thumb checker" alt=""></div>
+        <input id="signTexZigzagFile" type="file" accept="image/*" hidden>
+        <div class="row gap" style="margin-top:6px"><span class="small" style="min-width:86px">Poste</span><button id="signTexPostBtn">Cargar textura…</button><button id="signTexPostRemove" disabled>Por defecto</button><img id="signTexPostThumb" class="thumb checker" alt=""></div>
+        <input id="signTexPostFile" type="file" accept="image/*" hidden>
+        <h4 class="mini">Curvas detectadas <span class="badge" id="signCurveCount">0</span></h4>
+        <p class="hint">En cada una puedes dejar el tipo automático o forzarlo (se recuerda por su lugar en el mapa, aunque cambies el sentido o edites la pista).</p>
+        <div id="signCurveList" class="list"></div>
+        <div class="meta" id="signInfo"></div>
+        </div>
+      </section>
+
+      <section class="panel" data-panel="triggers">
+        <h2>Triggers</h2>
+        <p class="hint">Cubos invisibles de todo el ancho de la pista (calzada, camino de tierra y barrera) que se exportan en el grupo <code>triggers</code> para que el motor sepa cuándo el auto pasa por ahí (por ejemplo, para cambiar su iluminación al entrar a un túnel). En la vista 3D se ven semitransparentes; al exportar su material «trigger» es invisible y los extras (glTF) dicen de qué trigger se trata.</p>
+        <label class="check"><input type="checkbox" id="tunnelTriggers"> Triggers en la entrada y la salida de los túneles</label>
+        <div class="field" id="tunnelTrigBox"><label>Profundidad <span class="val" id="triggerDepthVal"></span></label><input type="range" id="triggerDepth" min="0.2" max="10" step="0.1">
+          <label>Alto <span class="val" id="triggerHeightVal"></span></label><input type="range" id="triggerHeight" min="1" max="30" step="0.5"></div>
+        <p class="hint">Se llaman <code>trigger_tunel_NN_entrada</code> y <code>trigger_tunel_NN_salida</code> (según el sentido de marcha).</p>
+        <label class="check"><input type="checkbox" id="showTriggers"> Mostrar los triggers en la vista 3D</label>
+        <h3 class="subhead">Triggers propios</h3>
+        <div class="row gap"><button id="btnTriggerNew" title="Clic en la pista (mapa 2D) para ubicarlo; después se arrastra con Navegar">+ Nuevo trigger</button><span class="small muted" id="triggerPlaceHint" hidden>clic en la pista para ubicarlo · Esc cancela</span></div>
+        <div id="triggerList" class="list"></div>
+      </section>
+
+      <section class="panel" data-panel="sky">
+        <h2>Cielo (cámara de juego)</h2>
+        <div class="row gap">
+          <button id="btnSkyLoad" title="Imagen panorámica equirectangular (2:1) o cualquier imagen de cielo">Cargar cielo…</button>
+          <button id="btnSkyReset" title="Volver al cielo de día por defecto">Cielo por defecto</button>
+          <img id="skyThumb" class="thumb wide-thumb" alt="">
+        </div>
+        <input id="fileSky" type="file" accept="image/*" hidden>
+        <p class="hint">Solo se ve en la cámara de juego. Lo ideal es un panorama equirectangular (el doble de ancho que de alto).</p>
+      </section>
+
 
 
     </aside>

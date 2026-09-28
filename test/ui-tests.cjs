@@ -1512,6 +1512,120 @@ test('tarjetas: la primera vez que se abre una lista desplegable no se cierra (l
   expect(st[0] && st[1], `la lista sigue abierta tras el primer clic: ${st}`);
 });
 
+test('barra lateral 0.84: Elevación, Cruces y Peralte en «Forma de la pista», «Juego» al final, icono de pestaña y flechas grandes', async () => {
+  await reset();
+  const g = await ev(() => {
+    const secs = [...document.querySelectorAll('#sidebar > section.panel[data-panel]')];
+    const groups = secs.filter((q) => q.dataset.group).map((q) => q.dataset.group);
+    const groupOf = (id) => { let cur = null; for (const q of secs) { if (q.dataset.group) cur = q.dataset.group; if (q.dataset.panel === id) return cur; } return null; };
+    const fs = (sel) => parseFloat(getComputedStyle(document.querySelector(sel)).fontSize);
+    return { groups, elev: groupOf('elev'), cross: groupOf('cross'), bank: groupOf('bank'), game: ['gate', 'items', 'triggers', 'sky'].map(groupOf), last: secs[secs.length - 1].dataset.panel,
+      icon: !!document.querySelector('link[rel=icon][href^="data:image/svg"]'), arrow: fs('section.panel .pbtn[data-act=collapse]'), coll: fs('#treesBlock .coll-arrow') };
+  });
+  expect(JSON.stringify(g.groups) === JSON.stringify(['Entrada', 'Forma de la pista', 'Aspecto de la pista', 'Terreno', 'Vegetación y decoración', 'Juego']), `grupos: ${g.groups}`);
+  expect(g.elev === 'Forma de la pista' && g.cross === g.elev && g.bank === g.elev && g.game.every((x) => x === 'Juego') && g.last === 'sky', `secciones: ${JSON.stringify(g)}`);
+  expect(g.icon && g.arrow >= 20 && g.coll >= 20, `icono ${g.icon}, flechas ${g.arrow} / ${g.coll} px`);
+  // el atajo Automático / Directo del perfil no mueve la barra ni la lleva a ninguna sección
+  for (const at of ['cross', 'elev']) {
+    await ev(() => { if (window.__tsg.state.elev.mode === 'direct') document.querySelector('#elevMode button[data-mode=auto]').click(); });
+    await idle();
+    const y0 = await ev((at) => { const sb = document.getElementById('sidebar'), h = document.querySelector(`section.panel[data-panel="${at}"] h2`); sb.scrollTop += h.getBoundingClientRect().top - sb.getBoundingClientRect().top - 30; return h.getBoundingClientRect().top; }, at);
+    await ev(() => document.querySelector('#elevModeProf button[data-mode=direct]').click());
+    await idle();
+    await page.waitForTimeout(400);
+    const y1 = await ev((at) => [document.querySelector(`section.panel[data-panel="${at}"] h2`).getBoundingClientRect().top, document.querySelectorAll('.panel.focus-ring').length, window.__tsg.state.elev.mode], at);
+    expect(Math.abs(y1[0] - y0) < 2 && y1[1] === 0 && y1[2] === 'direct', `con «${at}» a la vista la barra se corrió ${(y1[0] - y0).toFixed(0)} px (marco ${y1[1]})`);
+  }
+});
+
+test('árboles y hierba 0.84: single mesh apaga la distribución, grupos independientes, sombra por grupo y hierba en objetos', async () => {
+  await reset();
+  await page.click('#btnGenTerrain');
+  await idle();
+  await page.click('#btnGenTrees');
+  await idle();
+  const st = () => ev(() => { const $ = (id) => document.getElementById(id); return { dens: $('treeDensity').disabled, side: $('treeSide').disabled, slopes: $('treeOnSlopes').disabled, scale: $('treeScale').disabled, reset: $('btnTreeReset').disabled, resetHidden: $('btnTreeReset').hidden, bake: Array.isArray(window.__tsg.state.scene.treeBake) }; });
+  let s = await st();
+  expect(!s.dens && !s.side && !s.slopes && !s.scale && s.reset && !s.resetHidden && !s.bake, `single mesh: deslizadores activos y Restablecer apagado ${JSON.stringify(s)}`);
+  await page.uncheck('#treeSingle');
+  await idle();
+  s = await st();
+  expect(s.dens && s.side && s.slopes && !s.scale && !s.reset && s.bake, `sin single mesh: distribución apagada, escala y Restablecer activos ${JSON.stringify(s)}`);
+  await page.check('#treeSingle'); // sin editar nada: vuelve a la distribución automática
+  await idle();
+  s = await st();
+  expect(!s.dens && s.reset && !s.bake, `volver sin editar: ${JSON.stringify(s)}`);
+  await page.uncheck('#treeSingle');
+  await idle();
+  await ev(() => { const t = window.__tsg; t.app.selectVeg({ kind: 'tree', set: null, i: 2 }); });
+  await page.click('#btnTreeDel');
+  await idle();
+  await page.check('#treeSingle'); // editado a mano: queda fijo, Restablecer activo y se avisa
+  await idle();
+  s = await st();
+  const toastTxt = await ev(() => document.body.innerText.includes('«Restablecer» vuelve a la automática'));
+  expect(s.dens && !s.reset && s.bake && toastTxt, `editado a mano: ${JSON.stringify(s)} aviso ${toastTxt}`);
+  await page.click('#btnTreeReset');
+  await idle();
+  s = await st();
+  expect(!s.dens && s.reset && !s.bake, `Restablecer: ${JSON.stringify(s)}`);
+  // grupo nuevo de árboles: pestañas, parámetros propios, exportación aparte y deshacer
+  const n0 = await ev(() => window.__tsg.preview.treeData.length);
+  await page.click('#btnTreeGroupNew');
+  await idle();
+  let gi = await ev(() => { const sc = window.__tsg.state.scene; return [sc.treeGroups.length, sc.treeGroupSel, document.querySelectorAll('#treeGroupTabs .gtab').length, document.querySelector('#treeGroupTabs .gtab.on').textContent, sc.trees]; });
+  expect(gi[0] === 2 && gi[1] === 1 && gi[2] === 2 && gi[3] === 'Árboles 2' && gi[4], `grupo nuevo: ${gi}`);
+  await page.selectOption('#treeSide', 'right');
+  await idle();
+  await ev(() => { const el = document.getElementById('treeScale'); el.value = 1.6; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); });
+  await idle();
+  const cnt = await ev(() => [window.__tsg.preview.treeData.length, (window.__tsg.preview.treeMeshesOther || []).length]);
+  expect(cnt[0] > 3 && cnt[1] === 1, `árboles del grupo 2: ${cnt}`);
+  let ex = await exportNames();
+  expect((ex.arboles || [])[0] === 'arboles_malla' && (ex.arboles_2 || [])[0] === 'arboles_2_malla', `exportación por grupo: ${Object.keys(ex).filter((k) => k.startsWith('arb'))}`);
+  await page.click('#treeGroupTabs .gtab:nth-child(1)');
+  await idle();
+  gi = await ev(() => [window.__tsg.state.scene.treeGroupSel, document.getElementById('treeSide').value, window.__tsg.state.scene.treeScale, window.__tsg.preview.treeData.length]);
+  expect(gi[0] === 0 && gi[1] === 'both' && gi[2] === 1 && gi[3] === n0, `volver al grupo 1: ${gi}`);
+  // clic en 3D sobre un árbol del otro grupo: trae ese grupo
+  const pick = await ev(() => { const t = window.__tsg, pv = t.preview, m = pv.treeMeshesOther[0], p = m.geometry.getAttribute('position'); const x = p.getX(8), y = p.getY(8), z = p.getZ(8) - 3; pv.controls.target.set(x, y, z); pv.camera.position.set(x + 8, y - 14, z + 6); pv.controls.update(); pv.needsFrame = true; pv.renderer.render(pv.scene, pv.camera); const v = pv.camera.position.clone().set(x, y, z).project(pv.camera); const r = pv.renderer.domElement.getBoundingClientRect(); return [r.left + (v.x + 1) / 2 * r.width, r.top + (1 - v.y) / 2 * r.height]; });
+  await tool('pan');
+  await page.mouse.click(pick[0], pick[1]);
+  await idle();
+  expect((await ev(() => window.__tsg.state.scene.treeGroupSel)) === 1, 'clic en un árbol del otro grupo no trajo su grupo');
+  // sombra por grupo: según el sol aunque la general sea centrada (aparece el cuadro del sol)
+  await page.check('#shadows');
+  await page.check('#treeShadow');
+  await page.selectOption('#treeShadowMode', 'sun');
+  await idle();
+  await page.waitForTimeout(400); // (las sombras se rehacen con un pequeño retardo)
+  const sh = await ev(() => [window.__tsg.state.scene.shadowMode, window.__tsg.state.scene.treeShadowMode, document.getElementById('sunBox').hidden, (window.__tsg.preview.shadowInfo || {}).count || 0]);
+  expect(sh[0] === 'center' && sh[1] === 'sun' && !sh[2] && sh[3] > 3, `sombra del grupo: ${sh}`);
+  // quitar el grupo y deshacer
+  await page.click('#btnTreeGroupDel');
+  await idle();
+  expect((await ev(() => [window.__tsg.state.scene.treeGroups, document.getElementById('treeGroupEdit').hidden].join('|'))) === '|true', 'quitar grupo: queda uno solo');
+  await page.keyboard.press('Control+z');
+  await idle();
+  expect((await ev(() => (window.__tsg.state.scene.treeGroups || []).length)) === 2, 'deshacer no recuperó el grupo');
+  // hierba: single mesh propio (objetos sueltos) y un segundo grupo
+  await page.check('#grass');
+  await idle();
+  ex = await exportNames();
+  const hasGrass = await ev(() => document.getElementById('grassSingle').checked);
+  expect(hasGrass, 'la hierba empieza con single mesh');
+  await page.uncheck('#grassSingle');
+  await page.click('#btnGrassGroupNew');
+  await idle();
+  ex = await exportNames();
+  const gOne = (ex.hierba || []).length, gSec = ex.hierba_2 || [];
+  expect(gOne > 20 && (ex.hierba || [])[0] === 'hierba_0001' && gSec.length === 0, `hierba sin single mesh: ${gOne} objetos (${(ex.hierba || [])[0]})`);
+  const root2 = await ev(async () => { const t = window.__tsg, m = await import('/js/export-glb.js'); const { root } = await m.buildExportScene(t.state.layout, t.state.result, t.state.scene, { deco: { assetById: (id) => t.app.assetById(id), sets: [], paintFor: () => null } }); return root.children.filter((o) => /^hierba/.test(o.name)).map((o) => `${o.name}:${o.type}`); });
+  expect(root2.includes('hierba:Group') && root2.includes('hierba_2:Mesh'), `grupos de hierba exportados: ${root2}`);
+  const warn = await ev(() => { const sc = window.__tsg.state.scene; return document.getElementById('grassInfo').textContent + ' | ' + sc.grassGroupSel; });
+  expect(/matas/.test(warn), `info de hierba: ${warn}`);
+});
+
 // ---------------------------------------------------------------------------------------------------------------
 /** Corre las pruebas elegidas en un navegador propio (un proceso). Devuelve {pass, fails, total}. */
 async function runTests(run, port) {

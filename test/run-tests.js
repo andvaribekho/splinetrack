@@ -14,9 +14,9 @@ import { buildCollisionMeshes } from '../js/collision.js';
 import { edgeExtents, dirtWidthAt, edgeParams, convexHull2, frameAt, hillFieldOne } from '../js/tunnels.js';
 import { buildRivers, riverField, riverWallsOf, strokesContain, riverFlow } from '../js/rivers.js';
 import { detectCurves, placeSigns, buildSigns } from '../js/signs.js';
-import { buildTriggers, sculptField, bakeTreeList, bakeDecoList, moveTree, treeConeVerts, vegPlace } from '../js/scene.js';
+import { buildTriggers, sculptField, bakeTreeList, bakeDecoList, moveTree, treeConeVerts, vegPlace, vegGroups, selectVegGroupIn, buildTreeGroups, buildGrassGroups, DEFAULT_SCENE } from '../js/scene.js';
 import { treeModelItems, decoSetItems } from '../js/deco.js';
-import { buildShadows, shadowCasters, sunShadowDir } from '../js/shadows.js';
+import { buildShadows, shadowCasters, sunShadowDir, shadowUsesSun } from '../js/shadows.js';
 import { t as tr, __i18n } from '../js/i18n.js';
 import EN from '../js/i18n-en.js';
 import { readFileSync } from 'node:fs';
@@ -1613,6 +1613,56 @@ for (const [key, s] of Object.entries(SAMPLES)) {
   check(Math.abs(a0 - -12) < 0.01 && Math.abs(a1 - 2) < 0.01, `sombras: con sol al este se estira al oeste desde el pie (${a0.toFixed(2)}..${a1.toFixed(2)})`);
   check(b1 - b0 > a1 - a0 && Math.abs(b1 - 2) < 0.01, `sombras: sol bajo = sombra más larga (${(a1 - a0).toFixed(1)} → ${(b1 - b0).toFixed(1)} m)`);
   check(sunShadowDir({ sunX: 0, sunY: 0, sunElev: 45 }) === null, 'sombras: sol encima = centrada');
+}
+
+// ---- 0.84: grupos de árboles y de hierba (parámetros propios, se esquivan) y sombra por grupo / set ----
+{
+  console.log('· Grupos de vegetación y sombra por grupo');
+  const L = buildLayout(SAMPLES.oval.build(), { lapLength: 1000 });
+  const E = computeElevation(L, { hills: 0.4 });
+  const T = buildTerrain(L, E, { terrain: true, terrainDensity: 30 });
+  const G = makeGround(T, null);
+  const base = { ...DEFAULT_SCENE, terrain: true, trees: true, treeDensity: 10, grass: true, grassDensity: 40 };
+  // sin grupos: un solo grupo, idéntico a lo de siempre
+  const one = buildTreeGroups(L, E, base, G), plain = buildTrees(L, E, base, G);
+  check(one.length === 1 && one[0].TR.count === plain.count && one[0].TR.trees.every((t, i) => t.x === plain.trees[i].x && t.y === plain.trees[i].y), `grupos: sin grupos se reparte igual que antes (${plain.count})`);
+  check(vegGroups({ ...base }, 'tree').length === 1 && vegGroups({}, 'grass').length === 1, 'grupos: sin lista hay un grupo');
+  // dos grupos: el segundo con sus parámetros (solo a la derecha, más grande) y esquivando al primero
+  const sp = { ...base, treeGroups: [{ id: 'a', name: 'Árboles' }, { id: 'b', name: 'Pinos', trees: true, treeSide: 'right', treeDensity: 14, treeScale: 1.5, treeShadow: true, treeShadowMode: 'sun' }], treeGroupSel: 0, treeShadow: true, treeShadowMode: 'center' };
+  const gs = buildTreeGroups(L, E, sp, G);
+  const g0 = gs.find((q) => q.g === 0), g1 = gs.find((q) => q.g === 1);
+  check(gs.length === 2 && g0.TR.count === plain.count && g1.TR.count > 5, `grupos: dos grupos (${g0 && g0.TR.count} + ${g1 && g1.TR.count})`);
+  check(g1.TR.trees.every((t) => Math.abs(t.h / 9 - 1.5) < 0.4) && g1.sp.treeSide === 'right' && g0.sp.treeSide === 'both', 'grupos: cada grupo con su escala y su lado');
+  let close = 0;
+  for (const a of g1.TR.trees) for (const b of g0.TR.trees) if (Math.hypot(a.x - b.x, a.y - b.y) < b.r * Math.max(b.ex, b.ey) + 2 * 1.5 - 1e-6) close++;
+  check(close === 0, `grupos: los árboles del segundo esquivan a los del primero (${close} encimados)`);
+  check(g1.TR.trees.every((t) => t.g === 1 && t.sh && t.shm === 'sun') && g0.TR.trees.every((t) => t.g === 0 && t.shm === 'center'), 'grupos: cada árbol lleva su grupo y su sombra');
+  // cambiar de grupo activo: los parámetros viajan con el grupo y el resultado no cambia
+  const sw = JSON.parse(JSON.stringify(sp));
+  selectVegGroupIn(sw, 'tree', 1);
+  check(sw.treeGroupSel === 1 && sw.treeSide === 'right' && sw.treeScale === 1.5 && sw.treeGroups[0].treeSide === 'both' && sw.treeGroups[0].treeShadowMode === 'center', 'grupos: el grupo activo pasa a los controles y el anterior queda guardado');
+  const gs2 = buildTreeGroups(L, E, sw, G);
+  check(gs2.length === 2 && gs2[0].TR.count === g0.TR.count && gs2[1].TR.count === g1.TR.count && gs2[1].TR.trees[0].x === g1.TR.trees[0].x, 'grupos: cambiar de pestaña no cambia los árboles');
+  // grupo desactivado: no se genera
+  const off = { ...sp, treeGroups: [sp.treeGroups[0], { ...sp.treeGroups[1], trees: false }] };
+  check(buildTreeGroups(L, E, off, G).length === 1, 'grupos: un grupo desactivado no pone árboles');
+  // hierba en grupos: cada uno con su densidad y sin encimarse
+  const gsp = { ...base, grassGroups: [{ id: 'a', name: 'Hierba' }, { id: 'b', name: 'Flores', grass: true, grassDensity: 20, grassOffset: 0, grassSpread: 18 }], grassGroupSel: 0 };
+  const gg = buildGrassGroups(L, E, gsp, G);
+  let gclose = 0;
+  for (const a of gg[1].GR.insts) for (const b of gg[0].GR.insts) if (Math.hypot(a.x - b.x, a.y - b.y) < b.w / 2 + 0.45 - 1e-6) gclose++;
+  check(gg.length === 2 && gg[0].GR.count > 0 && gg[1].GR.count > 0 && gclose === 0, `grupos de hierba: ${gg[0].GR.count} + ${gg[1].GR.count} matas, ${gclose} encimadas`);
+  // sombra por grupo / set: centrada o según el sol, con «global» = la general
+  const all = [...g0.TR.trees, ...g1.TR.trees];
+  const cas = shadowCasters(sp, all, [{ set: { shadow: true, shadowMode: 'sun' }, items: [{ x: 0, y: 0, asset: 'c', scale: 1 }] }, { set: { shadow: true }, items: [{ x: 5, y: 5, asset: 'c', scale: 1 }] }], () => ({ size: [1, 1, 2] }));
+  check(cas.length === all.length + 2 && cas.filter((c) => c.mode === 'sun').length === g1.TR.count + 1, `sombra por grupo: ${cas.filter((c) => c.mode === 'sun').length} según el sol`);
+  const cs = [{ x: 0, y: 0, r: 2, h: 10, mode: 'center' }, { x: 100, y: 0, r: 2, h: 10, mode: 'sun' }, { x: 200, y: 0, r: 2, h: 10, mode: 'global' }];
+  const SH = buildShadows(null, null, { shadowMode: 'center', sunX: 1, sunY: 0, sunElev: 45 }, null, cs);
+  const xr = (k) => { const X = []; for (let v = k * 4; v < k * 4 + 4; v++) X.push(SH.positions[v * 3]); return [Math.min(...X), Math.max(...X)]; };
+  const [c0a, c0b] = xr(0), [c1a, c1b] = xr(1), [c2a, c2b] = xr(2);
+  check(Math.abs(c0a + 2) < 0.01 && Math.abs(c0b - 2) < 0.01 && Math.abs(c1a - 88) < 0.01 && Math.abs(c1b - 102) < 0.01 && Math.abs(c2a - 198) < 0.01 && Math.abs(c2b - 202) < 0.01,
+    `sombra por grupo: centrada ${c0a.toFixed(1)}..${c0b.toFixed(1)}, según el sol ${c1a.toFixed(1)}..${c1b.toFixed(1)}, como la general (centrada) ${c2a.toFixed(1)}..${c2b.toFixed(1)}`);
+  check(shadowUsesSun(sp) && !shadowUsesSun({ shadowMode: 'center', treeShadow: true, treeShadowMode: 'center' }) && shadowUsesSun({ shadowMode: 'center' }, [{ shadow: true, shadowMode: 'sun' }]), 'sombra por grupo: se sabe si alguna va según el sol (para el cuadro del sol)');
 }
 
 // ---- cavernas: rocas y estalactitas por separado ----

@@ -300,7 +300,7 @@ h4.mini { margin: 10px 0 4px; font-size: calc(11px * var(--fs, 1)); font-weight:
 .collapsible { border: 1px solid var(--line); border-radius: 6px; margin: 6px 0; }
 .coll-head { display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 4px 8px; user-select: none; }
 .coll-head .subhead { margin: 0; }
-.coll-arrow { color: var(--muted); font-size: calc(11px * var(--fs, 1)); width: 10px; display: inline-block; transition: transform .12s; }
+.coll-arrow { color: var(--muted); font-size: calc(22px * var(--fs, 1)); line-height: 1; width: 18px; text-align: center; display: inline-block; transition: transform .12s; }
 .coll-body { padding: 0 8px 6px; }
 .collapsible.collapsed .coll-body { display: none; }
 .collapsible.collapsed .coll-arrow { transform: rotate(-90deg); }
@@ -486,3 +486,17 @@ button.km-keys:hover { border-color: var(--accent); background: rgba(242,169,59,
 .search-flash { animation: searchFlash 2.2s ease-in-out; border-radius: 4px; }
 .seg.mini button { padding: 2px 8px; font-size: calc(11.5px * var(--fs, 1)); }
 .seg.mini { margin: 0; vertical-align: middle; }
+
+/* flechas de plegar/desplegar al doble de tamaño (encabezados de sección y tarjetas) */
+.pbtn[data-act="collapse"] { font-size: calc(22px * var(--fs, 1)); line-height: 18px; padding: 0 4px; }
+.rtoggle, .btoggle, .atoggle, .deco-card .dtoggle { font-size: calc(22px * var(--fs, 1)) !important; line-height: 16px !important; padding: 0 4px !important; vertical-align: -2px; }
+/* grupos de árboles y de hierba: pestañas con el grupo activo */
+.veg-groups { border-bottom: 1px dashed var(--line); padding: 2px 0 8px; margin-bottom: 6px; display: flex; flex-direction: column; gap: 5px; }
+.grp-tabs { display: flex; flex-wrap: wrap; gap: 4px; }
+.grp-tabs:empty { display: none; }
+.grp-tabs .gtab { font-size: calc(11.5px * var(--fs, 1)); padding: 2px 9px; border-radius: 12px; background: var(--panel2); border: 1px solid var(--line); }
+.grp-tabs .gtab.on { border-color: var(--accent); color: #ffd28a; background: #3a2c12; }
+.grp-tabs .gtab.off { opacity: 0.6; text-decoration: line-through; }
+.grp-edit[hidden] { display: none !important; }
+.grp-edit .grp-name { flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 2px 6px; color: inherit; }
+.veg-warn { color: #ffb45e; }

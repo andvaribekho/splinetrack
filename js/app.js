@@ -13,11 +13,11 @@ import { initSplitters } from './splitters.js';
 import { initHotkeys, comboOf } from './hotkeys.js';
 import { VERSION } from './version.js';
 import { ACTIONS, FIXED, bindingOf, isDefault, setBinding, resetAll as resetKeymap, matchAction, comboLabel } from './keymap.js';
-import { DEFAULT_SCENE, terrainCell, buildTrees, buildDecoInstances, bakeTreeList, bakeDecoList, CUT_ANGLES, rockOf, wallOf, wallUVOf, riverUVOf } from './scene.js';
+import { DEFAULT_SCENE, terrainCell, buildTrees, buildTreeGroups, vegGroups, vegGroupKeys, selectVegGroupIn, buildDecoInstances, bakeTreeList, bakeDecoList, CUT_ANGLES, rockOf, wallOf, wallUVOf, riverUVOf } from './scene.js';
 import { makeSignCanvas } from './signs.js';
 import { makeWaterCanvas } from './gatetex.js';
 import { RIVER_ANGLES, riverWallsOf, waterUVOf, riverField, strokesContain, strokeCircles, strokeValue, isLine } from './rivers.js';
-import { makeShadowCanvas, sunShadowDir } from './shadows.js';
+import { makeShadowCanvas, sunShadowDir, shadowUsesSun } from './shadows.js';
 import { SCULPT_PRESETS, DEFAULT_SCULPT_CURVE, normCurve, curveEval, curveLUT, presetOf } from './sculptcurve.js';
 import { makeTrackThumbnail } from './thumbnail.js';
 import { parseReference, footprint } from './refmodel.js';
@@ -119,7 +119,7 @@ const state = {
 const undoStack = [];
 function snapshot() {
   const ref = state.ref ? { x: state.ref.x, y: state.ref.y, scale: state.ref.scale, opacity: state.ref.opacity } : null;
-  return JSON.stringify({ elevMode: state.elev.mode || 'auto', project: state.project, flatZones: state.flatZones, suspZones: state.suspZones, cutZones: state.cutZones, overrides: state.overrides, ref, refCanvas: !!state.ref, densityPaint: state.densityPaint, terrainSculpt: state.terrainSculpt, sculptCurves: state.sculptCurves, decoSets: state.decoSets, hills: state.hills, selHill: state.selHill, rivers: state.rivers, items: state.items, triggers: state.triggers, tunnelOverrides: state.scene ? state.scene.tunnelOverrides || [] : [], treeEdit: state.scene ? { single: state.scene.treeSingle !== false, bake: state.scene.treeBake || null } : null });
+  return JSON.stringify({ elevMode: state.elev.mode || 'auto', project: state.project, flatZones: state.flatZones, suspZones: state.suspZones, cutZones: state.cutZones, overrides: state.overrides, ref, refCanvas: !!state.ref, densityPaint: state.densityPaint, terrainSculpt: state.terrainSculpt, sculptCurves: state.sculptCurves, decoSets: state.decoSets, hills: state.hills, selHill: state.selHill, rivers: state.rivers, items: state.items, triggers: state.triggers, tunnelOverrides: state.scene ? state.scene.tunnelOverrides || [] : [], treeEdit: state.scene ? { g: state.scene.treeGroupSel | 0, single: state.scene.treeSingle !== false, bake: state.scene.treeBake || null } : null, vegG: state.scene ? { tree: vegGroupSnap('tree'), grass: vegGroupSnap('grass') } : null });
 }
 function pushUndo() {
   undoStack.push(snapshot());
@@ -143,7 +143,15 @@ function undo() {
   if (o.rivers) { state.rivers = o.rivers; if (!state.rivers.some((rv) => rv.id === state.selRiver)) state.selRiver = null; if (typeof renderRiverPanel === 'function') renderRiverPanel(); }
   if (o.decoSets) { state.decoSets = o.decoSets; if (typeof renderDecoPanel === 'function') { renderDecoPanel(); decoChanged(); } }
   if (o.sculptCurves) state.sculptCurves = o.sculptCurves;
-  if (o.treeEdit && state.scene && JSON.stringify(o.treeEdit) !== JSON.stringify({ single: state.scene.treeSingle !== false, bake: state.scene.treeBake || null })) { // árboles editados a mano
+  if (o.vegG && state.scene) for (const kind of ['tree', 'grass']) { // grupos de árboles / de hierba agregados, quitados o cambiados
+    const prev = o.vegG[kind], cur = vegGroupSnap(kind);
+    if (prev && JSON.stringify(prev.ids) !== JSON.stringify(cur.ids)) restoreVegGroupSnap(kind, prev); // (cambiar de pestaña no se deshace)
+  }
+  if (o.treeEdit && state.scene && o.treeEdit.g != null && o.treeEdit.g !== (state.scene.treeGroupSel | 0)) { // lo editado era de otro grupo: se trae ese grupo
+    const G = (state.scene.treeGroups || [])[o.treeEdit.g];
+    if (G && JSON.stringify({ single: o.treeEdit.single, bake: o.treeEdit.bake }) !== JSON.stringify({ single: G.treeSingle !== false, bake: G.treeBake || null })) { selectVegGroupIn(state.scene, 'tree', o.treeEdit.g); if (typeof syncSceneControls === 'function') { syncSceneControls(); renderVegAssetLists(); } }
+  }
+  if (o.treeEdit && state.scene && (o.treeEdit.g == null || o.treeEdit.g === (state.scene.treeGroupSel | 0)) && JSON.stringify({ single: o.treeEdit.single, bake: o.treeEdit.bake }) !== JSON.stringify({ single: state.scene.treeSingle !== false, bake: state.scene.treeBake || null })) { // árboles editados a mano
     state.scene.treeSingle = o.treeEdit.single; state.scene.treeBake = o.treeEdit.bake;
     if (state.selVeg && state.selVeg.kind === 'tree') state.selVeg = null;
     if (typeof preview !== 'undefined') preview.buildTreeMesh();
@@ -746,8 +754,8 @@ function deleteSelectedVeg() {
 function bakeTreesNow() {
   const L = state.layout, E = state.result, sc = state.scene;
   if (!L || !E) return null;
-  const TR = buildTrees(L, E, { ...sc, treeBake: null }, preview.groundCache || null);
-  return bakeTreeList(L, TR.trees, sc.treeScale);
+  const mine = buildTreeGroups(L, E, { ...sc, treeBake: null, trees: true }, preview.groundCache || null).find((q) => q.g === (sc.treeGroupSel | 0));
+  return mine ? bakeTreeList(L, mine.TR.trees, sc.treeScale) : null;
 }
 function bakeDecoNow(set) {
   const L = state.layout, E = state.result;
@@ -760,7 +768,13 @@ function setTreeSingle(on) {
   pushUndo();
   sc.treeSingle = !!on;
   if (!on && !Array.isArray(sc.treeBake)) sc.treeBake = bakeTreesNow();
+  if (on && Array.isArray(sc.treeBake)) { // sin nada editado a mano: vuelve a la distribución automática (deslizadores activos)
+    const auto = bakeTreesNow();
+    if (auto && JSON.stringify(auto) === JSON.stringify(sc.treeBake)) sc.treeBake = null;
+    else toast('Los árboles editados a mano quedan como una sola malla, con lo editado. La distribución sigue fija: «Restablecer» vuelve a la automática y reactiva sus deslizadores.');
+  }
   if (on && state.selVeg && state.selVeg.kind === 'tree') selectVeg(null, false);
+  if (!on && Array.isArray(sc.treeBake) && sc.treeBake.length > MANY_OBJECTS) toast(`Sin «Single mesh» se exportan ${sc.treeBake.length.toLocaleString('es')} árboles como objetos sueltos: con tantos objetos el archivo y el motor se ponen pesados.`);
   preview.buildTreeMesh();
   syncTreeEdit(); editor.draw();
 }
@@ -787,14 +801,105 @@ function resetDecoBake(set) {
   if (state.selVeg && state.selVeg.kind === 'deco' && state.selVeg.set === set.id) state.selVeg = null;
   renderDecoPanel(); decoChanged();
 }
+// ---------- grupos de árboles y de hierba (0.84): el grupo activo vive en las claves de state.scene ----------
+const MANY_OBJECTS = 300; // desde cuántos objetos sueltos se avisa
+const VEG_BASE_NAME = { tree: 'Árboles', grass: 'Hierba' };
+const VEG_ON_KEY = { tree: 'trees', grass: 'grass' };
+const cloneJ = (v) => (v && typeof v === 'object' ? JSON.parse(JSON.stringify(v)) : v);
+function vegGroupSnap(kind) {
+  const sc = state.scene, arr = sc[kind + 'Groups'];
+  return { ids: Array.isArray(arr) ? arr.map((g) => g.id) : null, sel: sc[kind + 'GroupSel'] | 0, groups: cloneJ(arr || null), active: Object.fromEntries(vegGroupKeys(kind).map((k) => [k, cloneJ(sc[k])])) };
+}
+function restoreVegGroupSnap(kind, snap) {
+  const sc = state.scene;
+  sc[kind + 'Groups'] = cloneJ(snap.groups);
+  sc[kind + 'GroupSel'] = snap.sel;
+  for (const [k, v] of Object.entries(snap.active || {})) sc[k] = cloneJ(v);
+  if (kind === 'tree' && state.selVeg && state.selVeg.kind === 'tree') state.selVeg = null;
+  if (typeof syncSceneControls === 'function') { syncSceneControls(); renderVegAssetLists(); sceneChanged(); }
+}
+/** Lista de grupos (la crea con el grupo actual si no existía). */
+function ensureVegGroups(kind) {
+  const sc = state.scene, key = kind + 'Groups';
+  if (!Array.isArray(sc[key]) || !sc[key].length) { sc[key] = [{ id: `vg${Date.now().toString(36)}0`, name: VEG_BASE_NAME[kind] }]; sc[kind + 'GroupSel'] = 0; }
+  return sc[key];
+}
+/** Trae el grupo i al panel (sus parámetros pasan a los controles). */
+function selectVegGroup(kind, i, opts = {}) {
+  const sc = state.scene, arr = sc[kind + 'Groups'];
+  if (!Array.isArray(arr) || !arr[i]) return;
+  if ((sc[kind + 'GroupSel'] | 0) !== i) {
+    if (kind === 'tree' && state.selVeg && state.selVeg.kind === 'tree') state.selVeg = null;
+    selectVegGroupIn(sc, kind, i);
+    syncSceneControls(); renderVegAssetLists(); sceneChanged();
+  }
+  if (!opts.quiet) focusPanel('trees', $(kind === 'tree' ? 'treesBlock' : 'grassBlock'));
+}
+/** «+ Nuevo grupo de árboles / de hierba»: un grupo con los valores por defecto (activado) que esquiva a los anteriores. */
+function newVegGroup(kind) {
+  pushUndo();
+  const arr = ensureVegGroups(kind);
+  const g = { id: `vg${Date.now().toString(36)}${arr.length}`, name: `${VEG_BASE_NAME[kind]} ${arr.length + 1}` };
+  for (const k of vegGroupKeys(kind)) g[k] = cloneJ(DEFAULT_SCENE[k]);
+  g[VEG_ON_KEY[kind]] = true;
+  arr.push(g);
+  selectVegGroup(kind, arr.length - 1, { quiet: true });
+  toast(`Grupo «${g.name}» creado, con sus propios parámetros: ${kind === 'tree' ? 'sus árboles' : 'sus matas'} esquivan a los de los grupos anteriores. Las pestañas cambian de grupo.`);
+}
+/** Quita el grupo activo (queda activo el anterior). */
+function deleteVegGroup(kind) {
+  const sc = state.scene, arr = sc[kind + 'Groups'];
+  if (!Array.isArray(arr) || arr.length < 2) return;
+  pushUndo();
+  const sel = sc[kind + 'GroupSel'] | 0, name = arr[sel].name;
+  arr.splice(sel, 1);
+  const ni = Math.max(0, sel - 1);
+  for (const k of vegGroupKeys(kind)) sc[k] = cloneJ(arr[ni][k] !== undefined ? arr[ni][k] : DEFAULT_SCENE[k]);
+  sc[kind + 'GroupSel'] = ni;
+  if (arr.length === 1) sc[kind + 'Groups'] = null; // vuelve a ser un solo grupo (como antes)
+  if (kind === 'tree' && state.selVeg && state.selVeg.kind === 'tree') state.selVeg = null;
+  syncSceneControls(); renderVegAssetLists(); sceneChanged();
+  toast(`Grupo «${name}» quitado (Ctrl+Z lo recupera).`);
+}
+/** Pestañas de los grupos (solo con más de uno) y el nombre del activo. */
+function renderVegGroups(kind) {
+  const tabs = $(kind + 'GroupTabs');
+  if (!tabs) return;
+  const sc = state.scene, arr = Array.isArray(sc[kind + 'Groups']) ? sc[kind + 'Groups'] : [];
+  const sel = sc[kind + 'GroupSel'] | 0, multi = arr.length > 1;
+  tabs.innerHTML = '';
+  if (multi) arr.forEach((g, i) => {
+    const on = i === sel ? sc[VEG_ON_KEY[kind]] : g[VEG_ON_KEY[kind]];
+    const b = document.createElement('button');
+    b.className = 'gtab' + (i === sel ? ' on' : '') + (on ? '' : ' off');
+    b.dataset.noicon = '';
+    b.setAttribute('role', 'tab');
+    b.textContent = g.name || `${VEG_BASE_NAME[kind]} ${i + 1}`;
+    b.title = on ? 'Clic: editar este grupo' : '(desactivado) Clic: editar este grupo';
+    b.addEventListener('click', () => selectVegGroup(kind, i, { quiet: true }));
+    tabs.appendChild(b);
+  });
+  $(kind + 'GroupEdit').hidden = !multi;
+  const nm = $(kind + 'GroupName');
+  if (multi && document.activeElement !== nm) nm.value = arr[sel].name || '';
+}
 /** Controles de edición de los árboles (casilla, texto y botones). */
 function syncTreeEdit() {
   const sc = state.scene;
   if (!$('treeSingle')) return;
-  $('treeSingle').checked = sc.treeSingle !== false;
-  const baked = Array.isArray(sc.treeBake);
-  $('treeEditBox').hidden = !baked && sc.treeSingle !== false;
-  $('btnTreeReset').hidden = !baked;
+  const single = sc.treeSingle !== false, baked = Array.isArray(sc.treeBake);
+  $('treeSingle').checked = single;
+  // lista fija (sin «single mesh», o con árboles editados a mano): la distribución no cambia hasta «Restablecer»
+  const fixed = !single || baked;
+  $('treeEditBox').hidden = false;
+  $('btnTreeReset').hidden = false;
+  $('btnTreeReset').disabled = !fixed;
+  const onHills = sc.treeOnSlopes || sc.treeOnTops;
+  document.querySelectorAll('#treesBlock .tdist').forEach((el) => {
+    el.classList.toggle('disabled', fixed || (el.id === 'treeHillBox' && !onHills));
+    el.classList.toggle('fixed', fixed);
+    el.querySelectorAll('input, select').forEach((i) => { i.disabled = fixed; });
+  });
   refreshVegEditInfo();
 }
 function refreshVegEditInfo() {
@@ -804,7 +909,8 @@ function refreshVegEditInfo() {
     const sel = v && v.kind === 'tree' ? `Seleccionado: árbol ${v.i + 1}. Arrástralo en el mapa o con el gizmo en 3D (sigue apoyado en el suelo); Supr lo borra. ` : '';
     $('treeEditInfo').textContent = sc.treeSingle === false
       ? `${sel || 'Clic en un árbol (mapa o 3D) para seleccionarlo, moverlo o borrarlo. '}Lista fija de ${n} árboles: la densidad, la distancia, la dispersión, los cerros y la semilla no la cambian hasta «Restablecer» (la escala y la inclinación sí).`
-      : Array.isArray(sc.treeBake) ? `Una sola malla con los ${n} árboles editados a mano. «Restablecer» vuelve a la distribución automática.` : '';
+      : Array.isArray(sc.treeBake) ? `Una sola malla con los ${n} árboles editados a mano. La distribución (lado, densidad, distancia, dispersión, cerros) queda fija: «Restablecer» vuelve a la automática y reactiva sus deslizadores.` : '';
+    $('treeEditInfo').hidden = !$('treeEditInfo').textContent;
     if ($('btnTreeDel')) { $('btnTreeDel').disabled = !(v && v.kind === 'tree'); $('btnTreeDel').hidden = sc.treeSingle !== false; }
   }
   document.querySelectorAll('#decoList .deco-card').forEach((d) => {
@@ -2550,6 +2656,7 @@ const app = {
   moveVegLive(v, x, y) { return preview.moveVegLive(v, x, y); },
   onVegLive() { editor.draw(); },
   onTreesInfo(info) { refreshTreesInfo(info); },
+  selectVegGroup(kind, i) { selectVegGroup(kind, i); },
   /** Árboles y adornos editables (grupos sin «single mesh»), para el mapa: [{kind, set, i, x, y, r, color}]. */
   vegEditItems() {
     const out = [], sc = state.scene;
@@ -5006,6 +5113,26 @@ function syncElevMode() {
   if (typeof refreshXformBar === 'function' && $('zScaleBox')) refreshXformBar();
   for (const id of ['pinLocal', 'pinLocal3d']) { const el = $(id); const lab = el && el.closest('label'); if (lab) lab.hidden = direct; } // en Directo no aplica
 }
+/**
+ * Ejecuta fn sin que la barra lateral se corra: lo que se estaba viendo (o el elemento anchor, si está en la barra)
+ * queda en el mismo lugar aunque se muestren u oculten bloques más arriba (p. ej. al cambiar el modo de elevación desde el perfil).
+ */
+function keepSidebarView(fn, anchor = null) {
+  const bars = [...document.querySelectorAll('.sidebar')];
+  const keep = bars.map((sb) => {
+    let a = anchor && sb.contains(anchor) ? anchor : null;
+    if (!a) {
+      const r = sb.getBoundingClientRect();
+      if (r.width && r.height) { const e = document.elementFromPoint(r.left + Math.min(40, r.width / 2), r.top + Math.min(60, r.height / 3)); if (e && sb.contains(e) && e !== sb) a = e; }
+    }
+    return { sb, a, y: a ? a.getBoundingClientRect().top : 0, top: sb.scrollTop };
+  });
+  fn();
+  for (const k of keep) {
+    if (k.a && k.a.isConnected && k.a.getBoundingClientRect().height) k.sb.scrollTop += k.a.getBoundingClientRect().top - k.y;
+    else k.sb.scrollTop = k.top;
+  }
+}
 /** Cambia el modo de elevación. A Directo: las alturas actuales de todos los puntos quedan como fotogramas clave. */
 function setElevMode(mode) {
   if (mode === (state.elev.mode || 'auto')) return;
@@ -5212,7 +5339,7 @@ function bindControls() {
       else refreshPanels();
     });
   }
-  document.querySelectorAll('#elevMode button, #elevModeProf button').forEach((b) => b.addEventListener('click', () => setElevMode(b.dataset.mode)));
+  document.querySelectorAll('#elevMode button, #elevModeProf button').forEach((b) => b.addEventListener('click', () => keepSidebarView(() => setElevMode(b.dataset.mode), b.closest('.sidebar') ? b : null)));
   $('btnElevAuto').addEventListener('click', generateAutoHeights);
   $('btnFixCross').addEventListener('click', fixCrossings);
   $('useImageWidth').addEventListener('change', (e) => { state.geom.useImageWidth = e.target.checked; scheduleBuild(); });
@@ -5920,7 +6047,9 @@ async function openProject(text, fileName = null) {
   }
   state.scene.tunnelOverrides = []; // los ajustes por túnel son de cada proyecto
   state.scene.treeAssets = []; state.scene.grassAssets = [];
+  Object.assign(state.scene, { treeGroups: null, treeGroupSel: 0, grassGroups: null, grassGroupSel: 0, treeShadowMode: 'global', grassSingle: true }); // (proyectos anteriores a 0.84)
   if (d.scene) Object.assign(state.scene, d.scene);
+  if (d.scene && d.scene.grassSingle === undefined && (d.scene.grassAssets || []).length) state.scene.grassSingle = false; // antes la hierba con modelos salía en objetos sueltos
   const toCanvas = async (url) => {
     if (!url) return null;
     const img = new Image();
@@ -6119,9 +6248,10 @@ function syncShadowControls() {
   const sc = state.scene;
   const set = (id, v) => { const el = $(id); if (el && el !== rangeDrag) { if (el.type === 'checkbox') el.checked = !!v; else el.value = v; } };
   set('shadows', sc.shadows); set('treeShadow', sc.treeShadow); set('sunLight', sc.sunLight !== false); set('shadowMode', sc.shadowMode || 'center');
+  set('treeShadowMode', sc.treeShadowMode || 'global'); if ($('treeShadowMode')) $('treeShadowMode').disabled = !sc.treeShadow;
   for (const k of Object.keys(SHADOW_FMT)) { set(k, sc[k]); if ($(k + 'Val')) $(k + 'Val').textContent = SHADOW_FMT[k](sc[k]); }
   $('shadowBody').classList.toggle('disabled', !sc.shadows);
-  $('sunBox').hidden = sc.shadowMode !== 'sun';
+  $('sunBox').hidden = !shadowUsesSun(sc, state.decoSets); // también si solo un grupo de árboles o un set va según el sol
   $('shadowDefBox').classList.toggle('disabled', !!state.shadowTex);
   $('btnShadowTexRemove').disabled = !state.shadowTex;
   $('shadowTexThumb').src = shadowTexCanvas().toDataURL('image/png');
@@ -6224,7 +6354,10 @@ function syncSceneControls() {
   for (const k of ['terrainDensity', 'terrainMaxPolys', 'terrainMargin', 'terrainGap', 'terrainFalloff', 'treeSide', 'grassSide', 'treeSeed', 'trackTexDir', ...VEG_NUMS]) set(k, sc[k]);
   for (const k of VEG_NUMS) { const el = $(k + 'Val'); if (el) el.textContent = VEG_FMT[k](sc[k]); }
   $('treeHillBox').classList.toggle('disabled', !(sc.treeOnSlopes || sc.treeOnTops));
+  set('grassSingle', sc.grassSingle !== false);
+  renderVegGroups('tree'); renderVegGroups('grass');
   syncTreeEdit();
+  if (state.grassInfoLast) refreshGrassInfo();
   if (typeof renderTransDivs === 'function' && $('transDivBar')) renderTransDivs();
   $('grassHillBox').classList.toggle('disabled', !(sc.grassOnSlopes || sc.grassOnTops));
   set('hillBrush', Math.min(250, sc.hillBrush)); set('hillBrushNum', sc.hillBrush);
@@ -6818,12 +6951,13 @@ function renderAssetList() {
   for (const a of state.assets) {
     const d = document.createElement('div');
     d.className = 'item';
-    const used = [state.scene.treeAssets, state.scene.grassAssets, ...state.decoSets.map((x) => x.assets)].some((l) => (l || []).includes(a.id));
+    const used = [state.scene.treeAssets, state.scene.grassAssets, ...(state.scene.treeGroups || []).map((g) => g.treeAssets), ...(state.scene.grassGroups || []).map((g) => g.grassAssets), ...state.decoSets.map((x) => x.assets)].some((l) => (l || []).includes(a.id));
     d.innerHTML = `<div class="head"><strong>${a.name}</strong><button class="x" title="Quitar de la biblioteca">✕</button></div>
       <div class="meta">${a.format} · ${a.tris.toLocaleString('es')} tri. · ${a.size.map((v) => v.toFixed(2)).join(' × ')} m · ${a.parts.length} malla(s)${used ? ' · en uso' : ''}</div>`;
     d.querySelector('button.x').addEventListener('click', () => {
       state.assets = state.assets.filter((x) => x.id !== a.id);
       for (const k of ['treeAssets', 'grassAssets']) state.scene[k] = (state.scene[k] || []).filter((x) => x !== a.id);
+      for (const g of [...(state.scene.treeGroups || []), ...(state.scene.grassGroups || [])]) for (const k of ['treeAssets', 'grassAssets']) if (Array.isArray(g[k])) g[k] = g[k].filter((x) => x !== a.id);
       for (const set of state.decoSets) set.assets = (set.assets || []).filter((x) => x !== a.id);
       renderAssetList(); renderVegAssetLists(); renderDecoPanel(); sceneChanged();
     });
@@ -6856,7 +6990,7 @@ function renderDecoPanel() {
       <div class="meta"><span class="dcount"></span></div>
       <div class="dbody">
       <div class="field"${models.length ? ' hidden' : ''}><label>Forma</label><select class="dshape"><option value="cube">Cubos</option><option value="plane">Planos (de frente, 1 cara con UV)</option></select></div>
-      <div class="row gap wrap"><label class="check"><input type="checkbox" class="dv"${set.visible !== false ? ' checked' : ''}> Visible</label><label class="check" title="Cada elemento del set lleva un plano de sombra (se generan con «Planos de sombra»)"><input type="checkbox" class="dsh"${set.shadow ? ' checked' : ''}> Proyectar sombra</label><label class="check" title="Marcado: todo el set es una sola malla al exportar. Sin marcar: la distribución actual queda fija y cada elemento se elige (mapa o 3D), se mueve en planta (sigue apoyado en el suelo) o se borra; al volver a marcarlo se juntan otra vez en una malla, con lo editado"><input type="checkbox" class="dsingle"${set.single !== false ? ' checked' : ''}> Single mesh</label>
+      <div class="row gap wrap"><label class="check"><input type="checkbox" class="dv"${set.visible !== false ? ' checked' : ''}> Visible</label><label class="check" title="Cada elemento del set lleva un plano de sombra (se generan con «Planos de sombra»)"><input type="checkbox" class="dsh"${set.shadow ? ' checked' : ''}> Proyectar sombra</label><select class="dshm" title="Dónde va la sombra de los elementos de este set"${set.shadow ? '' : ' disabled'}><option value="global">Sombra como la general</option><option value="center">Sombra centrada</option><option value="sun">Sombra según el sol</option></select><label class="check" title="Marcado: todo el set es una sola malla al exportar. Sin marcar: la distribución actual queda fija y cada elemento se elige (mapa o 3D), se mueve en planta (sigue apoyado en el suelo) o se borra; al volver a marcarlo se juntan otra vez en una malla, con lo editado"><input type="checkbox" class="dsingle"${set.single !== false ? ' checked' : ''}> Single mesh</label>
         <select class="dm"><option value="road">Junto a la pista</option><option value="painted">Solo en zonas pintadas</option></select></div>
       <div class="dbake veg-edit"${set.single !== false && !Array.isArray(set.bake) ? ' hidden' : ''}><p class="hint dbakeInfo"></p><div class="row gap"><button class="ddel" disabled>Borrar el seleccionado</button><button class="dreset"${Array.isArray(set.bake) ? '' : ' hidden'} title="Descarta lo editado a mano y vuelve a la distribución automática">Restablecer</button></div></div>
       <div class="row gap wrap dpaint"${set.mode === 'painted' ? '' : ' hidden'}><button class="dp${painting ? ' active' : ''}">${painting ? 'Terminar de pintar' : 'Pintar zonas'}</button><button class="dpc"${set.paint && set.paint.length ? '' : ' disabled'}>Borrar zonas</button><span class="small muted">clic derecho o Alt borra</span></div>
@@ -6904,7 +7038,9 @@ function renderDecoPanel() {
     d.querySelector('.dn').addEventListener('change', (e) => { const v = e.target.value.trim().replace(/[^\w\-áéíóúñÁÉÍÓÚÑ ]/g, '').replace(/\s+/g, '_'); if (v) set.name = v; e.target.value = set.name; });
     d.querySelector('.dc').addEventListener('input', (e) => { set.color = e.target.value; d.querySelector('.swatch').style.background = set.color; commit(); });
     d.querySelector('.dv').addEventListener('change', (e) => { set.visible = e.target.checked; commit(); });
-    d.querySelector('.dsh').addEventListener('change', (e) => { set.shadow = e.target.checked; commit(); refreshShadowInfo(preview.shadowInfo); });
+    d.querySelector('.dsh').addEventListener('change', (e) => { set.shadow = e.target.checked; d.querySelector('.dshm').disabled = !set.shadow; commit(); refreshShadowInfo(preview.shadowInfo); syncShadowControls(); });
+    d.querySelector('.dshm').value = set.shadowMode || 'global';
+    d.querySelector('.dshm').addEventListener('change', (e) => { set.shadowMode = e.target.value; commit(); syncShadowControls(); preview.updateSunLight(); });
     d.querySelector('.dsingle').addEventListener('change', (e) => setDecoSingle(set, e.target.checked));
     d.querySelector('.dreset').addEventListener('click', () => resetDecoBake(set));
     d.querySelector('.ddel').addEventListener('click', () => { if (state.selVeg && state.selVeg.kind === 'deco' && state.selVeg.set === set.id) deleteSelectedVeg(); });
@@ -7120,8 +7256,23 @@ function bindPanelFocus() {
 /** Botones de la barra: activa el terreno / los árboles con los valores por defecto (si estaban apagados). */
 function refreshTreesInfo(info) {
   const sc = state.scene;
-  $('treesInfo').textContent = sc.trees ? `${info.trees || 0} árboles${info.treesOnHills ? ` (${info.treesOnHills} sobre cerros)` : ''}.${!Array.isArray(sc.treeBake) && !(sc.treeOnSlopes || sc.treeOnTops) && state.hills.length ? ' Sin marcar laderas ni cima, solo van sobre el terreno.' : ''} Se exportan ${sc.treeSingle !== false ? 'como una sola malla («arboles_malla»)' : 'como un objeto por árbol (arbol_0001…)'}.` : 'Desactivado.';
+  const multi = Array.isArray(sc.treeGroups) && sc.treeGroups.length > 1, gi = sc.treeGroupSel | 0, sfx = multi && gi > 0 ? `_${gi + 1}` : '';
+  const n = multi ? info.treesActive || 0 : info.trees || 0, onH = multi ? info.treesActiveOnHills || 0 : info.treesOnHills || 0;
+  const many = sc.treeSingle === false && n > MANY_OBJECTS;
+  $('treesInfo').innerHTML = '';
+  $('treesInfo').append(sc.trees ? `${n.toLocaleString('es')} árboles${multi ? ' en este grupo' : ''}${onH ? ` (${onH} sobre cerros)` : ''}${multi ? ` · ${(info.trees || 0).toLocaleString('es')} entre todos los grupos` : ''}.${!Array.isArray(sc.treeBake) && !(sc.treeOnSlopes || sc.treeOnTops) && state.hills.length ? ' Sin marcar laderas ni cima, solo van sobre el terreno.' : ''} Se exportan ${sc.treeSingle !== false ? `como una sola malla («arboles${sfx}_malla»)` : `como un objeto por árbol (arbol${sfx}_0001…)`}.` : 'Desactivado.');
+  if (sc.trees && many) { const w = document.createElement('span'); w.className = 'veg-warn'; w.textContent = ` ⚠ ${n.toLocaleString('es')} objetos sueltos: con tantos objetos el archivo y el motor se ponen pesados; con «Single mesh» es uno solo.`; $('treesInfo').append(w); }
   refreshVegEditInfo();
+}
+function refreshGrassInfo(info) {
+  const sc = state.scene, el = $('grassInfo');
+  if (!el) return;
+  if (info) state.grassInfoLast = info; else info = state.grassInfoLast || {};
+  const multi = Array.isArray(sc.grassGroups) && sc.grassGroups.length > 1, gi = sc.grassGroupSel | 0, sfx = multi && gi > 0 ? `_${gi + 1}` : '';
+  const n = multi ? info.grassActive || 0 : info.grass || 0, single = sc.grassSingle !== false;
+  el.innerHTML = '';
+  el.append(sc.grass ? `${n.toLocaleString('es')} matas${multi ? ` en este grupo · ${(info.grass || 0).toLocaleString('es')} entre todos` : ''} · ${(info.grassTris || 0).toLocaleString('es')} triángulos${multi ? ' (todos)' : ''}. Se exporta ${single ? `como una sola malla «hierba${sfx}»` : `como un objeto por mata (hierba${sfx}_0001…)`}${(sc.grassAssets || []).length ? '' : ' con la textura recortada por transparencia'}.` : 'Desactivado.');
+  if (sc.grass && !single && n > MANY_OBJECTS) { const w = document.createElement('span'); w.className = 'veg-warn'; w.textContent = ` ⚠ ${n.toLocaleString('es')} objetos sueltos: con tantos objetos el archivo y el motor se ponen pesados; con «Single mesh» es uno solo.`; el.append(w); }
 }
 function generateFromToolbar(kind) {
   const sc = state.scene;
@@ -7445,6 +7596,18 @@ function bindSceneControls() {
     const shadowsChanged = () => { syncShadowControls(); scheduleShadows(); };
     $('shadows').addEventListener('change', (e) => { sc.shadows = e.target.checked; shadowsChanged(); refreshShadowInfo(preview.shadowInfo); });
     $('treeShadow').addEventListener('change', (e) => { sc.treeShadow = e.target.checked; shadowsChanged(); });
+    $('treeShadowMode').addEventListener('change', (e) => { sc.treeShadowMode = e.target.value; shadowsChanged(); preview.updateSunLight(); });
+    $('grassSingle').addEventListener('change', (e) => {
+      sc.grassSingle = e.target.checked; refreshGrassInfo();
+      const n = (state.grassInfoLast && (Array.isArray(sc.grassGroups) && sc.grassGroups.length > 1 ? state.grassInfoLast.grassActive : state.grassInfoLast.grass)) || 0;
+      if (!sc.grassSingle && n > MANY_OBJECTS) toast(`Sin «Single mesh» se exportan ${n.toLocaleString('es')} matas como objetos sueltos: con tantos objetos el archivo y el motor se ponen pesados.`);
+    });
+    for (const kind of ['tree', 'grass']) {
+      const K = kind === 'tree' ? 'Tree' : 'Grass';
+      $(`btn${K}GroupNew`).addEventListener('click', () => newVegGroup(kind));
+      $(`btn${K}GroupDel`).addEventListener('click', () => deleteVegGroup(kind));
+      $(`${kind}GroupName`).addEventListener('change', (e) => { const arr = sc[kind + 'Groups']; if (!Array.isArray(arr)) return; const v = e.target.value.trim().slice(0, 40); if (v) arr[sc[kind + 'GroupSel'] | 0].name = v; renderVegGroups(kind); });
+    }
     $('treeSingle').addEventListener('change', (e) => setTreeSingle(e.target.checked));
     $('btnTreeReset').addEventListener('click', () => resetTreeBake());
     $('btnTreeDel').addEventListener('click', () => { if (state.selVeg && state.selVeg.kind === 'tree') deleteSelectedVeg(); });
@@ -7629,7 +7792,7 @@ function bindSceneControls() {
     refreshShadowInfo(preview.shadowInfo);
     $('terrainInfo').textContent = state.scene.terrain ? `Terreno: ${info.terrainTris.toLocaleString('es')} triángulos, celda de ${info.terrainCell.toFixed(1)} m${info.terrainCellFine ? ` (${info.terrainCellFine.toFixed(1)} m en lo pintado)` : ''} · ${info.ms.toFixed(0)} ms. Nunca atraviesa la pista: queda al menos ${state.scene.terrainGap} m bajo su superficie.` : 'Desactivado.';
     refreshTreesInfo(info);
-    $('grassInfo').textContent = state.scene.grass ? `${(info.grass || 0).toLocaleString('es')} matas · ${(info.grassTris || 0).toLocaleString('es')} triángulos. Se exporta como una sola malla «hierba» con la textura recortada por transparencia.` : 'Desactivado.';
+    refreshGrassInfo(info);
     const tl = info.tunnels || [];
     state.hillInfo = info.hills || [];
     refreshHillPanel();
